@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "manifest_id": "phase3-smoke-2026-07-31",
+  "name": "Phase 3 provider-comparison smoke manifest",
+  "corpus": {
+    "id": "phase3-corpus",
+    "version": "v1",
+    "seed": 42,
+    "documents": [
+      {"id": "d1", "content": "Ada founded a company in 1843.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d2", "content": "Grace Hopper invented COBOL.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d3", "content": "The old role was engineer.", "scope": "t1/p1/c1/a1/s1", "is_stale": true},
+      {"id": "d4", "content": "The current role is researcher.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d5", "content": "Private marker in another scope.", "scope": "other/p1/c1/a1/s1"}
+    ]
+  },
+  "queries": [
+    {
+      "id": "q1",
+      "kind": "fact",
+      "query": "Who founded a company?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d1", "weight": 1.0}]
+    },
+    {
+      "id": "q2",
+      "kind": "paraphrase",
+      "query": "Who created COBOL?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d2", "weight": 1.0}]
+    },
+    {
+      "id": "q3",
+      "kind": "temporal",
+      "query": "What is the current role?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d4", "weight": 1.0}]
+    },
+    {
+      "id": "q4",
+      "kind": "negative",
+      "query": "Who walked on Mars?",
+      "scope": "t1/p1/c1/a1/s1",
+      "answerable": false,
+      "expected_evidence": []
+    },
+    {
+      "id": "q5",
+      "kind": "adversarial",
+      "query": "What is the private marker?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d1", "weight": 1.0}]
+    }
+  ],
+  "providers": [
+    {
+      "id": "severian",
+      "kind": "severian",
+      "backend": "sqlite",
+      "model": {"id": "local/hasher", "prompt_version": "v1"},
+      "config": {"dimension": 256}
+    },
+    {
+      "id": "hosted",
+      "kind": "external",
+      "vendor": "HostedCo",
+      "deployment": "hosted",
+      "model": {"id": "hosted/embed-v3", "prompt_version": "v1"},
+      "config": {"api_base": "https://api.hosted.example"}
+    },
+    {
+      "id": "selfhosted",
+      "kind": "external",
+      "vendor": "OssCorp",
+      "deployment": "self-hosted",
+      "model": {"id": "oss/embed-v2", "prompt_version": "v1"},
+      "config": {"endpoint": "http://localhost:8080"}
+    }
+  ],
+  "metrics": [
+    "recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
+    "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
+    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"
+  ],
+  "release_gate": {
+    "min_recall_at_10": 0.95,
+    "min_citation_precision": 1.0,
+    "max_stale_fact_rate": 0.0,
+    "max_cross_scope_leakage": 0.0,
+    "max_unsupported_answer_rate": 0.0,
+    "require_external_providers": 2
+  }
+}
