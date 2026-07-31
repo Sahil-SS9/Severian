@@ -1,0 +1,509 @@
+"""Hermes compatibility adapter for Severian.
+
+This module implements :class:`SeverianMemoryProvider`, a Hermes
+``MemoryProvider`` that bridges Severian's canonical memory engine
+into a Hermes agent lifecycle. It is dependency-optional: if the
+``agent.memory_provider.MemoryProvider`` base class is importable, the
+provider subclasses it; otherwise a standalone ABC is used so that
+Severian remains fully independent of Hermes.
+
+Design rules:
+
+- **Explicit scope only.** The provider fails closed when the
+  five-dimensional scope cannot be established. It never guesses a
+  tenant, profile, collection, agent or session.
+- **Injected service.** All reads/writes go through the injected
+  :class:`MemoryService`. The provider never touches the repository
+  or indexes directly.
+- **No resource ownership.** The provider's ``shutdown`` (and
+  compatibility ``teardown`` alias) releases provider-local state only;
+  it never closes service-owned repository/index resources (the caller
+  owns those).
+- **Safe metadata.** ``sync_turn`` writes observations with
+  source-cited metadata; ``prefetch`` returns source-cited bounded
+  context. Tool calls validate explicit scope before routing.
+"""
+from __future__ import annotations
+
+import json
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+
+from severian.application.derivation import DerivationGateway
+from severian.application.service import MemoryService
+from severian.domain.models import Scope
+from severian.infrastructure.sqlite import NotFoundError
+
+_SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
+
+
+class _ProviderScope(BaseModel):
+    """Scope validator used internally by the provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+    collection_id: str
+    agent_id: str
+    session_id: str
+
+    @field_validator(*_SCOPE_DIMS)
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scope dimensions must not be empty")
+        return value
+
+    def to_domain(self) -> Scope:
+        return Scope(
+            tenant_id=self.tenant_id,
+            profile_id=self.profile_id,
+            collection_id=self.collection_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+        )
+
+
+class _FallbackMemoryProvider(ABC):
+    """Independent fallback for installations without Hermes available."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @abstractmethod
+    def is_available(self) -> bool: ...
+
+    @abstractmethod
+    def initialize(self, session_id: str, **kwargs: Any) -> None: ...
+
+    @abstractmethod
+    def get_tool_schemas(self) -> list[dict[str, Any]]: ...
+
+
+# -- optional Hermes dependency -------------------------------------------
+
+try:  # pragma: no cover - import guard
+    from agent.memory_provider import (  # type: ignore[import-not-found,unused-ignore]
+        MemoryProvider as _HermesMemoryProvider,
+    )
+except ImportError:  # pragma: no cover
+    _HermesMemoryProvider = _FallbackMemoryProvider
+
+
+class ScopeNotEstablishedError(RuntimeError):
+    """Raised when five-dimensional scope cannot be established."""
+
+
+def _encode_tool_result(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, default=str, allow_nan=False)
+
+
+class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
+    """Hermes ``MemoryProvider`` backed by Severian's memory engine.
+
+    The provider is constructed with an injected :class:`MemoryService`
+    and an optional :class:`DerivationGateway`. Scope is not stored at
+    construction; it is established by ``initialize`` and re-validated
+    on every operation. Hermes tool calls must carry an explicit scope
+    matching that active scope.
+
+    If the real ``agent.memory_provider.MemoryProvider`` is not
+    importable, the class falls back to the independent ABC above
+    and remains fully usable as a plain Python object.
+    """
+
+    PROVIDER_NAME = "severian"
+    PROVIDER_VERSION = "0.1.0"
+
+    def __init__(
+        self,
+        service: MemoryService,
+        gateway: DerivationGateway | None = None,
+        *,
+        max_context_chars: int = 8_000,
+    ) -> None:
+        self._service = service
+        self._gateway = gateway
+        self._scope: Scope | None = None
+        self._session_id: str | None = None
+        self._max_context_chars = max_context_chars
+
+    # -- lifecycle --------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self.PROVIDER_NAME
+
+    def is_available(self) -> bool:
+        """True when the underlying service is healthy."""
+        try:
+            report = self._service.health()
+        except Exception:
+            return False
+        return report.ready
+
+    def initialize(self, session_id: str, **kwargs: Any) -> None:
+        """Establish the five-dimensional scope for this session.
+
+        Required kwargs: ``tenant_id``, ``profile_id``, ``collection_id``,
+        ``agent_id``. ``session_id`` is taken from the argument (not
+        the scope) unless also present in kwargs. If any dimension is
+        missing or blank, the provider fails closed: no scope is
+        stored and subsequent operations raise.
+        """
+        scope_kwargs = {
+            "tenant_id": kwargs.get("tenant_id", ""),
+            "profile_id": kwargs.get("profile_id", ""),
+            "collection_id": kwargs.get("collection_id", ""),
+            "agent_id": kwargs.get("agent_id", ""),
+            "session_id": session_id,
+        }
+        try:
+            scope = _ProviderScope.model_validate(scope_kwargs)
+        except ValidationError as exc:
+            # Fail closed: clear any existing scope.
+            self._scope = None
+            self._session_id = None
+            raise ScopeNotEstablishedError(
+                "cannot establish five-dimensional scope: all dimensions required and non-empty"
+            ) from exc
+        self._scope = scope.to_domain()
+        self._session_id = session_id
+
+    def shutdown(self) -> None:
+        """Release provider-local state without closing injected resources.
+
+        This never closes the injected service's repository or index
+        resources; those are owned by the caller.
+        """
+        self._scope = None
+        self._session_id = None
+
+    def teardown(self) -> None:
+        """Compatibility alias for Hermes versions exposing ``teardown``."""
+        self.shutdown()
+
+    def on_session_switch(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Switch the active session scope.
+
+        Re-establishes scope with the new session id. Other scope
+        dimensions are taken from kwargs; if any are missing, the
+        provider fails closed. The lifecycle metadata is accepted for
+        compatibility but never used to infer scope.
+        """
+        del parent_session_id, reset, rewound
+        self.initialize(session_id=new_session_id, **kwargs)
+
+    def on_delegation(
+        self,
+        task: str,
+        result: str,
+        *,
+        child_session_id: str = "",
+        **kwargs: Any,
+    ) -> None:
+        """Record a completed delegation in the established parent scope.
+
+        The delegatee and child session are provenance metadata, not
+        replacements for the parent's tenant/profile/collection/agent
+        scope. The active five-dimensional scope must already exist.
+        """
+        scope = self._require_scope()
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("delegation task must not be blank")
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError("delegation result must not be blank")
+        source_value = kwargs.get("source", {})
+        if not isinstance(source_value, Mapping):
+            raise ValueError("source must be an object")
+        source = dict(source_value)
+        source.setdefault("provider", self.PROVIDER_NAME)
+        source.setdefault("provider_version", self.PROVIDER_VERSION)
+        source.setdefault("event", "delegation")
+        if child_session_id:
+            source.setdefault("child_session_id", child_session_id)
+        delegatee = kwargs.get("delegatee")
+        if isinstance(delegatee, str) and delegatee.strip():
+            source.setdefault("delegatee", delegatee)
+        self._service.ingest_observation(
+            scope,
+            content=f"delegated task: {task.strip()}\ndelegated result: {result.strip()}",
+            source=source,
+        )
+
+    # -- prompt + context -------------------------------------------------
+
+    def system_prompt_block(self) -> str:
+        """Return a system-prompt block describing the memory provider."""
+        return (
+            f"[{self.PROVIDER_NAME} v{self.PROVIDER_VERSION}] "
+            "Severian memory engine is active. Use the provided memory "
+            "tools to ingest observations and search the memory store. "
+            "All operations are scoped to the established session."
+        )
+
+    def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
+        """Search and return source-cited bounded context.
+
+        The context is assembled from search hits using the service's
+        context assembler. ``limit`` (default 10) bounds the result
+        count; ``derive`` (default False) controls whether derivation
+        runs before search.
+        """
+        scope = self._require_scope()
+        if session_id and session_id != scope.session_id:
+            raise ScopeNotEstablishedError("prefetch session does not match active scope")
+        if not isinstance(query, str) or not query.strip():
+            return ""
+        try:
+            limit = self._validated_limit(kwargs.get("limit", 10))
+        except ValueError as exc:
+            raise ValueError("invalid prefetch limit") from exc
+        derive_value = kwargs.get("derive", False)
+        if not isinstance(derive_value, bool):
+            raise ValueError("invalid prefetch derive flag")
+        derive = derive_value
+        hits = self._service.search(
+            scope,
+            query=query,
+            limit=limit,
+            derive=derive,
+            gateway=self._gateway,
+        )
+        if not hits:
+            return ""
+        return self._service.assemble_context(scope, hits, max_chars=self._max_context_chars)
+
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str = "",
+        *,
+        session_id: str = "",
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Write an observation for the current turn.
+
+        ``source`` metadata (kwargs or default) is attached to the
+        observation. The metadata always includes the provider name
+        and a ``turn`` marker if provided.
+        """
+        scope = self._require_scope()
+        if session_id and session_id != scope.session_id:
+            raise ScopeNotEstablishedError("sync session does not match active scope")
+        if not isinstance(user_content, str) or not user_content.strip():
+            raise ValueError("user content must not be blank")
+        if not isinstance(assistant_content, str):
+            raise ValueError("assistant content must be text")
+        source_value = kwargs.get("source", {})
+        if not isinstance(source_value, Mapping):
+            raise ValueError("source must be an object")
+        source = dict(source_value)
+        # Ensure safe, self-describing source metadata.
+        source.setdefault("provider", self.PROVIDER_NAME)
+        source.setdefault("provider_version", self.PROVIDER_VERSION)
+        if "turn" in kwargs and "turn" not in source:
+            source["turn"] = kwargs["turn"]
+        if session_id:
+            source.setdefault("session_id", session_id)
+        content = user_content.strip()
+        if assistant_content.strip():
+            content = f"user: {content}\nassistant: {assistant_content.strip()}"
+        if messages is not None:
+            source.setdefault("message_count", len(messages))
+        self._service.ingest_observation(scope, content=content, source=source)
+
+    # -- tools ------------------------------------------------------------
+
+    def get_tool_schemas(self) -> list[dict[str, Any]]:
+        """Return JSON schemas for the memory tools exposed to the agent."""
+        scope_properties = {
+            dimension: {"type": "string", "minLength": 1}
+            for dimension in _SCOPE_DIMS
+        }
+        scope_required = list(_SCOPE_DIMS)
+
+        def schema(
+            properties: dict[str, Any],
+            required: list[str],
+        ) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {**scope_properties, **properties},
+                "required": [*scope_required, *required],
+                "additionalProperties": False,
+            }
+
+        return [
+            {
+                "name": "severian_search",
+                "description": "Search the Severian memory store within the active scope.",
+                "parameters": schema(
+                    {
+                        "query": {"type": "string", "minLength": 1},
+                        "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200},
+                    },
+                    ["query"],
+                ),
+            },
+            {
+                "name": "severian_ingest",
+                "description": "Ingest an observation into the Severian memory store within the active scope.",
+                "parameters": schema(
+                    {
+                        "content": {"type": "string", "minLength": 1},
+                        "source": {"type": "object", "default": {}},
+                    },
+                    ["content"],
+                ),
+            },
+            {
+                "name": "severian_get_observation",
+                "description": "Fetch an observation by id within the active scope.",
+                "parameters": schema(
+                    {"observation_id": {"type": "string", "minLength": 1}},
+                    ["observation_id"],
+                ),
+            },
+        ]
+
+    def handle_tool_call(
+        self,
+        tool_name: str,
+        args: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> str:
+        """Validate scope and route a tool call to the service.
+
+        Tool arguments must carry an explicit scope. It must match the
+        established provider scope exactly; this prevents cross-scope
+        access through crafted arguments or stale session state.
+        """
+        del kwargs
+        scope = self._require_scope()
+        if not isinstance(args, Mapping):
+            return _encode_tool_result({"error": "invalid arguments"})
+        arguments = dict(args)
+
+        scope_result = self._validate_tool_scope(arguments, scope)
+        if scope_result is not None:
+            return _encode_tool_result(scope_result)
+
+        if tool_name == "severian_search":
+            if set(arguments) - {*_SCOPE_DIMS, "query", "limit"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            query = arguments.get("query")
+            if not isinstance(query, str) or not query.strip():
+                return _encode_tool_result({"error": "query must not be empty"})
+            try:
+                limit = self._validated_limit(arguments.get("limit", 10))
+            except ValueError:
+                return _encode_tool_result({"error": "invalid limit"})
+            hits = self._service.search(
+                scope,
+                query=query,
+                limit=limit,
+                derive=False,
+                gateway=self._gateway,
+            )
+            return _encode_tool_result({
+                "hits": [
+                    {
+                        "memory_id": hit.memory_id,
+                        "content": hit.content,
+                        "source_observation_ids": list(hit.source_observation_ids),
+                        "fused_score": hit.fused_score,
+                    }
+                    for hit in hits
+                ]
+            })
+
+        if tool_name == "severian_ingest":
+            if set(arguments) - {*_SCOPE_DIMS, "content", "source"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            content = arguments.get("content")
+            if not isinstance(content, str) or not content.strip():
+                return _encode_tool_result({"error": "content must not be empty"})
+            source_value = arguments.get("source", {})
+            if not isinstance(source_value, Mapping):
+                return _encode_tool_result({"error": "source must be an object"})
+            source = dict(source_value)
+            source.setdefault("provider", self.PROVIDER_NAME)
+            view = self._service.ingest_observation(scope, content=content, source=source)
+            return _encode_tool_result({
+                "observation_id": view.observation_id,
+                "content": view.content,
+                "content_hash": view.content_hash,
+                "job_id": view.job_id,
+            })
+
+        if tool_name == "severian_get_observation":
+            if set(arguments) - {*_SCOPE_DIMS, "observation_id"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            observation_id = arguments.get("observation_id")
+            if not isinstance(observation_id, str) or not observation_id.strip():
+                return _encode_tool_result({"error": "observation_id must not be empty"})
+            try:
+                observation = self._service.get_observation(scope, observation_id)
+            except NotFoundError:
+                return _encode_tool_result({"error": "observation not found in scope"})
+            return _encode_tool_result({
+                "observation_id": observation.id,
+                "content": observation.content,
+                "content_hash": observation.content_hash,
+                "created_at": observation.created_at.isoformat(),
+            })
+
+        return _encode_tool_result({"error": "unknown tool"})
+
+    # -- internals --------------------------------------------------------
+
+    def _validate_tool_scope(
+        self,
+        arguments: dict[str, Any],
+        active_scope: Scope,
+    ) -> dict[str, Any] | None:
+        if any(dimension not in arguments for dimension in _SCOPE_DIMS):
+            return {"error": "scope is required"}
+        try:
+            candidate = _ProviderScope.model_validate(
+                {dimension: arguments[dimension] for dimension in _SCOPE_DIMS}
+            ).to_domain()
+        except ValidationError:
+            return {"error": "invalid scope"}
+        if candidate != active_scope:
+            return {"error": "scope mismatch"}
+        return None
+
+    @staticmethod
+    def _validated_limit(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 200:
+            raise ValueError("limit must be an integer between 1 and 200")
+        return value
+
+    def _require_scope(self) -> Scope:
+        if self._scope is None:
+            raise ScopeNotEstablishedError(
+                "scope not established: call initialize with explicit scope dimensions first"
+            )
+        return self._scope
+
+
+__all__ = [
+    "ScopeNotEstablishedError",
+    "SeverianMemoryProvider",
+]
