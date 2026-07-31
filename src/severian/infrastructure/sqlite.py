@@ -93,7 +93,13 @@ class SQLiteRepository:
 
     @staticmethod
     def _identity(*parts: object) -> str:
-        encoded = json.dumps(parts, ensure_ascii=False, separators=(",", ":"), default=str).encode()
+        encoded = json.dumps(
+            parts,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        ).encode()
         return hashlib.sha256(encoded).hexdigest()
 
     @classmethod
@@ -288,10 +294,42 @@ class SQLiteRepository:
                 raise
             if source.scope != memory.scope:
                 raise ConflictError("source observation scope does not match memory scope")
-        return self._insert("memory", memory, emit_events=True)
+        identity_key = self._identity(
+            memory.kind,
+            memory.content,
+            memory.source_observation_ids,
+            memory.model_id,
+            memory.prompt_version,
+        )
+        query = select(records.c.payload).where(
+            records.c.record_type == "memory",
+            *self._scope_predicates(memory.scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Memory.model_validate(existing)
+        try:
+            return self._insert("memory", memory, identity_key=identity_key, emit_events=True)
+        except IntegrityError:
+            with self.engine.connect() as connection:
+                existing = connection.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise ConflictError("memory identity conflict") from None
+            return Memory.model_validate(existing)
 
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         return self._get("memory", memory_id, Memory, scope=scope)
+
+    def list_memories(self, scope: Scope) -> list[Memory]:
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "memory", *self._scope_predicates(scope))
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
 
     def revise_memory(
         self,
@@ -425,7 +463,25 @@ class SQLiteRepository:
             return Relation.model_validate(existing)
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
-        return self._insert("job", Job(scope=scope, kind=kind, payload=payload), status="pending")
+        identity_key = self._identity(kind, payload)
+        query = select(records.c.payload).where(
+            records.c.record_type == "job",
+            *self._scope_predicates(scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Job.model_validate(existing)
+        job = Job(scope=scope, kind=kind, payload=payload)
+        try:
+            return self._insert("job", job, identity_key=identity_key, status="pending")
+        except IntegrityError:
+            with self.engine.connect() as connection:
+                existing = connection.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise ConflictError("job identity conflict") from None
+            return Job.model_validate(existing)
 
     def claim_job(self, worker_id: str) -> Job:
         pending_id = (
