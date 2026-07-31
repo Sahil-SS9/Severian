@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def now() -> datetime:
@@ -76,6 +76,12 @@ class Relation(BaseModel):
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     created_at: datetime = Field(default_factory=now)
+
+    @model_validator(mode="after")
+    def valid_interval(self) -> Relation:
+        if self.valid_from is not None and self.valid_to is not None and self.valid_to < self.valid_from:
+            raise ValueError("valid_to must be greater than or equal to valid_from")
+        return self
 
 
 class Job(BaseModel):

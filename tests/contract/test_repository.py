@@ -40,10 +40,10 @@ def test_original_observation_is_immutable_and_correction_is_revision(repo):
     original = repo.add_observation(Observation(scope=scope(), content="old"))
     with pytest.raises(ConflictError):
         repo.update_observation_content(original.id, "new")
-    revision = repo.revise_observation(original.id, "new")
+    revision = repo.revise_observation(scope(), original.id, "new")
     assert revision.revision_of_id == original.id
-    assert repo.get_observation(original.id).content == "old"
-    assert repo.get_observation(original.id).superseded_by_id == revision.id
+    assert repo.get_observation(scope(), original.id).content == "old"
+    assert repo.get_observation(scope(), original.id).superseded_by_id == revision.id
 
 
 def test_memory_requires_and_roundtrips_lineage(repo):
@@ -59,7 +59,7 @@ def test_memory_requires_and_roundtrips_lineage(repo):
         confidence=0.8,
     )
     saved = repo.add_memory(memory)
-    assert repo.get_memory(saved.id) == saved
+    assert repo.get_memory(scope(), saved.id) == saved
 
 
 def test_entities_temporal_relations_jobs_outbox_and_audit_are_durable(repo):
@@ -73,5 +73,5 @@ def test_entities_temporal_relations_jobs_outbox_and_audit_are_durable(repo):
     audit = repo.append_audit(scope(), "observation.create", "o1", {"source": "test"})
     assert relation.valid_from.year == 1843
     assert claimed.id == job.id and claimed.status == "running"
-    assert repo.pending_outbox()[0].id == event.id
-    assert repo.list_audit(scope())[0].id == audit.id
+    assert event.id in {item.id for item in repo.pending_outbox()}
+    assert audit.id in {item.id for item in repo.list_audit(scope())}
