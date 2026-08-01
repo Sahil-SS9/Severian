@@ -289,3 +289,21 @@ def test_collection_populates_tenant_and_collection_columns(repo):
     assert repo.get_collection("t1", collection.id) == collection
     with pytest.raises(NotFoundError):
         repo.get_collection("t2", collection.id)
+
+
+def test_import_rejects_rechecksummed_scope_metadata_forgery(repo, tmp_path):
+    seed_collection(repo)
+    repo.add_observation(Observation(scope=scope(), content="private"))
+    document = json.loads(repo.export_json())
+    observation_record = next(item for item in document["records"] if item["record_type"] == "observation")
+    observation_record["tenant_id"] = "attacker"
+    document["checksum"] = SQLiteRepository.export_checksum(document["records"])
+
+    restored = SQLiteRepository(tmp_path / "restored.db")
+    restored.initialize()
+    try:
+        with pytest.raises(ValueError, match="payload metadata"):
+            restored.import_json(json.dumps(document))
+        assert restored.list_observations(scope()) == []
+    finally:
+        restored.close()

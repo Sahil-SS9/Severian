@@ -18,20 +18,12 @@ from typing import Any, Protocol
 
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.ingestion import IngestionResult, IngestionService
+from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Observation, Scope
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import NotFoundError
-
-
-# Narrow protocol for the bits of the repository the service depends on.
-# The SQLite repository implements it; adapters cannot reach a wider
-# surface from the service.
-class CanonicalRepository(Protocol):
-    def add_observation(self, observation: Observation) -> Observation: ...
-    def get_observation(self, scope: Scope, observation_id: str) -> Observation: ...
-    def list_observations(self, scope: Scope) -> list[Observation]: ...
 
 
 @dataclass(frozen=True)

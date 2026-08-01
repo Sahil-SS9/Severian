@@ -315,6 +315,18 @@ def test_export_checksum_rejects_tampering(backend: Any) -> None:
         backend.import_json(json.dumps(document))
 
 
+def test_import_rejects_rechecksummed_scope_metadata_forgery(backend: Any) -> None:
+    scope = _unique_scope()
+    backend.add_observation(Observation(scope=scope, content="private"))
+    document = json.loads(backend.export_json())
+    observation_record = next(item for item in document["records"] if item["record_type"] == "observation")
+    observation_record["tenant_id"] = "attacker"
+    document["checksum"] = backend.export_checksum(document["records"])
+
+    with pytest.raises(ValueError, match="payload metadata"):
+        backend.import_json(json.dumps(document))
+
+
 def test_backup_writes_restorable_snapshot(backend: Any) -> None:
     scope = _unique_scope()
     backend.add_observation(Observation(scope=scope, content="backup me"))

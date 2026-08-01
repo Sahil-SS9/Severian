@@ -36,8 +36,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import AuditEvent, Collection, Entity, Event, Job, Memory, Observation, Relation, Scope
-from severian.infrastructure.sqlite import ConflictError, NotFoundError
 
 T = TypeVar("T")
 

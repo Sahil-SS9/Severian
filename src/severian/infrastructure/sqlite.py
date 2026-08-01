@@ -13,17 +13,10 @@ from sqlalchemy import JSON, Column, Index, MetaData, String, Table, create_engi
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import AuditEvent, Collection, Entity, Event, Job, Memory, Observation, Relation, Scope
 
 T = TypeVar("T")
-
-
-class ConflictError(RuntimeError):
-    pass
-
-
-class NotFoundError(LookupError):
-    pass
 
 
 metadata = MetaData()
@@ -430,6 +423,10 @@ class SQLiteRepository:
             with self.engine.connect() as connection:
                 existing = connection.execute(query).scalar_one()
             return Entity.model_validate(existing)
+
+    def get_entity(self, scope: Scope, entity_id: str) -> Entity:
+        self._require_scope(scope)
+        return self._get("entity", entity_id, Entity, scope=scope)
 
     def add_relation(
         self,

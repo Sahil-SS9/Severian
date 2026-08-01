@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
-from severian.application.ports import CanonicalRepository
+from severian.application.ports import CanonicalRepository, DerivationGateway
 from severian.domain.models import Memory, Scope
 
 
 class CloudPolicyError(PermissionError):
     pass
-
-
-class DerivationGateway(Protocol):
-    model_id: str
-    prompt_version: str
-    is_cloud: bool
-
-    def derive(self, content: str, *, policy: dict[str, object]) -> list[dict[str, Any]]: ...
 
 
 class DerivationService:

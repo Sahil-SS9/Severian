@@ -27,6 +27,7 @@ from severian.backends import (
     check_scope,
 )
 from severian.domain.models import (
+    AuditEvent,
     Collection,
     Entity,
     Event,
@@ -54,23 +55,12 @@ def _scope(**overrides: str) -> Scope:
 
 # -- contract satisfaction ------------------------------------------------
 
-def test_sqlite_backend_satisfies_contract() -> None:
-    assert isinstance(SQLiteRepository, type)
-    assert hasattr(SQLiteRepository, "initialize")
-    assert hasattr(SQLiteRepository, "add_observation")
-    assert hasattr(SQLiteRepository, "get_observation")
-    assert hasattr(SQLiteRepository, "list_observations")
-    assert hasattr(SQLiteRepository, "get_collection")
-    assert hasattr(SQLiteRepository, "add_memory")
-    assert hasattr(SQLiteRepository, "get_memory")
-    assert hasattr(SQLiteRepository, "list_memories")
-    assert hasattr(SQLiteRepository, "enqueue_job")
-    assert hasattr(SQLiteRepository, "claim_job")
-    assert hasattr(SQLiteRepository, "add_entity")
-    assert hasattr(SQLiteRepository, "add_relation")
-    assert hasattr(SQLiteRepository, "export_json")
-    assert hasattr(SQLiteRepository, "import_json")
-    assert hasattr(SQLiteRepository, "backup")
+def test_sqlite_backend_satisfies_contract(tmp_path: Path) -> None:
+    repository = SQLiteRepository(tmp_path / "contract.db")
+    try:
+        assert isinstance(repository, CanonicalRepository)
+    finally:
+        repository.close()
 
 
 def test_postgresql_backend_satisfies_contract() -> None:
@@ -114,6 +104,14 @@ class _FakeRepository:
     def list_observations(self, scope: Scope) -> list[Observation]:
         return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
 
+    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
+        original = self.get_observation(scope, observation_id)
+        revision = original.model_copy(
+            update={"id": Observation(scope=scope, content=content).id, "content": content, "revision_of_id": original.id}
+        )
+        self._observations[self._key(scope, revision.id)] = revision
+        return revision
+
     def add_memory(self, memory: Memory) -> Memory:
         self._memories[self._key(memory.scope, memory.id)] = memory
         return memory
@@ -126,6 +124,36 @@ class _FakeRepository:
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [m for (rid, *s), m in self._memories.items() if tuple(s) == tuple(scope.model_dump().values())]
+
+    def revise_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        content: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> Memory:
+        original = self.get_memory(scope, memory_id)
+        revision = original.model_copy(
+            update={
+                "id": Memory(
+                    scope=scope,
+                    kind=original.kind,
+                    content=content,
+                    source_observation_ids=original.source_observation_ids,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    confidence=original.confidence,
+                ).id,
+                "content": content,
+                "model_id": model_id,
+                "prompt_version": prompt_version,
+                "revision_of_id": original.id,
+            }
+        )
+        self._memories[self._key(scope, revision.id)] = revision
+        return revision
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         return Job(scope=scope, kind=kind, payload=payload)
@@ -161,8 +189,13 @@ class _FakeRepository:
             valid_to=valid_to,
         )
 
-    def append_audit(self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]) -> None:
-        pass
+    def append_audit(
+        self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]
+    ) -> AuditEvent:
+        return AuditEvent(scope=scope, action=action, target_id=target_id, metadata=dict(metadata))
+
+    def list_audit(self, scope: Scope) -> list[AuditEvent]:
+        return []
 
     def append_outbox(self, scope: Scope, kind: str, payload: Mapping[str, Any]) -> Event:
         return Event(scope=scope, kind=kind, payload=dict(payload))
