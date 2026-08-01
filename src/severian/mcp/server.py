@@ -30,8 +30,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.sqlite import NotFoundError
 
 # -- protocol constants ---------------------------------------------------
 

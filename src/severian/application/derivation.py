@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from typing import Any
-
-from severian.application.ports import CanonicalRepository, DerivationGateway
+from severian.application.ports import (
+    CanonicalRepository,
+)
+from severian.application.ports import (
+    DerivationGateway as DerivationGateway,
+)
 from severian.domain.models import Memory, Scope
+
+# ``DerivationGateway`` lives in application.ports (single source of
+# truth); re-export here so existing imports keep working while
+# consumers migrate to the canonical home.
+
+__all__ = ["CloudPolicyError", "DerivationGateway", "DerivationService"]
 
 
 class CloudPolicyError(PermissionError):

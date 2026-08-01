@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -234,7 +235,15 @@ def test_import_rejects_conflict_and_checksum_tampering(repo):
     conflicting = json.loads(repo.export_json())
     for record in conflicting["records"]:
         if record["id"] == observation.id:
+            # Forge the content coherently (payload content, payload
+            # content_hash, column content_hash, identity key) so the
+            # import passes semantic validation and is rejected at the
+            # existing-record conflict check.
+            digest = hashlib.sha256(b"changed").hexdigest()
             record["payload"]["content"] = "changed"
+            record["payload"]["content_hash"] = digest
+            record["content_hash"] = digest
+            record["identity_key"] = SQLiteRepository._identity(digest)
     conflicting["checksum"] = SQLiteRepository.export_checksum(conflicting["records"])
     with pytest.raises(ConflictError, match="conflict"):
         repo.import_json(json.dumps(conflicting))

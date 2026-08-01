@@ -28,8 +28,8 @@ from severian.api.schemas import (
 )
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.sqlite import NotFoundError
 
 # Constants kept here so URL paths and tests share the same source of
 # truth. Versioned under ``/api/v1`` per Phase 3 plan.

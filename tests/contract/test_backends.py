@@ -107,7 +107,11 @@ class _FakeRepository:
     def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
         original = self.get_observation(scope, observation_id)
         revision = original.model_copy(
-            update={"id": Observation(scope=scope, content=content).id, "content": content, "revision_of_id": original.id}
+            update={
+                "id": Observation(scope=scope, content=content).id,
+                "content": content,
+                "revision_of_id": original.id,
+            }
         )
         self._observations[self._key(scope, revision.id)] = revision
         return revision

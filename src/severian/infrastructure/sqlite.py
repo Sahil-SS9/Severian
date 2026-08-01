@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import AuditEvent, Collection, Entity, Event, Job, Memory, Observation, Relation, Scope
+from severian.infrastructure.snapshot import validate_snapshot
 
 T = TypeVar("T")
 
@@ -629,6 +630,13 @@ class SQLiteRepository:
         for item in incoming:
             if not isinstance(item, dict) or set(item) != required:
                 raise ValueError("invalid export record shape")
+
+        # Strict semantic validation BEFORE the write transaction opens:
+        # parse every record against its domain model, recompute derived
+        # fields (content hash, identity key), verify scope columns match
+        # the payload, validate references and revision topology. This
+        # closes the re-checksummed metadata-forgery hole (P0-3).
+        validate_snapshot(incoming)
 
         identity_columns = (
             "record_type",

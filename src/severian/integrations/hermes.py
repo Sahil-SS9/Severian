@@ -34,8 +34,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.sqlite import NotFoundError
 
 _SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
 

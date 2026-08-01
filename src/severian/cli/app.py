@@ -24,9 +24,10 @@ from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import NotFoundError, SQLiteRepository
+from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
 
 
