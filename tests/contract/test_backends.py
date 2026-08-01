@@ -78,7 +78,6 @@ def test_postgresql_backend_satisfies_contract() -> None:
     # every method/attribute named in the protocol.
     assert isinstance(PostgreSQLBackend, CanonicalRepository)
 
-
 class _FakeRepository:
     """Minimal in-memory backend proving the contract is implementable."""
 
@@ -133,6 +132,9 @@ class _FakeRepository:
 
     def claim_job(self, worker_id: str) -> Job:
         raise NotFoundError("no pending job")
+
+    def complete_job(self, job_id: str, status: str) -> Job:
+        raise NotFoundError("job not claimed")
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)
@@ -210,13 +212,11 @@ def test_sqlite_backend_enforces_collection_scope(tmp_path: Path) -> None:
 
 
 def test_postgresql_backend_rejects_blank_scope_before_storage() -> None:
-    backend = PostgreSQLBackend()
-    scope = _scope()  # valid scope; the backend must still validate internally
-    # The backend should not raise on a valid scope at the guard, only on
-    # missing DSN. Here we confirm the scope guard itself is present and the
-    # method is wired (it raises NotImplementedError once it reaches storage).
-    with pytest.raises((ValueError, NotImplementedError)):
-        backend.get_observation(scope, "m1")
+    # A live-DSN-less backend fails closed at construction.
+    with pytest.raises(ValueError):
+        PostgreSQLBackend(dsn="")
+    with pytest.raises(ValueError):
+        PostgreSQLBackend(dsn="   ")
 
 
 @pytest.mark.parametrize(

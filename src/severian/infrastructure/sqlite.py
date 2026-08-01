@@ -172,9 +172,23 @@ class SQLiteRepository:
     def _scope_predicates(scope: Scope) -> list[Any]:
         return [getattr(records.c, key) == value for key, value in scope.model_dump().items()]
 
+    @staticmethod
+    def _require_scope(scope: Scope) -> Scope:
+        """Fail closed on blank scope before touching storage.
+
+        ``Scope`` construction already rejects blank dimensions, but a
+        caller can bypass that with ``model_copy``; the contract requires
+        the backend to reject blank scopes before storage access.
+        """
+        for dimension in ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id"):
+            if not getattr(scope, dimension).strip():
+                raise ValueError(f"scope dimension {dimension} must not be blank")
+        return scope
+
     def _get(self, kind: str, record_id: str, model: type[T], *, scope: Scope | None = None) -> T:
         predicates: list[Any] = [records.c.id == record_id, records.c.record_type == kind]
         if scope is not None:
+            self._require_scope(scope)
             predicates.extend(self._scope_predicates(scope))
         with self.engine.connect() as connection:
             row = connection.execute(select(records.c.payload).where(*predicates)).scalar_one_or_none()
@@ -229,6 +243,7 @@ class SQLiteRepository:
         return self._get("observation", observation_id, Observation, scope=scope)
 
     def list_observations(self, scope: Scope) -> list[Observation]:
+        self._require_scope(scope)
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "observation", *self._scope_predicates(scope))
@@ -323,6 +338,7 @@ class SQLiteRepository:
         return self._get("memory", memory_id, Memory, scope=scope)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
+        self._require_scope(scope)
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "memory", *self._scope_predicates(scope))
@@ -396,6 +412,7 @@ class SQLiteRepository:
         connection.execute(records.insert().values(**cls._record_values("audit", audit)))
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
+        self._require_scope(scope)
         identity_key = self._identity(kind, name.casefold())
         query = select(records.c.payload).where(
             records.c.record_type == "entity",
@@ -424,6 +441,7 @@ class SQLiteRepository:
         valid_from: datetime | None = None,
         valid_to: datetime | None = None,
     ) -> Relation:
+        self._require_scope(scope)
         for endpoint_id in (subject_id, object_id):
             try:
                 self._get("entity", endpoint_id, Entity, scope=scope)
@@ -463,6 +481,7 @@ class SQLiteRepository:
             return Relation.model_validate(existing)
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
+        self._require_scope(scope)
         identity_key = self._identity(kind, payload)
         query = select(records.c.payload).where(
             records.c.record_type == "job",
@@ -506,7 +525,42 @@ class SQLiteRepository:
             )
         return job
 
+    def complete_job(self, job_id: str, status: str) -> Job:
+        """Mark a claimed job as done or failed (atomically).
+
+        Only a job currently in ``running`` state (i.e. claimed by a
+        worker) may be completed. This mirrors ``claim_job``: the
+        ``status`` column and the JSON payload stay in sync so workers
+        and diagnostics read the same state.
+        """
+        if status not in ("done", "failed"):
+            raise ValueError("job status must be 'done' or 'failed'")
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(records.c.payload).where(
+                    records.c.id == job_id,
+                    records.c.record_type == "job",
+                    records.c.status == "running",
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                raise NotFoundError("job not claimed")
+            job = Job.model_validate(row["payload"]).model_copy(update={"status": status})
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == job_id,
+                    records.c.record_type == "job",
+                    records.c.status == "running",
+                )
+                .values(status=status, payload=job.model_dump(mode="json"))
+            )
+            if result.rowcount != 1:
+                raise ConflictError("job completion conflict")
+        return job
+
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event:
+        self._require_scope(scope)
         return self._insert("outbox", Event(scope=scope, kind=kind, payload=payload), status="pending")
 
     def pending_outbox(self) -> list[Event]:
@@ -519,9 +573,11 @@ class SQLiteRepository:
             return [Event.model_validate(value) for value in values]
 
     def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: dict[str, Any]) -> AuditEvent:
+        self._require_scope(scope)
         return self._insert("audit", AuditEvent(scope=scope, action=action, target_id=target_id, metadata=metadata_))
 
     def list_audit(self, scope: Scope) -> list[AuditEvent]:
+        self._require_scope(scope)
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "audit", *self._scope_predicates(scope))

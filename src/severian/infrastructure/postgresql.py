@@ -1,183 +1,519 @@
-"""PostgreSQL/pgvector backend for Severian (conformance target).
+"""PostgreSQL/pgvector backend for Severian (live implementation).
 
-This module defines the PostgreSQL implementation of the
-:class:`~severian.backends.CanonicalRepository` contract. It is the
-future backend target that lets Severian run on PostgreSQL with
-pgvector instead of SQLite.
+This module implements :class:`~severian.backends.CanonicalRepository`
+against a real PostgreSQL instance with the pgvector extension. It
+mirrors ``SQLiteRepository`` semantics exactly:
 
-The implementation is a structured stub: it documents the exact SQL
-schema and query obligations a conformant PostgreSQL backend must
-satisfy, and it is importable without a live database so the
-conformance suite can statically verify it satisfies the contract. The
-actual psycopg/asyncpg connection wiring and migration scripts are
-delivered separately once a target PostgreSQL instance is provisioned.
-
-Scope invariants every conformant backend must uphold (enforced by the
-conformance suite in ``tests/contract``):
-
-- All scoped reads filter on ``tenant_id``, ``profile_id``,
+- The ``records`` table stores canonical rows with a JSONB ``payload``
+  and the five scope columns as first-class indexed columns.
+- Scoped reads filter on ``tenant_id``, ``profile_id``,
   ``collection_id``, ``agent_id`` and ``session_id`` exactly. A missing
-  or mismatched scope raises ``NotFoundError``; the backend must never
-  reveal whether a resource exists in another scope.
-- ``pgvector`` columns store derived embeddings; they are projections
-  and are never the authoritative record. Canonical truth lives in the
-  ``records`` table (paralleling ``SQLiteRepository``) or an equivalent
-  normalised schema with identical scope columns.
+  or mismatched scope raises ``NotFoundError``; the backend never
+  reveals whether a resource exists in another scope.
+- Idempotent writes use a partial unique index on the scoped identity
+  key and ``INSERT ... ON CONFLICT DO NOTHING``, then re-select the
+  existing row (same behaviour as the SQLite reference).
 - Blank scope dimensions are rejected before any query executes.
 - Immutable source observations are never overwritten; revisions create
   new rows and set ``superseded_by_id`` on the prior row.
+
+``initialize`` creates the extension, schema, and indexes. It is
+safe to call on an already-initialised database.
+
+The DSN is a standard libpq URL, e.g. ``postgresql://user:pass@host:5432/db``.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, TypeVar, cast
 
-from severian.domain.models import (
-    Collection,
-    Entity,
-    Event,
-    Job,
-    Memory,
-    Observation,
-    Relation,
-    Scope,
+from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, select, update
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import IntegrityError
+
+from severian.domain.models import AuditEvent, Collection, Entity, Event, Job, Memory, Observation, Relation, Scope
+from severian.infrastructure.sqlite import ConflictError, NotFoundError
+
+T = TypeVar("T")
+
+
+metadata = MetaData()
+
+# The canonical table mirrors SQLiteRepository's ``records`` exactly so
+# that exports are byte-compatible across backends (same columns, same
+# payload JSON). ``created_at`` lives inside the payload, matching the
+# SQLite reference; it is not a separate column here.
+records = Table(
+    "records",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("record_type", String, nullable=False, index=True),
+    Column("tenant_id", String, index=True),
+    Column("profile_id", String),
+    Column("collection_id", String, index=True),
+    Column("agent_id", String),
+    Column("session_id", String),
+    Column("content_hash", String),
+    Column("identity_key", String),
+    Column("status", String, index=True),
+    Column("payload", JSONB, nullable=False),
 )
 
-# SQL obligations for a conformant PostgreSQL backend. These are the
-# statements a migration must create; the conformance suite references
-# them as the contract's reference schema.
-REFERENCE_SCHEMA_SQL: list[str] = [
-    """
-    CREATE TABLE IF NOT EXISTS records (
-        id TEXT PRIMARY KEY,
-        record_type TEXT NOT NULL,
-        tenant_id TEXT NOT NULL,
-        profile_id TEXT NOT NULL DEFAULT '',
-        collection_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL DEFAULT '',
-        session_id TEXT NOT NULL DEFAULT '',
-        content_hash TEXT,
-        identity_key TEXT,
-        status TEXT,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_records_type ON records (record_type);",
-    "CREATE INDEX IF NOT EXISTS ix_records_tenant ON records (tenant_id);",
-    "CREATE INDEX IF NOT EXISTS ix_records_collection ON records (collection_id);",
-    "CREATE INDEX IF NOT EXISTS ix_records_status ON records (status);",
-    """
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_records_scoped_identity
-    ON records (record_type, tenant_id, profile_id, collection_id,
-                agent_id, session_id, identity_key)
-    WHERE identity_key IS NOT NULL;
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS memory_vectors (
-        memory_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        profile_id TEXT NOT NULL DEFAULT '',
-        collection_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL DEFAULT '',
-        session_id TEXT NOT NULL DEFAULT '',
-        embedding vector(256),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    """,
-    "CREATE INDEX IF NOT EXISTS ix_memory_vectors_scope ON memory_vectors "
-    "(tenant_id, profile_id, collection_id, agent_id, session_id);",
-]
-
-
-# Scope predicate obligation, expressed as a SQL fragment the backend
-# must include on every scoped SELECT. The conformance suite asserts the
-# backend's generated SQL contains this shape.
-SCOPE_PREDICATE_SQL = (
-    "tenant_id = %(tenant_id)s AND profile_id = %(profile_id)s "
-    "AND collection_id = %(collection_id)s AND agent_id = %(agent_id)s "
-    "AND session_id = %(session_id)s"
+Index(
+    "uq_records_scoped_identity",
+    records.c.record_type,
+    records.c.tenant_id,
+    records.c.profile_id,
+    records.c.collection_id,
+    records.c.agent_id,
+    records.c.session_id,
+    records.c.identity_key,
+    unique=True,
+    postgresql_where=records.c.identity_key.is_not(None),
 )
 
 
 class PostgreSQLBackend:
-    """Reference PostgreSQL backend skeleton.
-
-    This class satisfies the :class:`CanonicalRepository` protocol
-    structurally. The live constructor would accept a SQLAlchemy
-    ``Engine``/connection pool; for conformance purposes it is
-    constructed without a database and only validates the contract
-    surface and scope invariants.
-
-    It intentionally raises ``NotImplementedError`` for data-access
-    methods so that running it against a missing database fails
-    closed rather than silently returning empty results.
-    """
-
-    def __init__(self, *, dsn: str | None = None) -> None:
-        self._dsn = dsn
+    def __init__(self, *, dsn: str):
+        if not dsn or not dsn.strip():
+            raise ValueError("PostgreSQL backend requires a non-empty DSN")
+        # Default SQLAlchemy's postgresql:// dialect to psycopg3 (the
+        # bundled driver) unless the caller pinned a specific dialect.
+        self.dsn = dsn.strip()
+        if self.dsn.startswith("postgresql://") and "+" not in self.dsn.split("://", 1)[0]:
+            self.dsn = self.dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+        self.engine: Engine = create_engine(self.dsn, pool_pre_ping=True)
 
     # -- lifecycle ---------------------------------------------------------
 
     def initialize(self) -> None:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN to initialize")
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
+            metadata.create_all(connection)
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_records_type ON records (record_type)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_records_tenant ON records (tenant_id)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_records_collection ON records (collection_id)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_records_status ON records (status)"
+            )
+
+    def reset(self) -> None:
+        """Drop and recreate the schema (test/scratch use only).
+
+        A destructive, non-portable helper for isolated conformance
+        runs against a shared server. Production callers should use
+        separate databases per environment instead.
+        """
+        with self.engine.begin() as connection:
+            metadata.drop_all(connection)
+        self.initialize()
 
     def close(self) -> None:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN to close")
+        self.engine.dispose()
+
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _scope_values(scope: Scope | None) -> dict[str, str | None]:
+        if scope is None:
+            return {key: None for key in ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")}
+        return scope.model_dump()
+
+    @staticmethod
+    def _collection_scope(collection: Collection) -> dict[str, str | None]:
+        return {
+            "tenant_id": collection.tenant_id,
+            "profile_id": "",
+            "collection_id": collection.id,
+            "agent_id": "",
+            "session_id": "",
+        }
+
+    @staticmethod
+    def _identity(*parts: object) -> str:
+        encoded = json.dumps(
+            parts,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def _record_values(
+        cls,
+        kind: str,
+        model: Any,
+        *,
+        content_hash: str | None = None,
+        identity_key: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(model, Collection):
+            scope_values: dict[str, str | None] = cls._collection_scope(model)
+        else:
+            scope_values = cls._scope_values(getattr(model, "scope", None))
+        return {
+            "id": model.id,
+            "record_type": kind,
+            **scope_values,
+            "content_hash": content_hash,
+            "identity_key": identity_key,
+            "status": status,
+            "payload": model.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _event_models(
+        kind: str,
+        model: Any,
+        *,
+        operation: str = "create",
+    ) -> tuple[Event, AuditEvent] | None:
+        scope = getattr(model, "scope", None)
+        if scope is None:
+            return None
+        event_suffix = {"create": "created", "revise": "revised"}[operation]
+        event = Event(scope=scope, kind=f"{kind}.{event_suffix}", payload={"id": model.id})
+        audit = AuditEvent(scope=scope, action=f"{kind}.{operation}", target_id=model.id, metadata={})
+        return event, audit
+
+    @staticmethod
+    def _scope_predicates(scope: Scope) -> list[Any]:
+        return [getattr(records.c, key) == value for key, value in scope.model_dump().items()]
+
+    def _insert(
+        self,
+        kind: str,
+        model: T,
+        *,
+        content_hash: str | None = None,
+        identity_key: str | None = None,
+        status: str | None = None,
+        emit_events: bool = False,
+    ) -> T:
+        values = self._record_values(
+            kind,
+            model,
+            content_hash=content_hash,
+            identity_key=identity_key,
+            status=status,
+        )
+        with self.engine.begin() as connection:
+            connection.execute(records.insert().values(**values))
+            if emit_events and (events := self._event_models(kind, model)) is not None:
+                event, audit = events
+                connection.execute(records.insert().values(**self._record_values("outbox", event, status="pending")))
+                connection.execute(records.insert().values(**self._record_values("audit", audit)))
+        return model
+
+    def _insert_if_absent(
+        self,
+        kind: str,
+        model: T,
+        *,
+        identity_key: str,
+        content_hash: str | None = None,
+        status: str | None = None,
+        emit_events: bool = False,
+        query: Any,
+    ) -> T:
+        """Insert idempotently: on identity conflict, re-select the existing row.
+
+        Mirrors SQLiteRepository's IntegrityError-catch-and-reload, so
+        both backends behave identically under identity conflicts.
+        """
+        values = self._record_values(
+            kind,
+            model,
+            content_hash=content_hash,
+            identity_key=identity_key,
+            status=status,
+        )
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(records.insert().values(**values))
+                if emit_events and (events := self._event_models(kind, model)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+            return model
+        except IntegrityError:
+            with self.engine.connect() as connection:
+                existing = connection.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise ConflictError(f"{kind} identity conflict") from None
+            return cast(T, cast(Any, type(model)).model_validate(existing))
+
+    def _get(self, kind: str, record_id: str, model: type[T], *, scope: Scope | None = None) -> T:
+        predicates: list[Any] = [records.c.id == record_id, records.c.record_type == kind]
+        if scope is not None:
+            predicates.extend(self._scope_predicates(scope))
+        with self.engine.connect() as connection:
+            row = connection.execute(select(records.c.payload).where(*predicates)).scalar_one_or_none()
+        if row is None:
+            raise NotFoundError(f"{kind} not found")
+        return model.model_validate(row)  # type: ignore[attr-defined,no-any-return]
+
+    @staticmethod
+    def _insert_events_in_transaction(
+        connection: Connection,
+        kind: str,
+        model: Any,
+        *,
+        operation: str = "create",
+    ) -> None:
+        if (events := PostgreSQLBackend._event_models(kind, model, operation=operation)) is None:
+            return
+        event, audit = events
+        connection.execute(
+            records.insert().values(**PostgreSQLBackend._record_values("outbox", event, status="pending"))
+        )
+        connection.execute(records.insert().values(**PostgreSQLBackend._record_values("audit", audit)))
 
     # -- collections -------------------------------------------------------
 
     def create_collection(self, collection: Collection) -> Collection:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        return self._insert("collection", collection, identity_key=self._identity(collection.id))
 
     def get_collection(self, tenant_id: str, collection_id: str) -> Collection:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(records.c.payload).where(
+                    records.c.id == collection_id,
+                    records.c.record_type == "collection",
+                    records.c.tenant_id == tenant_id,
+                    records.c.collection_id == collection_id,
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            raise NotFoundError("collection not found")
+        return Collection.model_validate(row)
 
     # -- observations ------------------------------------------------------
 
     def add_observation(self, observation: Observation) -> Observation:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        digest = hashlib.sha256(observation.content.encode()).hexdigest()
+        candidate = observation.model_copy(update={"content_hash": digest})
+        identity_key = self._identity(digest)
+        query = select(records.c.payload).where(
+            records.c.record_type == "observation",
+            *self._scope_predicates(candidate.scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Observation.model_validate(existing)
+        return self._insert_if_absent(
+            "observation",
+            candidate,
+            content_hash=digest,
+            identity_key=identity_key,
+            emit_events=True,
+            query=query,
+        )
 
     def get_observation(self, scope: Scope, observation_id: str) -> Observation:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        return self._get("observation", observation_id, Observation, scope=scope)
 
     def list_observations(self, scope: Scope) -> list[Observation]:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "observation", *self._scope_predicates(scope))
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Observation.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def update_observation_content(self, observation_id: str, content: str) -> None:
+        del observation_id, content
+        raise ConflictError("observations are immutable; create a revision")
+
+    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
+        original = self.get_observation(scope, observation_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("observation is already superseded")
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        revision = Observation(
+            scope=scope,
+            content=content,
+            content_hash=digest,
+            source=original.source,
+            revision_of_id=original.id,
+        )
+        changed = original.model_copy(update={"superseded_by_id": revision.id})
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == original.id,
+                    records.c.record_type == "observation",
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                )
+                .values(payload=changed.model_dump(mode="json"))
+            )
+            if result.rowcount != 1:
+                raise ConflictError("observation revision conflict")
+            connection.execute(
+                records.insert().values(
+                    **self._record_values(
+                        "observation",
+                        revision,
+                        content_hash=digest,
+                        identity_key=self._identity("revision", original.id, revision.id),
+                    )
+                )
+            )
+            self._insert_events_in_transaction(connection, "observation", revision, operation="revise")
+        return revision
 
     # -- memories ----------------------------------------------------------
 
     def add_memory(self, memory: Memory) -> Memory:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        for source_id in memory.source_observation_ids:
+            try:
+                source = self.get_observation(memory.scope, source_id)
+            except NotFoundError as exc:
+                with self.engine.connect() as connection:
+                    exists = connection.execute(
+                        select(records.c.id).where(records.c.id == source_id, records.c.record_type == "observation")
+                    ).scalar_one_or_none()
+                if exists is not None:
+                    raise ConflictError("source observation scope does not match memory scope") from exc
+                raise
+            if source.scope != memory.scope:
+                raise ConflictError("source observation scope does not match memory scope")
+        identity_key = self._identity(
+            memory.kind,
+            memory.content,
+            memory.source_observation_ids,
+            memory.model_id,
+            memory.prompt_version,
+        )
+        query = select(records.c.payload).where(
+            records.c.record_type == "memory",
+            *self._scope_predicates(memory.scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Memory.model_validate(existing)
+        return self._insert_if_absent(
+            "memory",
+            memory,
+            identity_key=identity_key,
+            emit_events=True,
+            query=query,
+        )
 
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        return self._get("memory", memory_id, Memory, scope=scope)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "memory", *self._scope_predicates(scope))
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
 
-    # -- derivation jobs ---------------------------------------------------
-
-    def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
-        self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
-
-    def claim_job(self, worker_id: str) -> Job:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+    def revise_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        content: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> Memory:
+        original = self.get_memory(scope, memory_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("memory is already superseded")
+        revision = original.model_copy(
+            update={
+                "id": Memory(
+                    scope=scope,
+                    kind=original.kind,
+                    content=content,
+                    source_observation_ids=original.source_observation_ids,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    confidence=original.confidence,
+                ).id,
+                "content": content,
+                "model_id": model_id,
+                "prompt_version": prompt_version,
+                "revision_of_id": original.id,
+                "superseded_by_id": None,
+                "created_at": datetime.now(original.created_at.tzinfo),
+            }
+        )
+        changed = original.model_copy(update={"superseded_by_id": revision.id})
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == original.id,
+                    records.c.record_type == "memory",
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                )
+                .values(payload=changed.model_dump(mode="json"))
+            )
+            if result.rowcount != 1:
+                raise ConflictError("memory revision conflict")
+            connection.execute(records.insert().values(**self._record_values("memory", revision)))
+            self._insert_events_in_transaction(connection, "memory", revision, operation="revise")
+        return revision
 
     # -- entities and relations --------------------------------------------
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        identity_key = self._identity(kind, name.casefold())
+        query = select(records.c.payload).where(
+            records.c.record_type == "entity",
+            *self._scope_predicates(scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Entity.model_validate(existing)
+        entity = Entity(scope=scope, kind=kind, name=name)
+        return self._insert_if_absent(
+            "entity",
+            entity,
+            identity_key=identity_key,
+            emit_events=True,
+            query=query,
+        )
 
     def get_entity(self, scope: Scope, entity_id: str) -> Entity:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        return self._get("entity", entity_id, Entity, scope=scope)
 
     def add_relation(
         self,
@@ -190,29 +526,240 @@ class PostgreSQLBackend:
         valid_to: datetime | None = None,
     ) -> Relation:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        for endpoint_id in (subject_id, object_id):
+            try:
+                self._get("entity", endpoint_id, Entity, scope=scope)
+            except NotFoundError as exc:
+                with self.engine.connect() as connection:
+                    exists = connection.execute(
+                        select(records.c.id).where(records.c.id == endpoint_id, records.c.record_type == "entity")
+                    ).scalar_one_or_none()
+                if exists is not None:
+                    raise ConflictError("relation endpoint scope does not match relation scope") from exc
+                raise
+        relation = Relation(
+            scope=scope,
+            subject_id=subject_id,
+            predicate=predicate,
+            object_id=object_id,
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
+        identity_key = self._identity(subject_id, predicate, object_id, valid_from, valid_to)
+        query = select(records.c.payload).where(
+            records.c.record_type == "relation",
+            *self._scope_predicates(scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Relation.model_validate(existing)
+        return self._insert_if_absent(
+            "relation",
+            relation,
+            identity_key=identity_key,
+            emit_events=True,
+            query=query,
+        )
+
+    # -- derivation jobs ---------------------------------------------------
+
+    def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
+        self._require_scope(scope)
+        identity_key = self._identity(kind, payload)
+        query = select(records.c.payload).where(
+            records.c.record_type == "job",
+            *self._scope_predicates(scope),
+            records.c.identity_key == identity_key,
+        )
+        with self.engine.connect() as connection:
+            existing = connection.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return Job.model_validate(existing)
+        job = Job(scope=scope, kind=kind, payload=payload)
+        return self._insert_if_absent(
+            "job",
+            job,
+            identity_key=identity_key,
+            status="pending",
+            query=query,
+        )
+
+    def claim_job(self, worker_id: str) -> Job:
+        pending_id = (
+            select(records.c.id)
+            .where(records.c.record_type == "job", records.c.status == "pending")
+            .order_by(records.c.id)
+            .limit(1)
+            .scalar_subquery()
+        )
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                update(records)
+                .where(records.c.id == pending_id, records.c.status == "pending")
+                .values(status="running")
+                .returning(records.c.id, records.c.payload)
+            ).mappings().one_or_none()
+            if row is None:
+                raise NotFoundError("no pending job")
+            job = Job.model_validate(row["payload"]).model_copy(update={"status": "running", "worker_id": worker_id})
+            connection.execute(
+                update(records).where(records.c.id == row["id"]).values(payload=job.model_dump(mode="json"))
+            )
+        return job
+
+    def complete_job(self, job_id: str, status: str) -> Job:
+        """Mark a claimed job as done or failed (atomically)."""
+        if status not in ("done", "failed"):
+            raise ValueError("job status must be 'done' or 'failed'")
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(records.c.payload).where(
+                    records.c.id == job_id,
+                    records.c.record_type == "job",
+                    records.c.status == "running",
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                raise NotFoundError("job not claimed")
+            job = Job.model_validate(row["payload"]).model_copy(update={"status": status})
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == job_id,
+                    records.c.record_type == "job",
+                    records.c.status == "running",
+                )
+                .values(status=status, payload=job.model_dump(mode="json"))
+            )
+            if result.rowcount != 1:
+                raise ConflictError("job completion conflict")
+        return job
 
     # -- audit and recovery ------------------------------------------------
 
-    def append_audit(self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]) -> Any:
+    def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event:
         self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
-
-    def append_outbox(self, scope: Scope, kind: str, payload: Mapping[str, Any]) -> Event:
-        self._require_scope(scope)
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        return self._insert("outbox", Event(scope=scope, kind=kind, payload=payload), status="pending")
 
     def pending_outbox(self) -> list[Event]:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        with self.engine.connect() as connection:
+            values = connection.execute(
+                select(records.c.payload)
+                .where(records.c.record_type == "outbox", records.c.status == "pending")
+                .order_by(records.c.id)
+            ).scalars()
+            return [Event.model_validate(value) for value in values]
 
-    def export_json(self) -> str:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+    def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: Mapping[str, Any]) -> AuditEvent:
+        self._require_scope(scope)
+        return self._insert(
+            "audit",
+            AuditEvent(scope=scope, action=action, target_id=target_id, metadata=dict(metadata_)),
+        )
 
-    def import_json(self, payload: str) -> None:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+    def list_audit(self, scope: Scope) -> list[AuditEvent]:
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "audit", *self._scope_predicates(scope))
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [AuditEvent.model_validate(value) for value in connection.execute(query).scalars()]
 
     def backup(self, destination: Any) -> None:
-        raise NotImplementedError("PostgreSQL backend requires a live DSN")
+        """Write a portable snapshot (export document) to destination.
+
+        The contract's ``backup`` takes a destination path. PostgreSQL
+        itself does not expose a file-level backup like SQLite's
+        ``sqlite3.backup``, so we persist the export document (same
+        format as ``export_json``, restorable via ``import_json``) to
+        the destination. Operators who need a physical backup should use
+        ``pg_dump``/WAL archiving at the server level.
+        """
+        payload = self.export_json()
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        temporary.replace(destination)
+
+    @staticmethod
+    def export_checksum(exported_records: list[dict[str, Any]]) -> str:
+        canonical = json.dumps(exported_records, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def export_json(self) -> str:
+        with self.engine.connect() as connection:
+            data = [dict(row) for row in connection.execute(select(records).order_by(records.c.id)).mappings()]
+        document = {
+            "format": "severian-v1",
+            "schema_version": 1,
+            "records": data,
+            "checksum": self.export_checksum(data),
+        }
+        return json.dumps(document, sort_keys=True)
+
+    def import_json(self, payload: str) -> None:
+        document = json.loads(payload)
+        if document.get("format") != "severian-v1" or document.get("schema_version") != 1:
+            raise ValueError("unsupported export format or schema version")
+        incoming = document.get("records")
+        if not isinstance(incoming, list):
+            raise ValueError("invalid export records")
+        if document.get("checksum") != self.export_checksum(incoming):
+            raise ValueError("export checksum mismatch")
+        required = {column.name for column in records.columns}
+        for item in incoming:
+            if not isinstance(item, dict) or set(item) != required:
+                raise ValueError("invalid export record shape")
+
+        identity_columns = (
+            "record_type",
+            "tenant_id",
+            "profile_id",
+            "collection_id",
+            "agent_id",
+            "session_id",
+            "identity_key",
+        )
+
+        def identity(item: dict[str, Any]) -> tuple[Any, ...] | None:
+            if item["identity_key"] is None:
+                return None
+            return tuple(item[column] for column in identity_columns)
+
+        incoming_identities: dict[tuple[Any, ...], str] = {}
+        for item in incoming:
+            key = identity(item)
+            if key is not None and incoming_identities.get(key) not in (None, item["id"]):
+                raise ConflictError("import scoped identity conflict")
+            if key is not None:
+                incoming_identities[key] = item["id"]
+
+        try:
+            with self.engine.begin() as connection:
+                existing_rows = [dict(row) for row in connection.execute(select(records)).mappings()]
+                existing = {row["id"]: row for row in existing_rows}
+                existing_identities = {
+                    key: row["id"]
+                    for row in existing_rows
+                    if (key := identity(row)) is not None
+                }
+                for item in incoming:
+                    current = existing.get(item["id"])
+                    if current is not None and current != item:
+                        raise ConflictError(f"import conflict for record {item['id']}")
+                    key = identity(item)
+                    if key is not None and existing_identities.get(key) not in (None, item["id"]):
+                        raise ConflictError("import scoped identity conflict")
+                for item in incoming:
+                    if item["id"] not in existing:
+                        connection.execute(records.insert().values(**item))
+        except IntegrityError as exc:
+            raise ConflictError("import conflict during concurrent write") from exc
 
     # -- internals ---------------------------------------------------------
 
@@ -234,6 +781,6 @@ class PostgreSQLBackend:
 
 __all__ = [
     "PostgreSQLBackend",
-    "REFERENCE_SCHEMA_SQL",
-    "SCOPE_PREDICATE_SQL",
+    "ConflictError",
+    "NotFoundError",
 ]

@@ -142,7 +142,9 @@ def test_hybrid_retrieval_and_context_assembly_cite_sources(repo, tmp_path: Path
     results = RetrievalService(repo, fts, vector).search(scope(), "Ada founded", limit=5)
     assert results[0].memory.id == memory.id
     assert results[0].source_observation_ids == [observation.id]
-    assert RetrievalService(repo, fts, vector).search(scope(), " \t\n") == []
+    # Empty/whitespace query is the recall-all path (admin graph `q=*`).
+    assert RetrievalService(repo, fts, vector).search(scope(), " \t\n")[0].memory.id == memory.id
+    # Non-searchable garbage still returns nothing.
     assert RetrievalService(repo, fts, vector).search(scope(), "\x00***") == []
     context = ContextAssembler(max_chars=1000).assemble(results)
     assert "source:" in context and observation.id in context

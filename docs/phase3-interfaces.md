@@ -131,7 +131,4 @@ indexes directly and close all opened handles on every exit path.
 - MCP server entry point — left for the next Phase 3 slice.
 - Hermes `MemoryProvider` adapter — left for the next Phase 3 slice.
 - Bearer / OAuth authentication — left for the next Phase 3 slice.
-- Background workers driving the durable outbox — left for the
-  next Phase 3 slice. The `derive` job is enqueued but the worker
-  loop is not yet wired; the API's `search --derive` path
-  short-circuits this for synchronous recall.
+- Authentication / authorization for the admin UI — left for a later slice.

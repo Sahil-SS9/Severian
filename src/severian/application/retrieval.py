@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from severian.application.ports import CanonicalRepository
+from severian.application.projections import VectorProjection
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.vector import LocalVectorIndex
 
 
 @dataclass(frozen=True)
@@ -18,13 +18,30 @@ class RetrievalResult:
 
 
 class RetrievalService:
-    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: LocalVectorIndex):
+    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: VectorProjection):
         self.repository = repository
         self.lexical = lexical
         self.vector = vector
 
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[RetrievalResult]:
-        if not query.strip() or not FTS5Index.is_searchable(query):
+        stripped = query.strip()
+        # Recall-all path: the admin graph (and CLI `list`-style flows)
+        # need "everything in this scope", not a ranked query. Empty and
+        # `*` queries mean "list all memories" — returning every memory
+        # in scope with neutral scores.
+        if not stripped or stripped == "*":
+            memories = self.repository.list_memories(scope)
+            return [
+                RetrievalResult(
+                    memory=memory,
+                    source_observation_ids=list(memory.source_observation_ids),
+                    lexical_score=0.0,
+                    vector_score=0.0,
+                    fused_score=0.0,
+                )
+                for memory in memories
+            ][:limit]
+        if not FTS5Index.is_searchable(query):
             return []
         lexical_hits = self.lexical.search(scope, query, limit=max(limit, 50))
         vector_hits = self.vector.search(scope, query, limit=max(limit, 50))

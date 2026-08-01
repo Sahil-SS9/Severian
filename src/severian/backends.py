@@ -2,9 +2,11 @@
 
 The contracts here define the shape a backend must satisfy to be used
 with the Severian memory engine. The on-disk :class:`SQLiteRepository`
-is the current reference implementation and the source of truth for the
-contract surface. ``PostgreSQLBackend`` (pgvector) is a future backend
-target that MUST satisfy the same :class:`CanonicalRepository` protocol.
+is the reference implementation and the source of truth for the
+contract surface; :class:`~severian.infrastructure.postgresql.PostgreSQLBackend`
+is the live PostgreSQL/pgvector backend and satisfies the same
+:class:`CanonicalRepository` protocol (proven by the parametrized
+conformance suite in ``tests/contract/``).
 
 Rules enforced by the contracts:
 
@@ -87,6 +89,7 @@ class CanonicalRepository(Protocol):
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job: ...
     def claim_job(self, worker_id: str) -> Job: ...
+    def complete_job(self, job_id: str, status: str) -> Job: ...
 
     # -- entities and relations --------------------------------------------
 

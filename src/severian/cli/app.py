@@ -223,5 +223,47 @@ def main() -> None:  # pragma: no cover - module entry point
     cli()
 
 
+@cli.command("work")
+def work(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    worker_id: str = typer.Option("worker", "--worker-id", help="Unique worker name for job claiming."),
+    max_jobs: int = typer.Option(0, "--max-jobs", min=0, help="Process at most N jobs (0 = drain all pending)."),
+) -> None:
+    """Process pending derive jobs, then exit.
+
+    Drains the durable derive job queue: claims pending jobs, derives
+    observations into memories via the canonical derivation service,
+    marks jobs done (or failed), and rebuilds projections for the
+    touched scopes. Emits a JSON summary.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    try:
+        from severian.application.derivation import DerivationService
+        from severian.application.projections import ProjectionCoordinator
+        from severian.application.worker import DerivationWorker
+
+        worker = DerivationWorker(
+            bundle.repository,
+            DerivationService(bundle.repository),
+            ProjectionCoordinator(bundle.repository, bundle.lexical, bundle.vector),
+        )
+        summary = worker.drain(
+            worker_id=worker_id,
+            gateway=bundle.gateway,
+            max_jobs=None if max_jobs == 0 else max_jobs,
+        )
+        _emit(
+            {
+                "processed": summary.processed,
+                "failed": summary.failed,
+                "touched_scopes": [scope.model_dump() for scope in summary.touched_scopes],
+            }
+        )
+    finally:
+        bundle.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     main()

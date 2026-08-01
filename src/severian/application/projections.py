@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.vector import LocalVectorIndex
+from severian.infrastructure.vector import VectorHit
+
+
+@runtime_checkable
+class VectorProjection(Protocol):
+    """Duck-typed vector projection surface (LocalVectorIndex or PGVectorIndex)."""
+
+    def upsert(self, memory: Memory) -> None: ...
+    def delete(self, memory_id: str) -> None: ...
+    def count(self, scope: Scope) -> int: ...
+    def clear(self, scope: Scope | None = None) -> None: ...
+    def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]: ...
+    def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None: ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -20,7 +34,7 @@ class ProjectionStatus:
 
 
 class ProjectionCoordinator:
-    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: LocalVectorIndex):
+    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: VectorProjection):
         self.repository = repository
         self.lexical = lexical
         self.vector = vector
