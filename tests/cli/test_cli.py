@@ -154,3 +154,83 @@ def test_cli_is_installed_as_module():
     assert result.returncode == 0, result.stderr
     assert "ingest" in result.stdout
     assert "search" in result.stdout
+
+
+def test_export_import_roundtrip_restores_searchable_store(data_root: Path):
+    """Export a snapshot, import into a fresh store, and search the result.
+
+    Regression for the release artifact: a restore must leave the store
+    immediately searchable (projections rebuilt for imported scopes), and
+    a tampered snapshot must be rejected.
+    """
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    snapshot = data_root / "snapshot.json"
+    restored = data_root / "restored.db"
+    restored_fts = data_root / "restored-fts.db"
+    restored_vectors = data_root / "restored-vectors.db"
+
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+
+    # Seed and promote.
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Ada founded a company", "--source", "{}"]
+    ).exit_code == 0
+    assert runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    ).exit_code == 0
+
+    # Export.
+    export_result = runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(snapshot)]
+    )
+    assert export_result.exit_code == 0, export_result.output
+    assert snapshot.exists()
+
+    # Import into a fresh store; default rebuild makes it searchable.
+    import_result = runner.invoke(
+        cli, ["import", "--database", str(restored), "--fts", str(restored_fts), "--vectors", str(restored_vectors),
+              "--input", str(snapshot)]
+    )
+    assert import_result.exit_code == 0, import_result.output
+    import_body = json.loads(import_result.output.strip().splitlines()[-1])
+    assert import_body["status"] == "imported"
+    assert len(import_body["rebuilt_scopes"]) == 1
+
+    search_result = runner.invoke(
+        cli, ["search", "--database", str(restored), "--fts", str(restored_fts), "--vectors", str(restored_vectors),
+              *scope_flags, "--query", "Ada"]
+    )
+    assert search_result.exit_code == 0, search_result.output
+    search_body = json.loads(search_result.output.strip().splitlines()[-1])
+    assert search_body["hits"], "restored store must be searchable after import"
+
+
+def test_import_rejects_tampered_snapshot(data_root: Path):
+    """A checksum-violating snapshot must abort the import."""
+    runner = CliRunner()
+    bad = data_root / "bad.json"
+    bad.write_text(
+        json.dumps({"format": "severian-v1", "schema_version": 1, "records": [], "checksum": "deadbeef"}),
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        cli,
+        [
+            "import",
+            "--database", str(data_root / "bad.db"),
+            "--fts", str(data_root / "bad-fts.db"),
+            "--vectors", str(data_root / "bad-vectors.db"),
+            "--input", str(bad),
+        ],
+    )
+    assert result.exit_code != 0
+    assert (
+        "checksum" in result.output.lower()
+        or "tamper" in result.output.lower()
+        or "valueerror" in result.output.lower()
+        or "cannot import" in result.output.lower()
+    )

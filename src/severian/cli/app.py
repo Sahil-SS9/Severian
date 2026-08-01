@@ -265,5 +265,103 @@ def work(
         bundle.close()
 
 
+@cli.command("export")
+def export(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    output: Path = typer.Option(..., "--output", help="Destination file for the checksummed JSON snapshot."),
+) -> None:
+    """Export the canonical store to a portable severian-v1 snapshot.
+
+    The snapshot is a checksummed JSON document (``export_json``) that
+    ``severian import`` can restore into a fresh store. It is
+    backend-portable: a SQLite export restores into PostgreSQL and
+    vice versa.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    try:
+        payload = bundle.repository.export_json()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_suffix(output.suffix + ".tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        temporary.replace(output)
+        _emit({"format": "severian-v1", "output": str(output), "bytes": len(payload.encode("utf-8"))})
+    finally:
+        bundle.close()
+
+
+@cli.command("import")
+def import_(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    input: Path = typer.Option(..., "--input", help="severian-v1 snapshot file to restore."),
+    rebuild: bool = typer.Option(
+        True,
+        "--rebuild/--no-rebuild",
+        help="Rebuild lexical/vector projections for imported scopes after restoring.",
+    ),
+) -> None:
+    """Import a severian-v1 snapshot into the canonical store.
+
+    Validates format, schema version, record shape, checksum, and
+    scoped-identity conflicts before writing. Conflicting records abort
+    the import; idempotent imports of the same snapshot succeed.
+
+    By default projections are rebuilt for every scope present in the
+    snapshot so the restored store is immediately searchable. Pass
+    ``--no-rebuild`` to restore canonical records only.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    try:
+        payload = input.read_text(encoding="utf-8")
+        bundle.repository.import_json(payload)
+        touched_scopes: list[Scope] = []
+        if rebuild:
+            from severian.application.projections import ProjectionCoordinator
+
+            coordinator = ProjectionCoordinator(bundle.repository, bundle.lexical, bundle.vector)
+            document = json.loads(payload)
+            scopes = {
+                (
+                    record.get("tenant_id"),
+                    record.get("profile_id"),
+                    record.get("collection_id"),
+                    record.get("agent_id"),
+                    record.get("session_id"),
+                )
+                for record in document.get("records", [])
+                if record.get("record_type") == "memory"
+                and record.get("tenant_id")
+                and record.get("profile_id")
+                and record.get("collection_id")
+                and record.get("agent_id")
+                and record.get("session_id")
+            }
+            for tenant, profile, collection, agent, session in scopes:
+                scope = Scope(
+                    tenant_id=tenant,
+                    profile_id=profile,
+                    collection_id=collection,
+                    agent_id=agent,
+                    session_id=session,
+                )
+                coordinator.rebuild(scope)
+                touched_scopes.append(scope)
+        _emit(
+            {
+                "format": "severian-v1",
+                "input": str(input),
+                "status": "imported",
+                "rebuilt_scopes": [scope.model_dump() for scope in touched_scopes],
+            }
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(f"cannot import snapshot: {exc}") from exc
+    finally:
+        bundle.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     main()
