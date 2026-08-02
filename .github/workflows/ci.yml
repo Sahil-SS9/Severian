@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "audit/**", "fix/**", "feat/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: severian
+          POSTGRES_PASSWORD: severian
+          POSTGRES_DB: severian
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U severian"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Verify live PostgreSQL + pgvector reachable
+        run: |
+          uv run python - <<'PY'
+          import os
+          from severian.infrastructure.postgresql import PostgreSQLBackend
+          from severian.infrastructure.pgvector_index import PGVectorIndex
+          dsn = os.environ["SEVERIAN_PG_DSN"]
+          repo = PostgreSQLBackend(dsn=dsn)
+          repo.close()
+          idx = PGVectorIndex(dsn=dsn)
+          idx.close()
+          print("live PostgreSQL + pgvector OK")
+          PY
+
+      - name: Lint (ruff check)
+        run: uv run ruff check src/severian scripts/ tests/
+
+      - name: Type check (mypy --strict)
+        run: uv run mypy --strict src/severian tests/benchmarks
+
+      - name: Test (SQLite + live PostgreSQL lanes)
+        run: uv run pytest -q
+
+      - name: Validate benchmark manifest
+        run: uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-v1.json
+
+      - name: Benchmark release gate (SQLite + live PostgreSQL)
+        # Chroma lane is optional in CI: it requires a throwaway venv
+        # with a vendored CVE-patched chromadb build. When absent the
+        # lane is skipped and recorded as skipped_lane (never a pass);
+        # the live gate is enforced on the platform lanes, which is
+        # what the release contract demands.
+        run: |
+          uv run python scripts/run_benchmark.py \
+            --manifest docs/benchmarks/manifest-v1.json \
+            --pg-dsn "$SEVERIAN_PG_DSN" \
+            --out /tmp/ci-benchmark
+          python - <<'PY'
+          import json
+          result = json.load(open("/tmp/ci-benchmark/result.json"))
+          assert result["gate_passed"], f"benchmark gate failed: {result['gate_failures']}"
+          print("benchmark gate PASSED")
+          PY

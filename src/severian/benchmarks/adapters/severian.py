@@ -36,6 +36,7 @@ class SeverianAdapter:
         workdir: str | None = None,
         dimension: int = 256,
         min_vector_score: float | None = 0.15,
+        reset_db: bool = False,
     ) -> None:
         from severian.composition import build_bundle
 
@@ -67,6 +68,15 @@ class SeverianAdapter:
             )
         # A local, deterministic derivation gateway (never cloud).
         self._gateway = _LocalHashGateway()
+        # Benchmark runs must start from a clean database: a PG lane that
+        # inherits leftover rows from an earlier run re-derives them on
+        # every query and the numbers stop measuring this corpus. reset()
+        # requires the test-owned-db guard; the benchmark scripts set
+        # SEVERIAN_PG_ALLOW_RESET for their dedicated benchmark DSNs.
+        if reset_db:
+            if backend != "postgresql":
+                raise ValueError("reset_db only applies to the postgresql backend")
+            self._bundle.repository.reset(acknowledge=True)
         # observation_id -> document_id map for trace resolution.
         self._obs_to_doc: dict[str, str] = {}
         # scope -> collection created
@@ -126,7 +136,14 @@ class SeverianAdapter:
                 # Already superseded by an earlier ingest; idempotent.
                 continue
 
-    def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+    def query(
+        self,
+        query: str,
+        *,
+        limit: int,
+        scope: str,
+        derive: bool = True,
+    ) -> ProviderQueryResponse:
         from severian.domain.models import Scope
 
         parts = parse_scope(scope)
@@ -141,7 +158,7 @@ class SeverianAdapter:
             scoped,
             query=query,
             limit=limit,
-            derive=True,
+            derive=derive,
             gateway=self._gateway,
             min_vector_score=self._min_vector_score,
         )

@@ -45,6 +45,7 @@ class BenchmarkResult:
     results: dict[str, ProviderResult]
     gate_passed: bool
     gate_failures: dict[str, list[str]] = field(default_factory=dict)
+    skipped_lanes: list[str] = field(default_factory=list)
 
 
 class ProviderAdapter(Protocol):
@@ -63,13 +64,15 @@ class BenchmarkRunner:
         *,
         manifest: BenchmarkManifest,
         adapters: Mapping[str, ProviderAdapter],
+        allow_missing: bool = False,
     ) -> None:
         live_providers = [provider for provider in manifest.providers if not provider.vendor_reported_only]
         missing = [provider.id for provider in live_providers if provider.id not in adapters]
-        if missing:
+        if missing and not allow_missing:
             raise ValueError(f"missing adapters for providers: {missing}")
         self._manifest = manifest
         self._adapters = dict(adapters)
+        self._missing = missing
         self._documents = {document.id: document for document in manifest.corpus.documents}
 
     def _ingest(self, adapter: ProviderAdapter) -> None:
@@ -221,7 +224,15 @@ class BenchmarkRunner:
     def _evaluate_gate(self, results: dict[str, ProviderResult]) -> dict[str, list[str]]:
         failures: dict[str, list[str]] = {}
         gate = self._manifest.release_gate
+        # The release gate measures the platform under test (kind ==
+        # "severian"). External/competitor lanes are compared and
+        # reported, but their failures never block Severian's release
+        # gate — the strategy's success criteria require Severian to
+        # pass, not the competition.
+        platform_ids = {provider.id for provider in self._manifest.providers if provider.kind == "severian"}
         for provider_id, result in results.items():
+            if provider_id not in platform_ids:
+                continue
             provider_failures: list[str] = []
             if result.recall_at_10 < gate.min_recall_at_10:
                 provider_failures.append("recall_at_10")
@@ -244,13 +255,18 @@ class BenchmarkRunner:
 
     def run(self) -> BenchmarkResult:
         live = [provider for provider in self._manifest.providers if not provider.vendor_reported_only]
-        results = {provider.id: self._run_provider(provider.id) for provider in live}
+        results = {provider.id: self._run_provider(provider.id) for provider in live if provider.id in self._adapters}
         failures = self._evaluate_gate(results)
+        # Lanes skipped for environmental reasons (e.g. chroma venv not
+        # installed) are recorded visibly in skipped_lanes, never as a
+        # silent pass AND never as a platform gate failure: a missing
+        # competitor lane must not block Severian's own release gate.
         return BenchmarkResult(
             manifest_id=self._manifest.manifest_id,
             results=results,
             gate_passed=not failures,
             gate_failures=failures,
+            skipped_lanes=list(self._missing),
         )
 
 
@@ -259,6 +275,7 @@ def to_jsonable(result: BenchmarkResult) -> dict[str, Any]:
         "manifest_id": result.manifest_id,
         "gate_passed": result.gate_passed,
         "gate_failures": result.gate_failures,
+        "skipped_lanes": result.skipped_lanes,
         "results": {key: asdict(value) for key, value in result.results.items()},
     }
 
