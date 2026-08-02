@@ -7,6 +7,7 @@ from pathlib import Path
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
+from severian.infrastructure.vector import _STOPWORDS
 
 
 @dataclass(frozen=True)
@@ -93,9 +94,13 @@ class FTS5Index:
         tokens = [
             token.replace('"', '""')
             for token in re.findall(r"[\w]+", query, flags=re.UNICODE)
-            if token.casefold() not in operator_tokens
+            if token.casefold() not in operator_tokens and token.casefold() not in _STOPWORDS
         ]
-        return " AND ".join(f'"{token}"' for token in tokens)
+        # OR semantics: a natural-language query contains filler words
+        # that never match, so AND (FTS5 default) returns nothing for
+        # almost every real query. BM25 ranks rarer terms far above
+        # common ones, so distinctive matches still surface first.
+        return " OR ".join(f'"{token}"' for token in tokens)
 
     @classmethod
     def is_searchable(cls, query: str) -> bool:

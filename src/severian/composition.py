@@ -42,6 +42,7 @@ class ServiceBundle:
     lexical: FTS5Index
     vector: Any
     gateway: Any
+    projection: Any
     backend: str = "sqlite"
 
     def close(self) -> None:
@@ -101,11 +102,12 @@ def _compose(
     gateway: Any,
     backend: str,
 ) -> ServiceBundle:
+    projection = ProjectionCoordinator(repository, lexical, vector)
     service = BuildMemoryService(
         repository=repository,
         ingestion=IngestionService(repository),
         retrieval=RetrievalService(repository, lexical, vector),
-        projection=ProjectionCoordinator(repository, lexical, vector),
+        projection=projection,
         derivation=DerivationService(repository),
         context=ContextAssembler(),
     )
@@ -114,6 +116,7 @@ def _compose(
         repository=repository,
         lexical=lexical,
         vector=vector,
+        projection=projection,
         gateway=gateway or _HashingGateway(),
         backend=backend,
     )

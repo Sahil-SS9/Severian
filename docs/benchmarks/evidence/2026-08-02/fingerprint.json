@@ -1,0 +1,98 @@
+{
+  "adapters": {
+    "baseline-lexical": {
+      "backend": "pure-python-bag-of-words",
+      "model": "tf-dot-product",
+      "notes": "baseline; no scope isolation beyond per-scope map",
+      "prompt_version": "n/a",
+      "provider_id": "baseline-lexical"
+    },
+    "chroma": {
+      "backend": "chroma-persistent-client",
+      "model": "chroma-default-embedding",
+      "prompt_version": "n/a",
+      "provider_id": "chroma",
+      "security_advisory": "CVE-2026-45829 (critical, unpatched) \u2014 local-only use"
+    },
+    "severian-postgres": {
+      "backend": "postgresql",
+      "dsn_set": true,
+      "model": "severian/hash+fts",
+      "prompt_version": "prompt-v1",
+      "provider_id": "severian-postgres"
+    },
+    "severian-sqlite": {
+      "backend": "sqlite",
+      "dsn_set": false,
+      "model": "severian/hash+fts",
+      "prompt_version": "prompt-v1",
+      "provider_id": "severian-sqlite"
+    }
+  },
+  "commit": {
+    "branch": "audit/brutal-critique-v0.1.0",
+    "sha": "27cf071f3bf4a84af33b4d9fa510ccaa3d1c8909"
+  },
+  "environment": {
+    "chroma_venv": "/tmp/bench-compare-venv",
+    "pg_dsn_set": true,
+    "platform": "linux",
+    "python": "3.12.3"
+  },
+  "manifest": {
+    "id": "comparison-v1-2026-08-02",
+    "path": "/home/kensei/repos/Severian/docs/benchmarks/manifest-v1.json",
+    "sha256": "a18b2aeb1304bb301333865c2b3f9bdef0cdb61d51cc45d45f82e8e1a99f91a6"
+  },
+  "run_started_at": "2026-08-02T21:47:55.124418+00:00",
+  "vendor_reported": [
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "mem0",
+      "model": "mem0-token-efficient-2026",
+      "reference_url": "https://mem0.ai/blog/state-of-ai-agent-memory-2026",
+      "vendor": "Mem0"
+    },
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "hindsight",
+      "model": "hindsight-default",
+      "reference_url": "https://hindsight.so/",
+      "vendor": "Hindsight"
+    },
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "honcho",
+      "model": "honcho-default",
+      "reference_url": "https://honcho.dev/",
+      "vendor": "Honcho"
+    },
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "supermemory",
+      "model": "supermemory-default",
+      "reference_url": "https://supermemory.ai/",
+      "vendor": "SuperMemory"
+    },
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "mempalace",
+      "model": "mempalace-default",
+      "reference_url": "https://mempalace.ai/",
+      "vendor": "MemPalace"
+    },
+    {
+      "access_date": "2026-08-02",
+      "deployment": "hosted",
+      "id": "mnemosyne",
+      "model": "mnemosyne-default",
+      "reference_url": "https://github.com/NousResearch/hermes-agent",
+      "vendor": "Mnemosyne"
+    }
+  ]
+}

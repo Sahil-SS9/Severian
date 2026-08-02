@@ -9,8 +9,10 @@ Severian against stub external adapters through the same query set.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,7 +25,7 @@ from severian.benchmarks.manifest import (
 from severian.benchmarks.runner import BenchmarkRunner, ProviderAdapter, ProviderQueryResponse
 
 
-def _minimal_manifest() -> dict[str, object]:
+def _minimal_manifest() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "manifest_id": "bench-2026-07-31-001",
@@ -118,7 +120,7 @@ def _minimal_manifest() -> dict[str, object]:
     }
 
 
-def test_manifest_round_trip(tmp_path: Path):
+def test_manifest_round_trip(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     manifest_path = tmp_path / "bench.json"
     manifest_path.write_text(json.dumps(payload))
@@ -128,7 +130,7 @@ def test_manifest_round_trip(tmp_path: Path):
     assert manifest.release_gate.require_external_providers == 2
 
 
-def test_manifest_rejects_unknown_schema_version(tmp_path: Path):
+def test_manifest_rejects_unknown_schema_version(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     payload["schema_version"] = 99
     manifest_path = tmp_path / "bench.json"
@@ -137,7 +139,7 @@ def test_manifest_rejects_unknown_schema_version(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_manifest_rejects_invalid_metric(tmp_path: Path):
+def test_manifest_rejects_invalid_metric(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     payload["metrics"] = ["totally_made_up_metric"]
     manifest_path = tmp_path / "bench.json"
@@ -146,7 +148,7 @@ def test_manifest_rejects_invalid_metric(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_manifest_requires_two_external_providers(tmp_path: Path):
+def test_manifest_requires_two_external_providers(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     # Keep only severian
     payload["providers"] = [payload["providers"][0]]
@@ -156,12 +158,12 @@ def test_manifest_requires_two_external_providers(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_validate_manifest_passes_for_minimal():
+def test_validate_manifest_passes_for_minimal() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
     assert validate_manifest(manifest) is manifest
 
 
-def test_runner_executes_queries_through_each_provider():
+def test_runner_executes_queries_through_each_provider() -> None:
     payload = _minimal_manifest()
     manifest = BenchmarkManifest.model_validate(payload)
 
@@ -170,10 +172,10 @@ def test_runner_executes_queries_through_each_provider():
         provider_id: str
         documents: list[tuple[str, str]]
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str):
+        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -189,10 +191,10 @@ def test_runner_executes_queries_through_each_provider():
     class FakeSeverian(ProviderAdapter):
         documents: list[tuple[str, str]]
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str):
+        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -233,14 +235,14 @@ def test_runner_executes_queries_through_each_provider():
         assert external.citation_precision == 1.0
 
 
-def test_runner_computes_stale_temporal_scope_and_unsupported_metrics():
+def test_runner_computes_stale_temporal_scope_and_unsupported_metrics() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
 
     @dataclass
     class AdversarialAdapter(ProviderAdapter):
         closed: bool = False
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
         def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
@@ -271,16 +273,18 @@ def test_runner_computes_stale_temporal_scope_and_unsupported_metrics():
     assert adapters["severian"].closed is True
 
 
-def test_runner_rejects_response_without_explicit_cost():
+def test_runner_rejects_response_without_explicit_cost() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
 
     @dataclass
     class MissingCostAdapter(ProviderAdapter):
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str):
-            return [{"document_id": "d1"}]
+        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+            # Deliberately violates the protocol: returns a raw list so
+            # the runner's validator must reject it.
+            return [{"document_id": "d1"}]  # type: ignore[return-value]
 
         def close(self) -> None:
             return None

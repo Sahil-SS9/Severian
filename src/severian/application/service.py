@@ -189,6 +189,7 @@ class MemoryService:
         derive: bool = False,
         gateway: DerivationGateway | None = None,
         policy: Mapping[str, Any] | None = None,
+        min_vector_score: float | None = None,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -203,7 +204,12 @@ class MemoryService:
                     scope, observation.id, gateway, policy=dict(policy or {})  # type: ignore[arg-type]
                 )
             self._projection.rebuild(scope)
-        results = self._retrieval.search(scope, query, limit=limit)
+        results = self._retrieval.search(
+            scope,
+            query,
+            limit=limit,
+            min_vector_score=min_vector_score,
+        )
         return [SearchHitView.from_result(item) for item in results]
 
     def assemble_context(

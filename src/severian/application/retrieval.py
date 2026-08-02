@@ -23,7 +23,14 @@ class RetrievalService:
         self.lexical = lexical
         self.vector = vector
 
-    def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[RetrievalResult]:
+    def search(
+        self,
+        scope: Scope,
+        query: str,
+        *,
+        limit: int = 20,
+        min_vector_score: float | None = None,
+    ) -> list[RetrievalResult]:
         stripped = query.strip()
         # Recall-all path: the admin graph (and CLI `list`-style flows)
         # need "everything in this scope", not a ranked query. Empty and
@@ -62,12 +69,24 @@ class RetrievalService:
             fused = (1.0 / (60 + lexical_rank) if lexical_rank else 0.0) + (
                 1.0 / (60 + vector_rank) if vector_rank else 0.0
             )
+            # Relevance floor: a vector-only hit below the floor is noise
+            # (hash embeddings always produce SOME positive dot product).
+            # Lexical hits (token matches) always pass — BM25 does not
+            # return non-matching rows.
+            vector_score = vector_by_id[memory_id].score if memory_id in vector_by_id else 0.0
+            lexical_score = lexical_by_id[memory_id].score if memory_id in lexical_by_id else 0.0
+            if (
+                min_vector_score is not None
+                and lexical_rank is None
+                and vector_score < min_vector_score
+            ):
+                continue
             ranked.append(
                 RetrievalResult(
                     memory=memory,
                     source_observation_ids=list(memory.source_observation_ids),
-                    lexical_score=lexical_by_id[memory_id].score if memory_id in lexical_by_id else 0.0,
-                    vector_score=vector_by_id[memory_id].score if memory_id in vector_by_id else 0.0,
+                    lexical_score=lexical_score,
+                    vector_score=vector_score,
                     fused_score=fused,
                 )
             )

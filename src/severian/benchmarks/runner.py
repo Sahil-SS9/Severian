@@ -50,7 +50,7 @@ class BenchmarkResult:
 class ProviderAdapter(Protocol):
     """Adapter interface every benchmark provider must implement."""
 
-    def ingest(self, document_id: str, content: str, *, scope: str) -> None: ...
+    def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None: ...
     def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse: ...
     def close(self) -> None: ...
 
@@ -64,7 +64,8 @@ class BenchmarkRunner:
         manifest: BenchmarkManifest,
         adapters: Mapping[str, ProviderAdapter],
     ) -> None:
-        missing = [provider.id for provider in manifest.providers if provider.id not in adapters]
+        live_providers = [provider for provider in manifest.providers if not provider.vendor_reported_only]
+        missing = [provider.id for provider in live_providers if provider.id not in adapters]
         if missing:
             raise ValueError(f"missing adapters for providers: {missing}")
         self._manifest = manifest
@@ -73,7 +74,12 @@ class BenchmarkRunner:
 
     def _ingest(self, adapter: ProviderAdapter) -> None:
         for document in self._manifest.corpus.documents:
-            adapter.ingest(document.id, document.content, scope=document.scope)
+            adapter.ingest(
+                document.id,
+                document.content,
+                scope=document.scope,
+                supersedes=document.supersedes,
+            )
 
     @staticmethod
     def _recall_at_k(expected: Iterable[str], returned_ids: list[str], k: int = 10) -> float:
@@ -127,10 +133,9 @@ class BenchmarkRunner:
         mrrs: list[float] = []
         ndcgs: list[float] = []
         temporal_scores: list[float] = []
+        citation_precisions: list[float] = []
         latencies_ms: list[float] = []
         total_cost = 0.0
-        citation_hits = 0
-        citation_total = 0
         returned_total = 0
         stale_total = 0
         leakage_total = 0
@@ -148,10 +153,18 @@ class BenchmarkRunner:
                 latencies_ms.append(elapsed_ms)
                 returned_ids = [str(item.get("document_id", "")) for item in response.items]
                 returned_total += len(returned_ids)
-                citation_total += len(response.items)
-                citation_hits += sum(
-                    1 for item in response.items if str(item.get("citation", "")) in expected_ids
-                )
+                # Rank-aware citation precision: a provider is precise when
+                # the top ``expected_count`` items it returns ARE the
+                # expected evidence. Raw precision over a fixed limit=10
+                # would cap every provider at ~0.1, hiding real differences.
+                expected_count = len(expected_ids)
+                if expected_count == 0:
+                    citation_precisions.append(1.0 if not returned_ids else 0.0)
+                else:
+                    top_expected_window = returned_ids[:expected_count]
+                    citation_precisions.append(
+                        len(set(expected_ids) & set(top_expected_window)) / expected_count
+                    )
                 stale_total += sum(
                     1
                     for document_id in returned_ids
@@ -195,7 +208,7 @@ class BenchmarkRunner:
             recall_at_10=sum(recalls) / len(recalls),
             mrr=sum(mrrs) / len(mrrs),
             ndcg_at_10=sum(ndcgs) / len(ndcgs),
-            citation_precision=citation_hits / citation_total if citation_total else 1.0,
+            citation_precision=sum(citation_precisions) / len(citation_precisions) if citation_precisions else 1.0,
             stale_fact_rate=stale_total / returned_total if returned_total else 0.0,
             temporal_accuracy=sum(temporal_scores) / len(temporal_scores),
             cross_scope_leakage=leakage_total / returned_total if returned_total else 0.0,
@@ -230,7 +243,8 @@ class BenchmarkRunner:
         return failures
 
     def run(self) -> BenchmarkResult:
-        results = {provider.id: self._run_provider(provider.id) for provider in self._manifest.providers}
+        live = [provider for provider in self._manifest.providers if not provider.vendor_reported_only]
+        results = {provider.id: self._run_provider(provider.id) for provider in live}
         failures = self._evaluate_gate(results)
         return BenchmarkResult(
             manifest_id=self._manifest.manifest_id,
