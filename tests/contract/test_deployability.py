@@ -3,7 +3,6 @@ and the config-driven composition root."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient

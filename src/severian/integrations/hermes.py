@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
@@ -103,6 +104,45 @@ def _encode_tool_result(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, default=str, allow_nan=False)
 
 
+def _build_default_service_from_env() -> MemoryService:
+    """Build a service bundle from environment configuration.
+
+    P1-4: enables zero-arg provider construction by the real Hermes
+    loader. ``SEVERIAN_DSN`` selects PostgreSQL; otherwise SQLite
+    storage is used with ``SEVERIAN_STORAGE`` (default: a temp dir).
+    The returned service is owned by the caller (the provider), which
+    must call ``shutdown()`` to release bundle resources.
+    """
+    import os
+    import tempfile
+
+    from severian.composition import build_bundle
+
+    dsn = os.environ.get("SEVERIAN_DSN", "").strip()
+    if dsn:
+        bundle = build_bundle(backend="postgresql", dsn=dsn)
+    else:
+        storage = os.environ.get("SEVERIAN_STORAGE", "").strip()
+        if storage:
+            root = Path(storage)
+        else:
+            root = Path(tempfile.mkdtemp(prefix="severian-provider-"))
+        bundle = build_bundle(
+            backend="sqlite",
+            database=root / "severian.db",
+            fts=root / "severian.fts",
+            vectors=root / "severian.vec",
+        )
+    # Keep the bundle reachable so shutdown() can release it.
+    provider_bundles.append(bundle)
+    return bundle.service
+
+
+# Module-level registry of bundles created for zero-arg providers, so
+# shutdown() can close resources when the provider is torn down.
+provider_bundles: list[Any] = []
+
+
 class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     """Hermes ``MemoryProvider`` backed by Severian's memory engine.
 
@@ -122,11 +162,20 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
 
     def __init__(
         self,
-        service: MemoryService,
+        service: MemoryService | None = None,
         gateway: DerivationGateway | None = None,
         *,
         max_context_chars: int = 8_000,
     ) -> None:
+        # P1-4: the real Hermes loader instantiates providers with a
+        # zero-arg constructor (``attr()``) or via ``register(ctx)``.
+        # When no service is injected, the provider builds its own
+        # bundle from environment configuration (SEVERIAN_DSN for
+        # PostgreSQL, SEVERIAN_STORAGE for SQLite) through the shared
+        # composition root, and owns that bundle's lifecycle.
+        self._owns_service = service is None
+        if service is None:
+            service = _build_default_service_from_env()
         self._service = service
         self._gateway = gateway
         self._scope: Scope | None = None
@@ -176,13 +225,23 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         self._session_id = session_id
 
     def shutdown(self) -> None:
-        """Release provider-local state without closing injected resources.
+        """Release provider-local state.
 
-        This never closes the injected service's repository or index
-        resources; those are owned by the caller.
+        Closes an internally-built service bundle (zero-arg construction
+        path) but never closes an injected service: those resources are
+        owned by the caller.
         """
         self._scope = None
         self._session_id = None
+        if self._owns_service:
+            # Close the bundle that built this service. The registry
+            # maps bundles in construction order; the service identity
+            # disambiguates when several providers share a process.
+            for idx, bundle in enumerate(provider_bundles):
+                if bundle.service is self._service:
+                    bundle.close()
+                    del provider_bundles[idx]
+                    break
 
     def teardown(self) -> None:
         """Compatibility alias for Hermes versions exposing ``teardown``."""
@@ -503,7 +562,25 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         return self._scope
 
 
+def register(ctx: Any) -> None:
+    """Hermes plugin entry point (P1-4).
+
+    The real Hermes memory-provider loader (``load_memory_provider``)
+    looks for a ``register(ctx)`` function in the plugin module and
+    calls it with a context exposing ``register_memory_provider``. This
+    entry constructs a provider with the default environment wiring and
+    hands it to the loader, so ``memory.provider: severian`` in
+    config.yaml activates Severian without any injected service.
+    """
+    provider = SeverianMemoryProvider()
+    register_provider = getattr(ctx, "register_memory_provider", None)
+    if register_provider is None:
+        raise TypeError("register(ctx) requires ctx.register_memory_provider")
+    register_provider(provider)
+
+
 __all__ = [
     "ScopeNotEstablishedError",
     "SeverianMemoryProvider",
+    "register",
 ]

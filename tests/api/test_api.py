@@ -259,3 +259,64 @@ def test_principal_accepts_matching_scope(tmp_path):
     assert response.status_code == 201
     assert response.json()["scope"]["tenant_id"] == "t1"
     assert response.json()["scope"]["profile_id"] == "p1"
+
+
+# -- P1-4: memory detail endpoint -----------------------------------------
+
+def test_memory_endpoint_resolves_derived_memory(client):
+    # P1-4 repro: search returns memory ids; the dashboard detail route
+    # called the OBSERVATION endpoint with a memory id, so derived
+    # memories 404'd. The memories endpoint must resolve any hit.
+    test_client, service, gateway = client
+    ingest = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(), "content": "Severian stores observations", "source": {}},
+    )
+    assert ingest.status_code == 201
+
+    # Drain the derive queue so a derived memory exists (real path).
+    from severian.application.derivation import DerivationService
+    from severian.application.projections import ProjectionCoordinator
+    from severian.application.worker import DerivationWorker
+
+    repo = service._repository
+    worker = DerivationWorker(
+        repo,
+        DerivationService(repo),
+        ProjectionCoordinator(repo, service._projection.lexical, service._projection.vector),
+    )
+    worker.drain(worker_id="api-test", gateway=gateway, max_jobs=10)
+
+    search = test_client.post(
+        "/api/v1/search",
+        json={"scope": _scope_payload(), "query": "Severian", "limit": 5, "derive": False},
+    )
+    assert search.status_code == 200
+    hits = search.json()["hits"]
+    assert hits, "expected at least one derived memory hit"
+    memory_id = hits[0]["memory_id"]
+
+    detail = test_client.get(
+        f"/api/v1/memories/{memory_id}", params=_scope_payload()
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["memory_id"] == memory_id
+    assert body["content"]
+    assert body["kind"] == "fact"
+
+
+def test_memory_endpoint_is_scope_isolated(client):
+    test_client, _service, _gateway = client
+    response = test_client.get(
+        "/api/v1/memories/does-not-exist", params=_scope_payload(profile="p2")
+    )
+    assert response.status_code == 404
+
+
+def test_memory_endpoint_scope_validation_is_422_not_500(client):
+    # P1-4 repro: ScopeModel was built outside the route try in the
+    # observation detail route; a missing scope dimension became 500.
+    test_client, _service, _gateway = client
+    response = test_client.get("/api/v1/memories/abc", params={"profile_id": "p1"})
+    assert response.status_code == 422

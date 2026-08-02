@@ -20,6 +20,7 @@ from severian.api.schemas import (
     HealthResponse,
     IngestRequest,
     IngestResponse,
+    MemoryResponse,
     ObservationResponse,
     ScopeModel,
     SearchHit,
@@ -35,6 +36,7 @@ from severian.domain.models import Scope
 # truth. Versioned under ``/api/v1`` per Phase 3 plan.
 API_PREFIX = "/api/v1"
 OBSERVATIONS_PATH = f"{API_PREFIX}/observations"
+MEMORIES_PATH = f"{API_PREFIX}/memories"
 SEARCH_PATH = f"{API_PREFIX}/search"
 
 
@@ -235,14 +237,17 @@ def create_app(
         session_id: str = "",
         svc: MemoryService = Depends(get_service),
     ) -> ObservationResponse:
-        scope = ScopeModel(
-            tenant_id=tenant_id,
-            profile_id=profile_id,
-            collection_id=collection_id,
-            agent_id=agent_id,
-            session_id=session_id,
-        )
+        # P1-4: ScopeModel construction lives INSIDE the try so pydantic
+        # validation failures surface as 422, not 500. Missing/invalid
+        # scope dimensions are client errors, never server errors.
         try:
+            scope = ScopeModel(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                collection_id=collection_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
             scope_obj = resolve_scope(scope)
         except ForbiddenError as exc:
             raise HTTPException(
@@ -265,6 +270,61 @@ def create_app(
                 detail="observation not found in scope",
             ) from exc
         return _view_to_observation_response(observation)
+
+    @app.get(
+        f"{MEMORIES_PATH}/{{memory_id}}",
+        response_model=MemoryResponse,
+    )
+    def get_memory(
+        memory_id: str = Path(..., min_length=1),
+        tenant_id: str = "",
+        profile_id: str = "",
+        collection_id: str = "",
+        agent_id: str = "",
+        session_id: str = "",
+        svc: MemoryService = Depends(get_service),
+    ) -> MemoryResponse:
+        # P1-4: memory-detail endpoint. Search returns memory ids (both
+        # observation-derived and derived memories); the dashboard needs
+        # to open any hit. Scope construction lives INSIDE the try so
+        # validation failures are 422, not 500.
+        try:
+            scope = ScopeModel(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                collection_id=collection_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+            scope_obj = resolve_scope(scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        try:
+            memory = svc.get_memory(scope_obj, memory_id)
+        except NotFoundError as exc:
+            # Same discipline as observations: a well-formed request for
+            # an id the scope cannot see is 404; the body never
+            # discloses cross-scope existence.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="memory not found in scope",
+            ) from exc
+        return MemoryResponse(
+            memory_id=memory.id,
+            content=memory.content,
+            kind=memory.kind,
+            source_observation_ids=list(memory.source_observation_ids),
+            scope=ScopeModel.from_domain(memory.scope),
+            created_at=str(memory.created_at),
+        )
 
     @app.post(SEARCH_PATH, response_model=SearchResponse)
     def search(
@@ -325,6 +385,7 @@ def create_app(
 __all__ = [
     "API_PREFIX",
     "OBSERVATIONS_PATH",
+    "MEMORIES_PATH",
     "SEARCH_PATH",
     "create_app",
 ]

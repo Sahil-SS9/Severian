@@ -170,6 +170,16 @@ class MemoryService:
         # ``NotFoundError`` from the storage layer.
         return self._repository.get_observation(scope, observation_id)
 
+    def get_memory(self, scope: Scope, memory_id: str) -> Memory:
+        """Resolve a projected memory by id within scope.
+
+        P1-4: search results are memory ids (both observation-derived
+        and derived memories). The API needs a memory-detail endpoint so
+        the dashboard can open any search hit without assuming it is an
+        observation. Cross-scope access raises ``NotFoundError``.
+        """
+        return self._repository.get_memory(scope, memory_id)
+
     def search(
         self,
         scope: Scope,

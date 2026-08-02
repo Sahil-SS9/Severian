@@ -68,6 +68,13 @@ def server(tmp_path: Path):
         context=ContextAssembler(),
     )
     srv = SeverianMCPServer(service=service, gateway=FakeGateway())
+    # P1-4: MCP requires the initialize handshake before tools/list or
+    # tools/call. The fixture performs it so tool tests exercise real
+    # protocol state (a separate test covers the rejection path).
+    srv.handle_message(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    )
+    srv.handle_message(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
     yield srv
     fts.close()
     vector.close()
@@ -103,6 +110,33 @@ def test_ping_returns_empty_result(server):
 
 
 # -- tools/list -----------------------------------------------------------
+
+def test_tools_list_before_initialize_rejected(tmp_path):
+    # P1-4 repro: _initialized was set but never enforced; a client
+    # could call tools/list and tools/call without the handshake.
+    repo = SQLiteRepository(tmp_path / "severian.db")
+    repo.initialize()
+    fts = FTS5Index(tmp_path / "fts.db")
+    vector = LocalVectorIndex(tmp_path / "vectors.db", HashEmbedding(dimension=64))
+    service = BuildMemoryService(
+        repository=repo,
+        ingestion=IngestionService(repo),
+        retrieval=RetrievalService(repo, fts, vector),
+        projection=ProjectionCoordinator(repo, fts, vector),
+        derivation=DerivationService(repo),
+        context=ContextAssembler(),
+    )
+    srv = SeverianMCPServer(service=service, gateway=FakeGateway())
+    response = srv.handle_message(
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    )
+    assert response is not None
+    assert "error" in response
+    assert response["error"]["code"] == -32002  # ERR_SERVER_NOT_INITIALIZED
+    fts.close()
+    vector.close()
+    repo.close()
+
 
 def test_tools_list_advertises_three_tools(server):
     response = server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
@@ -265,6 +299,8 @@ def test_search_derive_without_gateway_returns_error(tmp_path: Path):
         context=ContextAssembler(),
     )
     srv = SeverianMCPServer(service=service, gateway=None)
+    # P1-4: complete the initialize handshake before tools/call.
+    srv.handle_message(json.dumps({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}}))
     call = {
         "jsonrpc": "2.0",
         "id": 13,

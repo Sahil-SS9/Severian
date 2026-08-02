@@ -20,6 +20,16 @@ class ScopeModel(BaseModel):
     agent_id: str
     session_id: str
 
+    @classmethod
+    def from_domain(cls, scope: Any) -> ScopeModel:
+        return cls(
+            tenant_id=scope.tenant_id,
+            profile_id=scope.profile_id,
+            collection_id=scope.collection_id,
+            agent_id=scope.agent_id,
+            session_id=scope.session_id,
+        )
+
     @field_validator(
         "tenant_id", "profile_id", "collection_id", "agent_id", "session_id"
     )
@@ -80,6 +90,17 @@ class SearchHit(BaseModel):
     vector_score: float
     fused_score: float
     scope: ScopeModel
+
+
+class MemoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    content: str
+    kind: str
+    source_observation_ids: list[str]
+    scope: ScopeModel
+    created_at: str
 
 
 class SearchResponse(BaseModel):

@@ -45,6 +45,9 @@ ERR_INVALID_REQUEST = -32600
 ERR_METHOD_NOT_FOUND = -32601
 ERR_INVALID_PARAMS = -32602
 ERR_INTERNAL_ERROR = -32603
+# MCP extension: server not initialized (per MCP spec the handshake
+# must precede any tool call).
+ERR_SERVER_NOT_INITIALIZED = -32002
 
 
 # -- scope validation -----------------------------------------------------
@@ -337,6 +340,10 @@ class SeverianMCPServer:
     ) -> dict[str, Any] | None:
         if method == "initialize":
             response = self._handle_initialize(params, request_id)
+            # MCP spec: the server considers itself initialized once the
+            # client completes the handshake. P1-4: enforce it — tool
+            # calls before initialization are protocol violations.
+            self._initialized = True
             return None if is_notification else response
         if method == "notifications/initialized":
             self._initialized = True
@@ -344,6 +351,14 @@ class SeverianMCPServer:
         if method == "ping":
             response = self._handle_ping(request_id)
             return None if is_notification else response
+        # P1-4: tools/list and tools/call are only valid after the
+        # initialize handshake. Reject early calls instead of silently
+        # serving them (previously _initialized was set but never
+        # enforced).
+        if not self._initialized:
+            raise _ProtocolError(
+                ERR_SERVER_NOT_INITIALIZED, "server not initialized"
+            )
         if method == "tools/list":
             response = self._handle_tools_list(request_id)
             return None if is_notification else response

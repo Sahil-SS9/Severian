@@ -107,11 +107,12 @@ class _HTTPXTransport:
     def request(
         self, method: str, url: str, *, json: Any = None, params: Any = None
     ) -> Any:
-        response = self._client.request(method, url, json=json, params=params)
-        # ``raise_for_status`` is invoked by the SDK; tests can mock
-        # this path by injecting a custom transport.
-        response.raise_for_status()
-        return response
+        # P1-4: do NOT raise_for_status here. The client's ``_request``
+        # maps non-2xx responses to ``SeverianError``; raising in the
+        # transport would surface ``httpx.HTTPStatusError`` instead and
+        # break the SDK error contract for every failure mode (500
+        # included).
+        return self._client.request(method, url, json=json, params=params)
 
     def close(self) -> None:
         self._client.close()
