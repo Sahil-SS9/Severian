@@ -37,7 +37,18 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from severian.domain.errors import ConflictError, NotFoundError
-from severian.domain.models import AuditEvent, Collection, Entity, Event, Job, Memory, Observation, Relation, Scope
+from severian.domain.models import (
+    AuditEvent,
+    Collection,
+    Entity,
+    Event,
+    Job,
+    Memory,
+    Observation,
+    Relation,
+    Scope,
+    source_identity,
+)
 from severian.infrastructure.snapshot import validate_snapshot
 
 T = TypeVar("T")
@@ -309,8 +320,22 @@ class PostgreSQLBackend:
 
     def add_observation(self, observation: Observation) -> Observation:
         digest = hashlib.sha256(observation.content.encode()).hexdigest()
-        candidate = observation.model_copy(update={"content_hash": digest})
-        identity_key = self._identity(digest)
+        # P0-1: preserve immutable raw evidence. Direct constructions that
+        # omit raw fields are backfilled so the stored record always has a
+        # raw_hash; the raw pair is never rewritten on revision.
+        raw = observation.raw_content or observation.content
+        raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
+        candidate = observation.model_copy(
+            update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash}
+        )
+        # Dedupe on stable source identity + content digest, never digest
+        # alone: ``"1"`` from note://A and ``"1"`` from note://B are
+        # distinct evidence and must not collapse (P0-1).
+        identity_parts: tuple[object, ...] = (digest,)
+        source = source_identity(candidate.source)
+        if source:
+            identity_parts = (digest, source)
+        identity_key = self._identity(*identity_parts)
         query = select(records.c.payload).where(
             records.c.record_type == "observation",
             *self._scope_predicates(candidate.scope),

@@ -41,6 +41,7 @@ from severian.domain.models import (
     Memory,
     Observation,
     Relation,
+    source_identity,
 )
 
 SCOPE_DIMENSIONS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
@@ -81,7 +82,11 @@ def _recompute_identity(kind: str, payload: dict[str, Any]) -> str | None:
     if kind_value == "observation":
         if payload.get("revision_of_id"):
             return identity_hash("revision", payload["revision_of_id"], payload["id"])
-        return identity_hash(hashlib.sha256(str(payload["content"]).encode()).hexdigest())
+        digest = hashlib.sha256(str(payload["content"]).encode()).hexdigest()
+        source = source_identity(dict(payload.get("source") or {}))
+        if source:
+            return identity_hash(digest, source)
+        return identity_hash(digest)
     if kind_value == "memory":
         if payload.get("revision_of_id"):
             return None
@@ -150,6 +155,11 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
         expected = hashlib.sha256(parsed.content.encode()).hexdigest()
         if item.get("content_hash") != expected or parsed.content_hash != expected:
             raise ValueError(f"record {index}: payload metadata content hash mismatch")
+        # Raw evidence hash must match the raw content when present.
+        if parsed.raw_content:
+            expected_raw = hashlib.sha256(parsed.raw_content.encode()).hexdigest()
+            if parsed.raw_hash != expected_raw:
+                raise ValueError(f"record {index}: payload metadata raw hash mismatch")
 
     # Identity key recomputation.
     expected_identity = _recompute_identity(kind, payload)

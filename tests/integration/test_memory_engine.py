@@ -9,7 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.domain.models import Scope
+from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -179,3 +179,76 @@ def test_projection_coordinator_tracks_lag_repairs_and_deletes(repo, tmp_path: P
     assert coordinator.status(scope()).in_sync is True
     fts.close()
     vector.close()
+
+
+# -- P0-1: source evidence preservation -----------------------------------
+
+
+def test_ingestion_preserves_raw_evidence_alongside_normalised_content(repo):
+    result = IngestionService(repo).ingest(scope(), "  Hello\r\nWorld  ", {"uri": "note://1"})
+
+    assert result.observation.content == "Hello\nWorld"
+    assert result.observation.raw_content == "  Hello\r\nWorld  "
+    assert result.observation.raw_hash
+    stored = repo.list_observations(scope())[0]
+    assert stored.raw_content == "  Hello\r\nWorld  "
+    assert stored.raw_hash == result.observation.raw_hash
+
+
+def test_ingestion_keeps_distinct_sources_separate_when_normalised_collides(repo):
+    # P0-1 repro: ``①`` from note://A and ``1`` from note://B normalise to
+    # the same content but are DIFFERENT evidence. They must not collapse
+    # into one record.
+    first = IngestionService(repo).ingest(scope(), "①", {"uri": "note://A"})
+    second = IngestionService(repo).ingest(scope(), "1", {"uri": "note://B"})
+
+    assert first.observation.id != second.observation.id
+    assert first.observation.content == second.observation.content == "1"
+    records = repo.list_observations(scope())
+    assert len(records) == 2
+    assert {record.raw_content for record in records} == {"①", "1"}
+
+
+def test_ingestion_same_source_same_raw_evidence_dedupes(repo):
+    first = IngestionService(repo).ingest(scope(), "same", {"uri": "note://A"})
+    second = IngestionService(repo).ingest(scope(), "same", {"uri": "note://A"})
+
+    assert first.observation.id == second.observation.id
+    assert len(repo.list_observations(scope())) == 1
+
+
+# -- P0-2: cloud policy is deny-dominant and provenance is trusted ---------
+
+
+def test_cloud_derivation_cannot_be_enabled_by_caller_policy(repo):
+    # P0-2 repro: stored policy denies cloud; caller passing
+    # ``cloud_allowed: True`` must NOT flip the decision.
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+    repo.create_collection(Collection(id="c", tenant_id="t", name="Primary", policy={"cloud_allowed": False}))
+    cloud = FakeGateway(model_id="cloud/model", is_cloud=True)
+
+    with pytest.raises(CloudPolicyError):
+        DerivationService(repo).derive_observation(
+            scope(), observation.id, cloud, policy={"cloud_allowed": True}
+        )
+
+
+def test_derivation_provenance_comes_from_gateway_not_candidate(repo):
+    # P0-2 repro: a model-produced candidate must not forge model_id /
+    # prompt_version. Provenance is taken from the trusted gateway.
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+
+    class ForgingGateway:
+        model_id = "trusted/model"
+        prompt_version = "trusted-prompt"
+        is_cloud = False
+
+        def derive(self, content: str, *, policy: dict[str, object]):
+            return [{"kind": "fact", "content": "derived", "model_id": "forged/model", "prompt_version": "forged"}]
+
+    memories = DerivationService(repo).derive_observation(
+        scope(), observation.id, ForgingGateway(), policy={}
+    )
+    assert len(memories) == 1
+    assert memories[0].model_id == "trusted/model"
+    assert memories[0].prompt_version == "trusted-prompt"

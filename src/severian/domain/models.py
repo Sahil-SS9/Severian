@@ -11,6 +11,28 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+# Source-identity keys probed (in order) when building the idempotency
+# identity for an observation. The identity must be STABLE across
+# re-ingests of the same evidence, and DIFFERENT for evidence from
+# different sources even when the normalised content collides (P0-1).
+_SOURCE_IDENTITY_KEYS = ("uri", "source_id", "idempotency_key")
+
+
+def source_identity(source: dict[str, Any]) -> str:
+    """Stable identity of an evidence source.
+
+    Returns the first non-empty value among the source-identity keys,
+    or ``""`` when the source carries no identity. The empty string is
+    treated as "no source identity" so legacy ingests (no source) keep
+    deduping on content alone.
+    """
+    for key in _SOURCE_IDENTITY_KEYS:
+        value = source.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 class Scope(BaseModel, frozen=True):
     tenant_id: str
     profile_id: str
@@ -37,8 +59,14 @@ class Collection(BaseModel):
 class Observation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
+    # ``content`` is the DERIVED, normalised form used for search and
+    # derivation. ``raw_content`` preserves the immutable evidence as it
+    # was received; ``raw_hash`` is the SHA-256 of the raw bytes. The
+    # raw pair is never rewritten by ingestion or revision.
     content: str
     content_hash: str = ""
+    raw_content: str = ""
+    raw_hash: str = ""
     source: dict[str, Any] = Field(default_factory=dict)
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
