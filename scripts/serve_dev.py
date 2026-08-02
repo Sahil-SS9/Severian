@@ -16,35 +16,19 @@ import argparse
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from severian.api.app import create_app
-from severian.application.service import (
-    BuildMemoryService,
-    ContextAssembler,
-    DerivationService,
-    IngestionService,
-    ProjectionCoordinator,
-    RetrievalService,
-)
-from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import SQLiteRepository
-from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
-
-
-class _HashingGateway:
-    model_id = "local/dev-hasher"
-    prompt_version = "dev-v1"
-    is_cloud = False
-
-    def derive(self, content: str, *, policy: dict[str, object]) -> list[dict[str, object]]:
-        return [{"kind": "fact", "content": content.strip(), "confidence": 0.5}]
+from severian.application.derivation import DerivationService
+from severian.application.projections import ProjectionCoordinator
+from severian.composition import build_bundle
 
 
 def _start_worker(
-    repository: SQLiteRepository,
-    lexical: FTS5Index,
-    vector: LocalVectorIndex,
-    gateway: _HashingGateway,
+    repository: Any,
+    lexical: Any,
+    vector: Any,
+    gateway: Any,
     interval: float = 0.2,
 ) -> threading.Thread:
     """Drain pending derive jobs in a background loop.
@@ -80,6 +64,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--storage", default="/tmp/severian-dev/severian.db")
+    parser.add_argument("--backend", default="sqlite", choices=["sqlite", "postgresql"])
+    parser.add_argument("--dsn", default=None, help="PostgreSQL DSN (backend=postgresql)")
     args = parser.parse_args()
 
     root = Path(args.storage).resolve().parent
@@ -88,27 +74,28 @@ def main() -> None:
     lexical = root / "severian.fts"
     vectors = root / "severian.vec"
 
-    repository = SQLiteRepository(database)
-    repository.initialize()
-    lexical_idx = FTS5Index(lexical)
-    vector_idx = LocalVectorIndex(vectors, HashEmbedding(dimension=256))
-    service = BuildMemoryService(
-        repository=repository,
-        ingestion=IngestionService(repository),
-        retrieval=RetrievalService(repository, lexical_idx, vector_idx),
-        projection=ProjectionCoordinator(repository, lexical_idx, vector_idx),
-        derivation=DerivationService(repository),
-        context=ContextAssembler(),
+    bundle = build_bundle(
+        backend=args.backend,
+        database=database,
+        fts=lexical,
+        vectors=vectors,
+        dsn=args.dsn,
     )
-    gateway = _HashingGateway()
+    repository = bundle.repository
+    lexical_idx = bundle.lexical
+    vector_idx = bundle.vector
+    gateway = bundle.gateway
 
     _start_worker(repository, lexical_idx, vector_idx, gateway)
 
-    app = create_app(service=service, gateway=gateway)
+    app = create_app(service=bundle.service, gateway=gateway)
 
     import uvicorn
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        bundle.close()
 
 
 if __name__ == "__main__":

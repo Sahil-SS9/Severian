@@ -228,10 +228,10 @@ class MemoryService:
     def health(self) -> HealthReport:
         components: dict[str, str] = {}
         # Repository health: cheap SQL probe if the concrete repository
-        # exposes ``engine`` (SQLiteRepository does). Adapters must not
-        # assume this attribute, so we tolerate absence and treat the
-        # repository as healthy in that case (a no-op repository used in
-        # tests).
+        # exposes ``engine`` (SQLiteRepository and PostgreSQLBackend
+        # both do). Adapters must not assume this attribute, so we
+        # tolerate absence and treat the repository as healthy in that
+        # case (a no-op repository used in tests).
         engine = getattr(self._repository, "engine", None)
         if engine is not None:
             try:
@@ -242,26 +242,12 @@ class MemoryService:
                 components["repository"] = "error"
         else:
             components["repository"] = "ok"
-        if self._lexical is not None:
-            try:
-                self._lexical.connection.execute("SELECT 1")
-                components["lexical"] = "ok"
-            except Exception:  # pragma: no cover - defensive
-                components["lexical"] = "error"
-        else:
-            components["lexical"] = "ok"
-        # Vector index is the second projection wired into the
-        # coordinator; exercise its ``count`` method with a non-empty
-        # probe scope that should always return >=0.
-        vector_index = getattr(self._projection, "vector", None)
-        if vector_index is not None:
-            try:
-                vector_index.connection.execute("SELECT 1")
-                components["vector"] = "ok"
-            except Exception:  # pragma: no cover - defensive
-                components["vector"] = "error"
-        else:
-            components["vector"] = "ok"
+        # Projection health is adapter-neutral: each index probes its own
+        # surface (``connection`` for SQLite, ``engine`` for PostgreSQL),
+        # so a healthy PG/pgvector index reports ok (P1-2).
+        projection_components = self._projection.health()
+        components["lexical"] = projection_components.get("lexical", "ok")
+        components["vector"] = projection_components.get("vector", "ok")
         return HealthReport(ready=all(v == "ok" for v in components.values()), components=components)
 
 

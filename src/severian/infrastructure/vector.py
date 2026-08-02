@@ -129,3 +129,30 @@ class LocalVectorIndex:
         self.clear(scope)
         for memory in repository.list_memories(scope):
             self.upsert(memory)
+
+    def digest(self, scope: Scope) -> str:
+        """Stable digest over (memory_id, content) pairs in scope."""
+        import hashlib
+
+        rows = self.connection.execute(
+            """SELECT memory_id, content FROM memory_vectors
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?
+               ORDER BY memory_id""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        digest = hashlib.sha256()
+        for memory_id, content in rows:
+            digest.update(memory_id.encode())
+            digest.update(b"\x00")
+            digest.update(content.encode())
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def health(self) -> str:
+        """Adapter-neutral probe: returns ``ok`` or ``error``."""
+        try:
+            self.connection.execute("SELECT 1")
+            return "ok"
+        except Exception:  # pragma: no cover - defensive
+            return "error"

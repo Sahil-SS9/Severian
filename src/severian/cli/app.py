@@ -19,30 +19,9 @@ from typing import Any
 
 import typer
 
-from severian.application.derivation import DerivationService
-from severian.application.ingestion import IngestionService
-from severian.application.projections import ProjectionCoordinator
-from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.application.service import BuildMemoryService, MemoryService
+from severian.composition import ServiceBundle, build_bundle
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import SQLiteRepository
-from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
-
-
-@dataclass
-class ServiceBundle:
-    service: MemoryService
-    repository: SQLiteRepository
-    lexical: FTS5Index
-    vector: LocalVectorIndex
-    gateway: Any
-
-    def close(self) -> None:
-        self.vector.close()
-        self.lexical.close()
-        self.repository.close()
 
 
 def build_default_service(
@@ -53,25 +32,16 @@ def build_default_service(
 ) -> ServiceBundle:
     """Compose the default on-disk wiring for the CLI.
 
-    This is the only place where the CLI may build a service. The
-    service itself is the canonical write/read path; the CLI only
-    marshals flags into service calls.
+    P1-3: delegates to the shared composition root so CLI, dev launcher,
+    MCP server, and API all wire through one path. The service itself is
+    the canonical write/read path; the CLI only marshals flags into
+    service calls.
     """
-    repository = SQLiteRepository(database)
-    repository.initialize()
-    lexical = FTS5Index(fts)
-    vector = LocalVectorIndex(vectors, HashEmbedding(dimension=256))
-    service = BuildMemoryService(
-        repository=repository,
-        ingestion=IngestionService(repository),
-        retrieval=RetrievalService(repository, lexical, vector),
-        projection=ProjectionCoordinator(repository, lexical, vector),
-        derivation=DerivationService(repository),
-        context=ContextAssembler(),
-    )
-    gateway = _HashingGateway()
-    return ServiceBundle(
-        service=service, repository=repository, lexical=lexical, vector=vector, gateway=gateway
+    return build_bundle(
+        backend="sqlite",
+        database=database,
+        fts=fts,
+        vectors=vectors,
     )
 
 

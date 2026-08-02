@@ -58,7 +58,10 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path):
         if not PG_DSN:
             pytest.skip("SEVERIAN_PG_DSN not set; skipping live PostgreSQL conformance")
         repo = PostgreSQLBackend(dsn=PG_DSN)
-        repo.reset()  # isolated shared server between tests
+        # Explicit acknowledgement: the shared local test server is the
+        # only thing this fixture may wipe (P1-3).
+        os.environ.setdefault("SEVERIAN_PG_ALLOW_RESET", "1")
+        repo.reset(acknowledge=True)  # isolated shared server between tests
     else:
         repo = SQLiteRepository(tmp_path / "severian.db")
     repo.initialize()

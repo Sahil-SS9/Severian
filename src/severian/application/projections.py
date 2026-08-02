@@ -19,6 +19,8 @@ class VectorProjection(Protocol):
     def clear(self, scope: Scope | None = None) -> None: ...
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]: ...
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None: ...
+    def digest(self, scope: Scope) -> str: ...
+    def health(self) -> str: ...
     def close(self) -> None: ...
 
 
@@ -27,10 +29,24 @@ class ProjectionStatus:
     canonical_memories: int
     lexical_entries: int
     vector_entries: int
+    canonical_digest: str = ""
+    lexical_digest: str = ""
+    vector_digest: str = ""
 
     @property
     def in_sync(self) -> bool:
-        return self.canonical_memories == self.lexical_entries == self.vector_entries
+        """P1-2: digest-based sync — counts can match while content
+        differs (e.g. a stale row for a superseded memory). Compare
+        stable digests over (memory_id, content) pairs so a rebuild
+        that leaves stale content is reported out of sync.
+        """
+        if not (self.canonical_digest or self.lexical_digest or self.vector_digest):
+            # No digest support (legacy/no-op indexes): fall back to counts.
+            return self.canonical_memories == self.lexical_entries == self.vector_entries
+        return (
+            self.canonical_digest == self.lexical_digest == self.vector_digest
+            and self.canonical_memories == self.lexical_entries == self.vector_entries
+        )
 
 
 class ProjectionCoordinator:
@@ -52,9 +68,52 @@ class ProjectionCoordinator:
         self.vector.rebuild(self.repository, scope)
 
     def status(self, scope: Scope) -> ProjectionStatus:
-        canonical = len(self.repository.list_memories(scope))
+        canonical = self.repository.list_memories(scope)
+        canonical_digest = _content_digest(canonical)
+        lexical_digest = self.lexical.digest(scope)
+        vector_digest = self.vector.digest(scope)
         return ProjectionStatus(
-            canonical_memories=canonical,
+            canonical_memories=len(canonical),
             lexical_entries=self.lexical.count(scope),
             vector_entries=self.vector.count(scope),
+            canonical_digest=canonical_digest,
+            lexical_digest=lexical_digest,
+            vector_digest=vector_digest,
         )
+
+    def health(self) -> dict[str, str]:
+        """Adapter-neutral readiness probes (P1-2).
+
+        Uses each index's own ``health()`` so SQLite (``connection``)
+        and PostgreSQL (``engine``) surfaces both report correctly;
+        the service never reaches into index internals.
+        """
+        components: dict[str, str] = {}
+        try:
+            components["lexical"] = self.lexical.health()
+        except Exception:  # pragma: no cover - defensive
+            components["lexical"] = "error"
+        try:
+            components["vector"] = self.vector.health()
+        except Exception:  # pragma: no cover - defensive
+            components["vector"] = "error"
+        return components
+
+
+def _content_digest(memories: list[Memory]) -> str:
+    """Stable digest over sorted (memory_id, content) pairs.
+
+    Content-equivalent sets (even with different orderings) produce the
+    same digest; a stale row with different content produces a
+    different digest, catching false-sync that pure counts miss.
+    """
+    pairs = sorted((memory.id, memory.content) for memory in memories)
+    import hashlib
+
+    digest = hashlib.sha256()
+    for memory_id, content in pairs:
+        digest.update(memory_id.encode())
+        digest.update(b"\x00")
+        digest.update(content.encode())
+        digest.update(b"\x00")
+    return digest.hexdigest()

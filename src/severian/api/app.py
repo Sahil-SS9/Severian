@@ -159,12 +159,26 @@ def create_app(
 
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
+        # Liveness: always 200 while the process serves requests.
         return HealthResponse(ready=True, components={})
 
     @app.get("/readyz", response_model=HealthResponse)
     def readyz(svc: MemoryService = Depends(get_service)) -> HealthResponse:
+        # Readiness: dependency gate. P1-2: a service whose
+        # dependencies are down must NOT report ready — callers (load
+        # balancers, orchestrators) get 503 so traffic is routed away.
         report = svc.health()
-        return HealthResponse(ready=report.ready, components=report.components)
+        response = HealthResponse(ready=report.ready, components=report.components)
+        if not report.ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "ready": False,
+                    "components": report.components,
+                    "type": "not_ready",
+                },
+            )
+        return response
 
     @app.post(
         OBSERVATIONS_PATH,
@@ -289,9 +303,17 @@ def create_app(
     async def safe_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
+        # HTTPException (404/403/422/503) must pass through with its
+        # intended status; only unexpected exceptions become 500.
         # Defence-in-depth: never leak stack traces or canonical
         # payloads. QA gate SEC-03 requires no sensitive content in
         # error responses.
+        if isinstance(exc, HTTPException):
+            detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else "error"
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": detail, "type": "http_error"},
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "internal error", "type": "server_error"},

@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, or_, select, update
+from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, inspect, or_, select, update
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
@@ -59,6 +61,11 @@ def _iso(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(UTC).isoformat()
+
+
+def _migrations_dir() -> Path:
+    """Locate the Alembic migration tree relative to the package root."""
+    return Path(__file__).resolve().parent.parent.parent.parent / "migrations"
 
 
 metadata = MetaData()
@@ -129,14 +136,71 @@ class PostgreSQLBackend:
                 "CREATE INDEX IF NOT EXISTS ix_records_status ON records (status)"
             )
 
-    def reset(self) -> None:
+    def verify_schema(self) -> None:
+        """Fail startup on schema mismatch (P1-3).
+
+        Compares the migrated schema version (alembic_version) against
+        the head of the versioned migration tree. A database that has
+        never been migrated (no alembic_version row) is treated as a
+        fresh install managed by ``create_all`` and passes; a database
+        whose version lags the head is refused so a deploy can never
+        silently run against a stale schema.
+        """
+        from alembic import command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        config = Config()
+        config.set_main_option("script_location", str(_migrations_dir()))
+        config.set_main_option("sqlalchemy.url", self.dsn)
+        script = ScriptDirectory.from_config(config)
+        head = script.get_current_head()
+        if head is None:
+            raise RuntimeError("no migration head found; broken migrations tree")
+
+        with self.engine.connect() as connection:
+            has_version_table = inspect(connection).has_table("alembic_version")
+            version = None
+            if has_version_table:
+                version = connection.execute(
+                    sa_text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+
+        if version is None:
+            # Fresh install (or pre-migration database): initialize()
+            # creates the schema and stamps the head so future deploys
+            # see the migrated state.
+            command.stamp(config, head)
+            return
+        if version != head:
+            raise RuntimeError(
+                f"PostgreSQL schema version {version!r} does not match migration head {head!r}; "
+                "run `alembic upgrade head` before starting"
+            )
+
+    def reset(self, *, acknowledge: bool = False) -> None:
         """Drop and recreate the schema (test/scratch use only).
 
-        A destructive, non-portable helper for isolated conformance
-        runs against a shared server. Production callers should use
-        separate databases per environment instead.
+        P1-3: destructive by design. Requires explicit acknowledgement
+        AND a test-owned database (name contains ``test`` or the
+        ``SEVERIAN_PG_ALLOW_RESET`` env var is set) so a production DSN
+        can never be silently wiped. Also drops pgvector projection
+        metadata (``memory_vectors``), which the earlier reset did not
+        clear.
         """
+        if not acknowledge:
+            raise ValueError("reset() requires acknowledge=True (destructive)")
+        from severian.infrastructure.pgvector_index import memory_vectors
+
+        db_name = self.dsn.rsplit("/", 1)[-1].split("?", 1)[0].strip()
+        allow = db_name.lower().count("test") > 0 or os.environ.get("SEVERIAN_PG_ALLOW_RESET") == "1"
+        if not allow:
+            raise ValueError(
+                "reset() refused: database is not test-owned "
+                f"(name={db_name!r}); set SEVERIAN_PG_ALLOW_RESET=1 to override"
+            )
         with self.engine.begin() as connection:
+            memory_vectors.drop(connection, checkfirst=True)
             metadata.drop_all(connection)
         self.initialize()
 

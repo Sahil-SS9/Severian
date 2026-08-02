@@ -47,7 +47,8 @@ class FakeGateway:
 @pytest.fixture
 def backend() -> Any:
     repo = PostgreSQLBackend(dsn=PG_DSN)
-    repo.reset()
+    os.environ.setdefault("SEVERIAN_PG_ALLOW_RESET", "1")
+    repo.reset(acknowledge=True)
     return repo
 
 
@@ -67,7 +68,7 @@ def test_full_postgres_stack_ingest_derive_retrieve(tmp_path) -> None:
     """Canonical Postgres + pgvector + worker: observations promote to
     memories and retrieval finds them via the vector projection."""
     repo = PostgreSQLBackend(dsn=PG_DSN)
-    repo.reset()
+    repo.reset(acknowledge=True)
     repo.initialize()
 
     vector_index = PGVectorIndex(dsn=PG_DSN)
@@ -119,7 +120,7 @@ def test_full_postgres_stack_ingest_derive_retrieve(tmp_path) -> None:
 def test_retrieval_service_uses_pgvector_index(tmp_path) -> None:
     """RetrievalService works end-to-end against the Postgres stack."""
     repo = PostgreSQLBackend(dsn=PG_DSN)
-    repo.reset()
+    repo.reset(acknowledge=True)
     repo.initialize()
     vector_index = PGVectorIndex(dsn=PG_DSN)
     vector_index.initialize()
@@ -155,7 +156,7 @@ def test_retrieval_service_uses_pgvector_index(tmp_path) -> None:
 
 def test_pgvector_scope_isolation_and_idempotent_upsert() -> None:
     repo = PostgreSQLBackend(dsn=PG_DSN)
-    repo.reset()
+    repo.reset(acknowledge=True)
     repo.initialize()
     vector_index = PGVectorIndex(dsn=PG_DSN)
     vector_index.initialize()
