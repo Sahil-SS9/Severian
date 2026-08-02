@@ -25,12 +25,13 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 severian = "severian.cli.app:main"
+severian-serve = "severian.cli.app:serve"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/severian"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/application", "tests/api", "tests/sdk", "tests/cli", "tests/benchmarks", "tests/mcp", "tests/integrations"]
+testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/application", "tests/api", "tests/sdk", "tests/cli", "tests/benchmarks", "tests/mcp", "tests/integrations", "tests/gates"]
 
 [tool.ruff]
 line-length = 120

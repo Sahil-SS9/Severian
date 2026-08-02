@@ -85,6 +85,18 @@ class SQLiteRepository:
             connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             connection.exec_driver_sql("PRAGMA busy_timeout=30000")
+        # P2: dev store files were world-readable (default umask 0644).
+        # Memory content is sensitive; restrict the canonical store and
+        # its WAL/SHM siblings to the owning user.
+        try:
+            os.chmod(self.path, 0o600)
+        except FileNotFoundError:
+            pass  # some in-memory/fresh cases create no file yet
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.chmod(str(self.path) + suffix, 0o600)
+            except FileNotFoundError:
+                pass
 
     def close(self) -> None:
         self.engine.dispose()

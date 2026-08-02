@@ -13,6 +13,8 @@ or index directly: every command funnels through
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,14 +31,24 @@ def build_default_service(
     database: Path,
     fts: Path,
     vectors: Path,
+    dsn: str | None = None,
 ) -> ServiceBundle:
     """Compose the default on-disk wiring for the CLI.
 
     P1-3: delegates to the shared composition root so CLI, dev launcher,
     MCP server, and API all wire through one path. The service itself is
     the canonical write/read path; the CLI only marshals flags into
-    service calls.
+    service calls. ``dsn`` switches to the PostgreSQL backend; the
+    SQLite paths are still required for the lexical/vector indexes.
     """
+    if dsn:
+        return build_bundle(
+            backend="postgresql",
+            dsn=dsn,
+            database=database,
+            fts=fts,
+            vectors=vectors,
+        )
     return build_bundle(
         backend="sqlite",
         database=database,
@@ -254,9 +266,16 @@ def export(
     try:
         payload = bundle.repository.export_json()
         output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_suffix(output.suffix + ".tmp")
+        # P2: refuse to write through a symlink (a symlink destination
+        # would let an attacker redirect the snapshot to an arbitrary
+        # file). Also use an unpredictable temp name in the same
+        # directory so the rename is atomic and no other process can
+        # race the temporary file.
+        if output.is_symlink():
+            raise RuntimeError(f"refusing to export through symlink: {output}")
+        temporary = output.parent / f".{output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         temporary.write_text(payload, encoding="utf-8")
-        temporary.replace(output)
+        os.replace(temporary, output)
         _emit({"format": "severian-v1", "output": str(output), "bytes": len(payload.encode("utf-8"))})
     finally:
         bundle.close()
@@ -330,6 +349,28 @@ def import_(
         )
     except ValueError as exc:
         raise typer.BadParameter(f"cannot import snapshot: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+@cli.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    dsn: str | None = typer.Option(None, "--dsn", help="PostgreSQL DSN (uses PG backend when set)."),
+) -> None:
+    """Serve the versioned HTTP API (P2: wheel console entry)."""
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        from severian.api.app import create_app
+
+        app = create_app(service=bundle.service, gateway=lambda: bundle.gateway)
+        import uvicorn
+
+        uvicorn.run(app, host=host, port=port)
     finally:
         bundle.close()
 

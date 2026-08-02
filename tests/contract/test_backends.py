@@ -344,3 +344,20 @@ def test_projection_index_protocol_exists() -> None:
             pass
 
     assert isinstance(_FakeIndex(), ProjectionIndex)
+
+
+def test_sqlite_store_permissions_are_user_private(tmp_path: Path):
+    """P2: memory store files must not be world-readable (0644 default)."""
+    import os
+    import stat
+
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    db = tmp_path / "private.db"
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    repo.close()
+
+    mode = stat.S_IMODE(os.stat(db).st_mode)
+    assert mode & 0o077 == 0  # no group/other bits
+    assert mode == 0o600

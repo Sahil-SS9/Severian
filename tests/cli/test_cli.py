@@ -234,3 +234,26 @@ def test_import_rejects_tampered_snapshot(data_root: Path):
         or "valueerror" in result.output.lower()
         or "cannot import" in result.output.lower()
     )
+
+
+def test_export_refuses_symlink_destination(data_root: Path):
+    """P2: export must not write through a symlink (victim-file overwrite)."""
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    victim = data_root / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    link = data_root / "snapshot.json"
+    link.symlink_to(victim)
+
+    result = runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(link)]
+    )
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert "symlink" in str(result.exception).lower()
+    assert victim.read_text(encoding="utf-8") == "keep me"  # victim untouched
+    # No stray temp files left behind.
+    leftovers = [p.name for p in data_root.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
