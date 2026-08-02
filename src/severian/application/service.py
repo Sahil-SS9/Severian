@@ -22,7 +22,7 @@ from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.domain.errors import NotFoundError
-from severian.domain.models import Observation, Scope
+from severian.domain.models import Memory, Observation, Scope
 from severian.infrastructure.fts import FTS5Index
 
 
@@ -113,6 +113,54 @@ class MemoryService:
     ) -> ObservationView:
         result = self._ingestion.ingest(scope, content, dict(source or {}))
         return ObservationView.from_result(result)
+
+    def correct_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        content: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> Memory:
+        """Correct a derived memory: revise, tombstone the old head from
+        projections, and index the new revision (P0-5).
+
+        The repository records the revision chain; the projection is
+        updated so the stale fact never resurfaces in search.
+        """
+        revision = self._repository.revise_memory(
+            scope,
+            memory_id,
+            content=content,
+            model_id=model_id,
+            prompt_version=prompt_version,
+        )
+        # Tombstone the old projection head; index the replacement.
+        self._projection.remove_memory(memory_id)
+        self._projection.index_memory(revision)
+        return revision
+
+    def revise_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        content: str,
+    ) -> Observation:
+        """Revise a source observation and propagate the correction (P0-5).
+
+        Memories derived from the OLD head are superseded (dropped from
+        default reads and projections); the revised head is re-derived
+        through the same canonical pipeline on the next derive pass.
+        """
+        revision = self._repository.revise_observation(scope, observation_id, content)
+        superseded = self._repository.supersede_memories_for_source(scope, observation_id)
+        if superseded:
+            # The worker's per-scope rebuild will drop the tombstones;
+            # the revise path also converges now so search cannot return
+            # a stale fact before the next drain.
+            self._projection.rebuild(scope)
+        return revision
 
     # -- reads ----------------------------------------------------------
 

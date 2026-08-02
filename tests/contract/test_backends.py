@@ -127,6 +127,13 @@ class _FakeRepository:
         return found
 
     def list_memories(self, scope: Scope) -> list[Memory]:
+        return [
+            m
+            for (rid, *s), m in self._memories.items()
+            if tuple(s) == tuple(scope.model_dump().values()) and m.superseded_by_id is None
+        ]
+
+    def list_memories_history(self, scope: Scope) -> list[Memory]:
         return [m for (rid, *s), m in self._memories.items() if tuple(s) == tuple(scope.model_dump().values())]
 
     def revise_memory(
@@ -191,6 +198,22 @@ class _FakeRepository:
 
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
         return [self.add_memory(memory) for memory in memories]
+
+    def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
+        memory = self.get_memory(scope, memory_id)
+        return [memory]
+
+    def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
+        superseded = 0
+        for key in list(self._memories):
+            rid, *s = key
+            if tuple(s) != tuple(scope.model_dump().values()):
+                continue
+            memory = self._memories[key]
+            if memory.superseded_by_id is None and observation_id in memory.source_observation_ids:
+                self._memories[key] = memory.model_copy(update={"superseded_by_id": f"source-rev:{observation_id}"})
+                superseded += 1
+        return superseded
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)

@@ -9,7 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.domain.models import Collection, Scope
+from severian.domain.models import Collection, Memory, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -257,3 +257,84 @@ def test_derivation_provenance_comes_from_gateway_not_candidate(repo):
     assert len(memories) == 1
     assert memories[0].model_id == "trusted/model"
     assert memories[0].prompt_version == "trusted-prompt"
+
+
+# -- P0-5: active-head reads; superseded facts never resurface -----------
+
+
+def test_list_memories_excludes_superseded_revisions(repo):
+    # P0-5 repro: list_memories used to return every record_type memory
+    # including superseded heads — stale facts resurfaced by default.
+    observation = IngestionService(repo).ingest(scope(), "source", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="old fact",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    revision = repo.revise_memory(
+        scope(), original.id, content="new fact", model_id="local/model", prompt_version="v2"
+    )
+
+    active = repo.list_memories(scope())
+    history = repo.list_memories_history(scope())
+
+    assert [m.id for m in active] == [revision.id]
+    assert {m.id for m in history} == {original.id, revision.id}
+    assert repo.get_memory(scope(), original.id).superseded_by_id == revision.id
+
+
+def test_list_memory_revisions_returns_full_chain(repo):
+    observation = IngestionService(repo).ingest(scope(), "source", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="v1",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="p1",
+            confidence=0.8,
+        )
+    )
+    v2 = repo.revise_memory(
+        scope(), original.id, content="v2", model_id="local/model", prompt_version="p2"
+    )
+    v3 = repo.revise_memory(scope(), v2.id, content="v3", model_id="local/model", prompt_version="p3")
+
+    # Naming the middle revision still yields the whole lineage.
+    chain = repo.list_memory_revisions(scope(), v2.id)
+    assert [m.id for m in chain] == [original.id, v2.id, v3.id]
+    assert [m.content for m in chain] == ["v1", "v2", "v3"]
+
+
+def test_source_revision_supersedes_derived_memories(repo):
+    # P0-5 repro: revising the source observation left memories derived
+    # from the OLD head active — zero-stale-facts violated.
+    observation = IngestionService(repo).ingest(scope(), "original claim", {}).observation
+    repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="stale derived fact",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+
+    revision = repo.revise_observation(scope(), observation.id, "corrected claim")
+    superseded = repo.supersede_memories_for_source(scope(), observation.id)
+
+    assert revision.content == "corrected claim"
+    assert superseded == 1
+    # Default reads are active-head only; the stale fact is gone.
+    assert repo.list_memories(scope()) == []
+    # Explicit history preserves the stale head.
+    assert len(repo.list_memories_history(scope())) == 1

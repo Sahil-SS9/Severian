@@ -619,6 +619,22 @@ class PostgreSQLBackend:
         return self._get("memory", memory_id, Memory, scope=scope)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
+        """List ACTIVE memories only — superseded revisions are excluded (P0-5)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                records.c.payload["superseded_by_id"].astext.is_(None),
+            )
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def list_memories_history(self, scope: Scope) -> list[Memory]:
+        """List ALL memories in scope, including superseded revisions."""
         self._require_scope(scope)
         query = (
             select(records.c.payload)
@@ -627,6 +643,63 @@ class PostgreSQLBackend:
         )
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
+        """Return the revision chain for a memory (oldest first)."""
+        self._require_scope(scope)
+        chain: dict[str, Memory] = {}
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(records.c.payload).where(
+                    records.c.record_type == "memory", *self._scope_predicates(scope)
+                )
+            ).scalars()
+            for value in rows:
+                memory = Memory.model_validate(value)
+                chain[memory.id] = memory
+        if memory_id not in chain:
+            raise NotFoundError("memory not found")
+        ordered: list[Memory] = []
+        current = chain[memory_id]
+        while current.revision_of_id is not None and current.revision_of_id in chain:
+            current = chain[current.revision_of_id]
+        seen: set[str] = set()
+        while current.id not in seen and current.id in chain:
+            seen.add(current.id)
+            ordered.append(current)
+            if current.superseded_by_id is not None and current.superseded_by_id in chain:
+                current = chain[current.superseded_by_id]
+            else:
+                break
+        return ordered
+
+    def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
+        """Mark active memories derived from an observation as superseded (P0-5)."""
+        self._require_scope(scope)
+        superseded = 0
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                select(records.c.id, records.c.payload).where(
+                    records.c.record_type == "memory",
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                )
+            ).mappings().all()
+            for row in rows:
+                memory = Memory.model_validate(row["payload"])
+                if observation_id not in memory.source_observation_ids:
+                    continue
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == row["id"])
+                    .values(
+                        payload=memory.model_copy(
+                            update={"superseded_by_id": f"source-rev:{observation_id}"}
+                        ).model_dump(mode="json")
+                    )
+                )
+                superseded += 1
+        return superseded
 
     def revise_memory(
         self,
