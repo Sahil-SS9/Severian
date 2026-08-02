@@ -232,6 +232,7 @@ class SQLiteRepository:
         return Collection.model_validate(row)
 
     def add_observation(self, observation: Observation) -> Observation:
+        self._require_scope(observation.scope)
         digest = hashlib.sha256(observation.content.encode()).hexdigest()
         # P0-1: preserve immutable raw evidence. Direct constructions that
         # omit raw fields are backfilled so the stored record always has a

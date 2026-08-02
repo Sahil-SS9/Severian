@@ -19,7 +19,7 @@ from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService
-from severian.domain.models import Collection
+from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -186,3 +186,76 @@ def test_search_rejects_missing_query(client):
         json={"scope": _scope_payload(), "limit": 5},
     )
     assert response.status_code == 422
+
+
+# -- P0-6: scope is authorization, not a client-supplied selector ---------
+
+
+def _principal_client(tmp_path: Path):
+    """Build a client with a bound principal (tenant t1 / profile p1)."""
+    repo = SQLiteRepository(tmp_path / "severian-p.db")
+    repo.initialize()
+    repo.create_collection(Collection(id="c1", tenant_id="t1", name="Primary"))
+    fts = FTS5Index(tmp_path / "fts-p.db")
+    vector = LocalVectorIndex(tmp_path / "vectors-p.db", HashEmbedding(dimension=64))
+    service = BuildMemoryService(
+        repository=repo,
+        ingestion=IngestionService(repo),
+        retrieval=RetrievalService(repo, fts, vector),
+        projection=ProjectionCoordinator(repo, fts, vector),
+        derivation=DerivationService(repo),
+        context=ContextAssembler(),
+    )
+    app = create_app(
+        service=service,
+        gateway=lambda: FakeGateway(),
+        principal=Scope(
+            tenant_id="t1",
+            profile_id="p1",
+            collection_id="c1",
+            agent_id="a1",
+            session_id="s1",
+        ),
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+    fts.close()
+    vector.close()
+    repo.close()
+
+
+def test_principal_rejects_cross_tenant_scope(tmp_path):
+    # P0-6 repro: a client could claim any tenant/profile; the API bound
+    # no principal, so scope was a pure selector. With a principal bound,
+    # claiming a foreign tenant must be 403 (authorization), never 422
+    # (validation) — otherwise existence can be probed via error codes.
+    test_client = next(_principal_client(tmp_path))
+    for path, payload in (
+        ("/api/v1/observations", {"scope": _scope_payload(tenant="evil"), "content": "x", "source": {}}),
+        (
+            "/api/v1/search",
+            {"scope": _scope_payload(tenant="evil"), "query": "x", "limit": 5, "derive": False},
+        ),
+    ):
+        response = test_client.post(path, json=payload)
+        assert response.status_code == 403
+
+
+def test_principal_rejects_cross_profile_scope(tmp_path):
+    test_client = next(_principal_client(tmp_path))
+    response = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(profile="other"), "content": "x", "source": {}},
+    )
+    assert response.status_code == 403
+
+
+def test_principal_accepts_matching_scope(tmp_path):
+    test_client = next(_principal_client(tmp_path))
+    response = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(), "content": "authorized", "source": {}},
+    )
+    assert response.status_code == 201
+    assert response.json()["scope"]["tenant_id"] == "t1"
+    assert response.json()["scope"]["profile_id"] == "p1"

@@ -28,7 +28,7 @@ from severian.api.schemas import (
 )
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ForbiddenError, NotFoundError
 from severian.domain.models import Scope
 
 # Constants kept here so URL paths and tests share the same source of
@@ -48,6 +48,26 @@ def _scope_from_model(model: ScopeModel) -> Scope:
         collection_id=model.collection_id,
         agent_id=model.agent_id,
         session_id=model.session_id,
+    )
+
+
+def _bind_principal(requested: ScopeModel, principal: Scope) -> Scope:
+    """Derive the effective scope from the authenticated principal.
+
+    P0-6: the security-sensitive dimensions (tenant/profile) are NOT
+    client-selectable when a principal is bound. A request that claims
+    a different tenant or profile than the principal is an
+    authorization violation (403) — it is NOT a validation error, so
+    callers cannot probe for cross-tenant existence via 422 vs 403.
+    """
+    if requested.tenant_id != principal.tenant_id or requested.profile_id != principal.profile_id:
+        raise ForbiddenError("requested scope is outside the authenticated principal")
+    return Scope(
+        tenant_id=principal.tenant_id,
+        profile_id=principal.profile_id,
+        collection_id=requested.collection_id,
+        agent_id=requested.agent_id,
+        session_id=requested.session_id,
     )
 
 
@@ -90,6 +110,7 @@ def create_app(
     *,
     service: MemoryService,
     gateway: GatewayFactory | DerivationGateway,
+    principal: Scope | None = None,
 ) -> FastAPI:
     """Build a FastAPI app bound to a ``MemoryService`` instance.
 
@@ -97,6 +118,14 @@ def create_app(
     request (preferred — derivation may hold per-request state) or a
     fixed gateway instance used for every request (suitable for
     deterministic local fixtures).
+
+    ``principal`` optionally binds a fixed authenticated scope. When
+    set, the security-sensitive dimensions (``tenant_id`` and
+    ``profile_id``) are derived server-side from the principal and any
+    request body/token that disagrees with them is rejected with 403 —
+    scope becomes authorization, not a client-supplied selector. When
+    unset (local/dev mode), the client must supply a fully-populated
+    scope as before.
     """
 
     def _get_gateway() -> DerivationGateway:
@@ -116,6 +145,17 @@ def create_app(
 
     def get_gateway() -> DerivationGateway:
         return _get_gateway()
+
+    def resolve_scope(scope_model: ScopeModel) -> Scope:
+        """Resolve the effective scope for a request.
+
+        With a bound principal, tenant/profile are derived server-side
+        and any disagreement is a 403. Without one, the client-supplied
+        scope is used as-is (local/dev mode).
+        """
+        if principal is not None:
+            return _bind_principal(scope_model, principal)
+        return _scope_from_model(scope_model)
 
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
@@ -137,10 +177,15 @@ def create_app(
     ) -> IngestResponse:
         try:
             view = svc.ingest_observation(
-                _scope_from_model(payload.scope),
+                resolve_scope(payload.scope),
                 content=payload.content,
                 source=payload.source,
             )
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             # Pydantic surface for client errors — never leak internals.
             raise HTTPException(
@@ -184,7 +229,12 @@ def create_app(
             session_id=session_id,
         )
         try:
-            scope_obj = _scope_from_model(scope)
+            scope_obj = resolve_scope(scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -209,7 +259,12 @@ def create_app(
         svc: MemoryService = Depends(get_service),
     ) -> SearchResponse:
         try:
-            scope = _scope_from_model(payload.scope)
+            scope = resolve_scope(payload.scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
