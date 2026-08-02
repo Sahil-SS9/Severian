@@ -119,6 +119,11 @@ class Job(BaseModel):
     payload: dict[str, Any]
     status: str = "pending"
     worker_id: str | None = None
+    attempts: int = 0
+    lease_until: datetime | None = None
+    last_error: str | None = None
+    retry_after: datetime | None = None
+    dead_letter: bool = False
     created_at: datetime = Field(default_factory=now)
 
 
@@ -127,6 +132,7 @@ class Event(BaseModel):
     scope: Scope
     kind: str
     payload: dict[str, Any]
+    acked: bool = False
     created_at: datetime = Field(default_factory=now)
 
 

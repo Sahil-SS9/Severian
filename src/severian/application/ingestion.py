@@ -56,10 +56,13 @@ class IngestionService:
     def ingest(self, scope: Scope, content: str, source: dict[str, Any]) -> IngestionResult:
         # Preserve the RAW evidence exactly as received; normalisation is
         # a derived field stored alongside it. Both survive in the
-        # observation so no source content is ever lost (P0-1).
+        # observation so no source content is ever lost (P0-1). The
+        # canonical write and its derive-job enqueue are ONE transaction
+        # (P0-4): a crash cannot leave an observation that never
+        # derives, or a job that references nothing.
         raw = content
         normalized = normalize_content(content)
-        observation = self.repository.add_observation(
+        observation, job = self.repository.add_observation_and_enqueue(
             Observation(
                 scope=scope,
                 content=normalized,
@@ -68,5 +71,4 @@ class IngestionService:
                 source=dict(source),
             )
         )
-        job = self.repository.enqueue_job(scope, "derive", {"observation_id": observation.id})
         return IngestionResult(observation=observation, job=job)

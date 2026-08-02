@@ -316,3 +316,76 @@ def test_import_rejects_rechecksummed_scope_metadata_forgery(repo, tmp_path):
         assert restored.list_observations(scope()) == []
     finally:
         restored.close()
+
+
+# -- P0-4: job/outbox crash-safety semantics ------------------------------
+
+
+def test_job_claim_leases_and_owner_check_completion(repo):
+    seed_collection(repo)
+    job = repo.enqueue_job(scope(), "derive", {"observation_id": "x"})
+
+    claimed = repo.claim_job("w1")
+    assert claimed.id == job.id
+    assert claimed.status == "running"
+    assert claimed.worker_id == "w1"
+    assert claimed.attempts == 1
+    assert claimed.lease_until is not None
+
+    # Another worker cannot complete it.
+    with pytest.raises(ConflictError, match="owned by another worker"):
+        repo.complete_job(job.id, "done", worker_id="w2")
+
+    # The owning worker completes it; it is gone from pending.
+    done = repo.complete_job(job.id, "done", worker_id="w1")
+    assert done.status == "done"
+    with pytest.raises(NotFoundError, match="no pending job"):
+        repo.claim_job("w3")
+
+
+def test_job_reap_requeues_expired_lease_and_dead_letters_exhausted(repo):
+    seed_collection(repo)
+    first = repo.enqueue_job(scope(), "derive", {"observation_id": "a"})
+
+    # Claim with a short lease, then let it expire.
+    repo.claim_job("w1", lease_seconds=1)
+    assert repo.reap_expired_jobs(now=datetime(2030, 1, 1, tzinfo=UTC), max_attempts=3) == 1
+
+    # Re-claim: attempts incremented; job is not wedged.
+    claimed = repo.claim_job("w1")
+    assert claimed.id == first.id
+    assert claimed.attempts == 2
+
+    # Expire repeatedly; after max_attempts the job dead-letters.
+    for _ in range(5):
+        repo.reap_expired_jobs(now=datetime(2030, 1, 2, tzinfo=UTC), max_attempts=3)
+        try:
+            repo.claim_job("w1")
+        except NotFoundError:
+            break
+    assert repo.reap_expired_jobs(now=datetime(2030, 1, 3, tzinfo=UTC), max_attempts=3) == 0
+    with pytest.raises(NotFoundError, match="no pending job"):
+        repo.claim_job("w1")
+
+
+def test_atomic_ingest_and_enqueue_is_idempotent(repo):
+    seed_collection(repo)
+    observation, job = repo.add_observation_and_enqueue(
+        Observation(scope=scope(), content="evidence", source={"uri": "note://atomic"})
+    )
+    again, job_again = repo.add_observation_and_enqueue(
+        Observation(scope=scope(), content="evidence", source={"uri": "note://atomic"})
+    )
+    assert again.id == observation.id
+    assert job_again.id == job.id
+    assert len(repo.list_observations(scope())) == 1
+
+
+def test_outbox_ack_removes_event_from_pending(repo):
+    seed_collection(repo)
+    event = repo.append_outbox(scope(), "test.created", {"id": "x"})
+    assert [(e.id, e.kind) for e in repo.pending_outbox()] == [(event.id, "test.created")]
+    repo.ack_outbox(event.id)
+    assert repo.pending_outbox() == []
+    with pytest.raises(NotFoundError, match="already acked"):
+        repo.ack_outbox(event.id)

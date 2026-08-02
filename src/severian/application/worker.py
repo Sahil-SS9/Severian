@@ -6,13 +6,18 @@ documented Phase 3 gap: the job queue existed but nothing consumed it,
 so observations were never promoted to memories and default search
 returned empty.
 
-The worker contract:
+The worker contract (P0-4 hardened):
 
-- ``claim_job`` atomically transitions one pending job to ``running``.
+- ``claim_job`` atomically transitions one pending job to ``running``
+  under a lease; ``NotFoundError`` means an empty queue and ends the
+  pass, while any other exception is a real fault and propagates
+  (the queue is never silently treated as empty on storage errors).
 - The worker derives the referenced observation into memories through
   the canonical ``DerivationService`` (never direct repository writes).
-- It completes the job as ``done`` (or ``failed`` on error) so the
-  queue is durable and replayable.
+- A job is completed ``done`` ONLY AFTER its projection rebuild
+  converges, so a crash mid-rebuild cannot leave an observation marked
+  derived while retrieval still misses it. Completion is owner-checked
+  (``worker_id``) and records the failure reason for diagnostics.
 - Projections are rebuilt once per touched scope after a drain pass so
   retrieval sees the promoted memories.
 
@@ -28,6 +33,7 @@ from typing import Any
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Job, Scope
 
 
@@ -71,33 +77,45 @@ class DerivationWorker:
         processed = 0
         failed = 0
         touched: dict[str, Scope] = {}
+        # Successful jobs are held open until their scope's projection
+        # rebuild converges below; only then are they completed ``done``
+        # (P0-4). A crash between derivation and rebuild leaves the job
+        # ``running`` with an expiring lease → reaped and retried, never
+        # falsely durable.
+        pending_done: list[Job] = []
         while max_jobs is None or (processed + failed) < max_jobs:
             try:
                 job = self._repository.claim_job(worker_id)
-            except Exception:
-                break
+            except NotFoundError:
+                break  # queue empty — normal end of pass
             scope_key = job.scope.model_dump_json()
             touched[scope_key] = job.scope
             try:
-                self._process(job, gateway, policy)
+                self._derive(job, gateway, policy)
+                pending_done.append(job)
                 processed += 1
-            except Exception:
+            except Exception as exc:
                 # A failed job must not wedge the queue: mark it failed
-                # and continue draining the rest.
+                # with the error recorded and continue draining. The
+                # leased-claim machinery lets a later reap retry it.
                 try:
-                    self._repository.complete_job(job.id, "failed")
+                    self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=str(exc))
                 except Exception:
                     pass
                 failed += 1
+        # Converge projections for every touched scope BEFORE any
+        # completed job becomes durable.
         for scope in touched.values():
             self._projection.rebuild(scope)
+        for job in pending_done:
+            self._repository.complete_job(job.id, "done", worker_id=worker_id)
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
         )
 
-    def _process(
+    def _derive(
         self,
         job: Job,
         gateway: DerivationGateway,
@@ -114,4 +132,3 @@ class DerivationWorker:
             gateway,
             policy=dict(policy or {}),
         )
-        self._repository.complete_job(job.id, "done")

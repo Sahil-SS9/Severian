@@ -84,7 +84,9 @@ def test_cloud_derivation_is_denied_by_collection_policy(repo):
         )
 
 
-def test_derivation_skips_malformed_gateway_candidates(repo):
+def test_derivation_rejects_malformed_candidates_without_partial_publication(repo):
+    """P0-4: a malformed candidate aborts the whole batch — no partial
+    publication of the valid candidates that preceded it."""
     observation = IngestionService(repo).ingest(scope(), "private", {}).observation
 
     class MalformedGateway:
@@ -93,11 +95,14 @@ def test_derivation_skips_malformed_gateway_candidates(repo):
         is_cloud = False
 
         def derive(self, content: str, *, policy: dict[str, object]):  # type: ignore[no-untyped-def]
-            return [None, "not-a-candidate", 42, {"kind": "fact", "content": "valid"}]
+            return [{"kind": "fact", "content": "valid"}, None, {"kind": "fact", "content": "also-valid"}]
 
-    memories = DerivationService(repo).derive_observation(scope(), observation.id, MalformedGateway(), policy={})
+    with pytest.raises(ValueError, match="malformed derivation candidate"):
+        DerivationService(repo).derive_observation(scope(), observation.id, MalformedGateway(), policy={})
 
-    assert [memory.content for memory in memories] == ["valid"]
+    # Nothing was published — the valid candidate that appeared before
+    # the malformed one must not have been written.
+    assert repo.list_memories(scope()) == []
 
 
 def test_fts_projection_is_scope_aware_and_rebuildable(repo, tmp_path: Path):

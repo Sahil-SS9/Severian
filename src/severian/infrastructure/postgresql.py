@@ -27,11 +27,11 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, select, update
+from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
@@ -54,6 +54,13 @@ from severian.infrastructure.snapshot import validate_snapshot
 T = TypeVar("T")
 
 
+def _iso(value: datetime | None) -> str | None:
+    """ISO-8601 UTC string for column comparison (lexicographic == chronological)."""
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat()
+
+
 metadata = MetaData()
 
 # The canonical table mirrors SQLiteRepository's ``records`` exactly so
@@ -73,6 +80,8 @@ records = Table(
     Column("content_hash", String),
     Column("identity_key", String),
     Column("status", String, index=True),
+    Column("lease_until", String),
+    Column("retry_after", String),
     Column("payload", JSONB, nullable=False),
 )
 
@@ -177,7 +186,7 @@ class PostgreSQLBackend:
             scope_values: dict[str, str | None] = cls._collection_scope(model)
         else:
             scope_values = cls._scope_values(getattr(model, "scope", None))
-        return {
+        values: dict[str, Any] = {
             "id": model.id,
             "record_type": kind,
             **scope_values,
@@ -186,6 +195,10 @@ class PostgreSQLBackend:
             "status": status,
             "payload": model.model_dump(mode="json"),
         }
+        if kind == "job":
+            values["lease_until"] = _iso(model.lease_until)
+            values["retry_after"] = _iso(model.retry_after)
+        return values
 
     @staticmethod
     def _event_models(
@@ -358,6 +371,90 @@ class PostgreSQLBackend:
         self._require_scope(scope)
         return self._get("observation", observation_id, Observation, scope=scope)
 
+    def add_observation_and_enqueue(
+        self, observation: Observation, job_kind: str = "derive"
+    ) -> tuple[Observation, Job]:
+        """Atomically insert an observation and enqueue its derive job.
+
+        P0-4: the canonical write and the queue write are ONE
+        transaction. Identity semantics match ``add_observation`` +
+        ``enqueue_job`` so re-ingests stay idempotent.
+        """
+        digest = hashlib.sha256(observation.content.encode()).hexdigest()
+        raw = observation.raw_content or observation.content
+        raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
+        candidate = observation.model_copy(
+            update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash}
+        )
+        identity_parts: tuple[object, ...] = (digest,)
+        source = source_identity(candidate.source)
+        if source:
+            identity_parts = (digest, source)
+        observation_identity = self._identity(*identity_parts)
+        job_payload = {"observation_id": candidate.id}
+        job_identity = self._identity(job_kind, job_payload)
+
+        observation_query = select(records.c.payload).where(
+            records.c.record_type == "observation",
+            *self._scope_predicates(candidate.scope),
+            records.c.identity_key == observation_identity,
+        )
+        with self.engine.connect() as connection:
+            existing_obs = connection.execute(observation_query).scalar_one_or_none()
+        if existing_obs is not None:
+            # Re-ingest of the same evidence: return the stored
+            # observation and its existing derive job (enqueueing it
+            # again if a previous atomic write somehow lost it).
+            stored = Observation.model_validate(existing_obs)
+            job_payload = {"observation_id": stored.id}
+            job_identity = self._identity(job_kind, job_payload)
+            job_query = select(records.c.payload).where(
+                records.c.record_type == "job",
+                *self._scope_predicates(stored.scope),
+                records.c.identity_key == job_identity,
+            )
+            with self.engine.connect() as connection:
+                existing_job = connection.execute(job_query).scalar_one_or_none()
+            if existing_job is not None:
+                return stored, Job.model_validate(existing_job)
+            job = Job(scope=stored.scope, kind=job_kind, payload=job_payload)
+            try:
+                return stored, self._insert_if_absent(
+                    "job",
+                    job,
+                    identity_key=job_identity,
+                    status="pending",
+                    query=job_query,
+                )
+            except IntegrityError:
+                with self.engine.connect() as connection:
+                    existing_job = connection.execute(job_query).scalar_one_or_none()
+                if existing_job is None:
+                    raise ConflictError("job identity conflict") from None
+                return stored, Job.model_validate(existing_job)
+
+        job = Job(scope=candidate.scope, kind=job_kind, payload={"observation_id": candidate.id})
+        job_identity = self._identity(job_kind, job.payload)
+        with self.engine.begin() as connection:
+            connection.execute(
+                records.insert().values(
+                    **self._record_values(
+                        "observation",
+                        candidate,
+                        content_hash=digest,
+                        identity_key=observation_identity,
+                    )
+                )
+            )
+            if (events := self._event_models("observation", candidate)) is not None:
+                event, audit = events
+                connection.execute(records.insert().values(**self._record_values("outbox", event, status="pending")))
+                connection.execute(records.insert().values(**self._record_values("audit", audit)))
+            connection.execute(
+                records.insert().values(**self._record_values("job", job, identity_key=job_identity, status="pending"))
+            )
+        return candidate, job
+
     def list_observations(self, scope: Scope) -> list[Observation]:
         self._require_scope(scope)
         query = (
@@ -450,6 +547,72 @@ class PostgreSQLBackend:
             emit_events=True,
             query=query,
         )
+
+    def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
+        """Insert candidate memories transactionally (P0-4)."""
+        if not memories:
+            return []
+        for memory in memories:
+            for source_id in memory.source_observation_ids:
+                try:
+                    source = self.get_observation(memory.scope, source_id)
+                except NotFoundError as exc:
+                    with self.engine.connect() as connection:
+                        exists = connection.execute(
+                            select(records.c.id).where(
+                                records.c.id == source_id,
+                                records.c.record_type == "observation",
+                            )
+                        ).scalar_one_or_none()
+                    if exists is not None:
+                        raise ConflictError("source observation scope does not match memory scope") from exc
+                    raise
+                if source.scope != memory.scope:
+                    raise ConflictError("source observation scope does not match memory scope")
+        identities = [
+            self._identity(
+                m.kind,
+                m.content,
+                m.source_observation_ids,
+                m.model_id,
+                m.prompt_version,
+            )
+            for m in memories
+        ]
+        with self.engine.begin() as connection:
+            existing_by_identity: dict[str, Memory] = {}
+            rows = connection.execute(
+                select(records.c.payload).where(
+                    records.c.record_type == "memory",
+                    records.c.identity_key.in_(identities),
+                )
+            ).scalars().all()
+            for value in rows:
+                memory = Memory.model_validate(value)
+                key = self._identity(
+                    memory.kind,
+                    memory.content,
+                    memory.source_observation_ids,
+                    memory.model_id,
+                    memory.prompt_version,
+                )
+                existing_by_identity[key] = memory
+            results: list[Memory] = []
+            for memory, identity_key in zip(memories, identities, strict=True):
+                if identity_key in existing_by_identity:
+                    results.append(existing_by_identity[identity_key])
+                    continue
+                connection.execute(
+                    records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))
+                )
+                if (events := self._event_models("memory", memory)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                results.append(memory)
+        return results
 
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         self._require_scope(scope)
@@ -612,10 +775,21 @@ class PostgreSQLBackend:
             query=query,
         )
 
-    def claim_job(self, worker_id: str) -> Job:
+    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
+        """Atomically claim one pending job with a lease (P0-4)."""
+        now_value = datetime.now(UTC)
+        now_iso = _iso(now_value)
+        lease_iso = _iso(now_value + timedelta(seconds=lease_seconds))
         pending_id = (
             select(records.c.id)
-            .where(records.c.record_type == "job", records.c.status == "pending")
+            .where(
+                records.c.record_type == "job",
+                records.c.status == "pending",
+                or_(
+                    records.c.retry_after.is_(None),
+                    records.c.retry_after <= now_iso,
+                ),
+            )
             .order_by(records.c.id)
             .limit(1)
             .scalar_subquery()
@@ -624,19 +798,34 @@ class PostgreSQLBackend:
             row = connection.execute(
                 update(records)
                 .where(records.c.id == pending_id, records.c.status == "pending")
-                .values(status="running")
+                .values(status="running", lease_until=lease_iso)
                 .returning(records.c.id, records.c.payload)
             ).mappings().one_or_none()
             if row is None:
                 raise NotFoundError("no pending job")
-            job = Job.model_validate(row["payload"]).model_copy(update={"status": "running", "worker_id": worker_id})
+            prior = Job.model_validate(row["payload"])
+            job = prior.model_copy(
+                update={
+                    "status": "running",
+                    "worker_id": worker_id,
+                    "attempts": prior.attempts + 1,
+                    "lease_until": now_value + timedelta(seconds=lease_seconds),
+                }
+            )
             connection.execute(
                 update(records).where(records.c.id == row["id"]).values(payload=job.model_dump(mode="json"))
             )
         return job
 
-    def complete_job(self, job_id: str, status: str) -> Job:
-        """Mark a claimed job as done or failed (atomically)."""
+    def complete_job(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        worker_id: str | None = None,
+        error: str | None = None,
+    ) -> Job:
+        """Mark a claimed job as done or failed (atomically, owner-checked)."""
         if status not in ("done", "failed"):
             raise ValueError("job status must be 'done' or 'failed'")
         with self.engine.begin() as connection:
@@ -649,7 +838,16 @@ class PostgreSQLBackend:
             ).mappings().one_or_none()
             if row is None:
                 raise NotFoundError("job not claimed")
-            job = Job.model_validate(row["payload"]).model_copy(update={"status": status})
+            job = Job.model_validate(row["payload"])
+            if worker_id is not None and job.worker_id != worker_id:
+                raise ConflictError("job is owned by another worker")
+            update_fields: dict[str, Any] = {
+                "status": status,
+                "last_error": error if status == "failed" else None,
+            }
+            if status == "failed":
+                update_fields["retry_after"] = datetime.now(UTC) + timedelta(seconds=5)
+            updated = job.model_copy(update=update_fields)
             result = connection.execute(
                 update(records)
                 .where(
@@ -657,11 +855,50 @@ class PostgreSQLBackend:
                     records.c.record_type == "job",
                     records.c.status == "running",
                 )
-                .values(status=status, payload=job.model_dump(mode="json"))
+                .values(status=status, payload=updated.model_dump(mode="json"), retry_after=_iso(updated.retry_after))
             )
             if result.rowcount != 1:
                 raise ConflictError("job completion conflict")
-        return job
+        return updated
+
+    def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
+        """Re-queue expired running jobs and dead-letter exhausted ones (P0-4)."""
+        now_value = now or datetime.now(UTC)
+        now_iso = _iso(now_value)
+        reaped = 0
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                select(records.c.id, records.c.payload).where(
+                    records.c.record_type == "job",
+                    records.c.status == "running",
+                    records.c.lease_until.is_not(None),
+                    records.c.lease_until < now_iso,
+                )
+            ).mappings().all()
+            for row in rows:
+                job = Job.model_validate(row["payload"])
+                if job.attempts >= max_attempts:
+                    connection.execute(
+                        update(records)
+                        .where(records.c.id == row["id"])
+                        .values(
+                            status="dead_letter",
+                            payload=job.model_copy(update={"dead_letter": True}).model_dump(mode="json"),
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(records)
+                        .where(records.c.id == row["id"])
+                        .values(
+                            status="pending",
+                            payload=job.model_copy(
+                                update={"worker_id": None, "lease_until": None}
+                            ).model_dump(mode="json"),
+                        )
+                    )
+                reaped += 1
+        return reaped
 
     # -- audit and recovery ------------------------------------------------
 
@@ -677,6 +914,16 @@ class PostgreSQLBackend:
                 .order_by(records.c.id)
             ).scalars()
             return [Event.model_validate(value) for value in values]
+
+    def ack_outbox(self, event_id: str) -> None:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(records.c.id == event_id, records.c.record_type == "outbox", records.c.status == "pending")
+                .values(status="acked")
+            )
+            if result.rowcount != 1:
+                raise NotFoundError("outbox event not found or already acked")
 
     def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: Mapping[str, Any]) -> AuditEvent:
         self._require_scope(scope)

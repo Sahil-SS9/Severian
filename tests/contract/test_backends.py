@@ -162,11 +162,35 @@ class _FakeRepository:
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         return Job(scope=scope, kind=kind, payload=payload)
 
-    def claim_job(self, worker_id: str) -> Job:
+    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
         raise NotFoundError("no pending job")
 
-    def complete_job(self, job_id: str, status: str) -> Job:
+    def complete_job(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        worker_id: str | None = None,
+        error: str | None = None,
+    ) -> Job:
         raise NotFoundError("job not claimed")
+
+    def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
+        return 0
+
+    def ack_outbox(self, event_id: str) -> None:
+        raise NotFoundError("outbox event not found or already acked")
+
+    def add_observation_and_enqueue(
+        self, observation: Observation, job_kind: str = "derive"
+    ) -> tuple[Observation, Job]:
+        return (
+            observation,
+            Job(scope=observation.scope, kind=job_kind, payload={"observation_id": observation.id}),
+        )
+
+    def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
+        return [self.add_memory(memory) for memory in memories]
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)
