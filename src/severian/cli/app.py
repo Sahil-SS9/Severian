@@ -265,18 +265,17 @@ def export(
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
         payload = bundle.repository.export_json()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        # P2: refuse to write through a symlink (a symlink destination
-        # would let an attacker redirect the snapshot to an arbitrary
-        # file). Also use an unpredictable temp name in the same
-        # directory so the rename is atomic and no other process can
-        # race the temporary file.
-        if output.is_symlink():
-            raise RuntimeError(f"refusing to export through symlink: {output}")
-        temporary = output.parent / f".{output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        # SEC-04: enforce the approved-path policy before creating any
+        # output parent directory — a symlinked ancestor or a path
+        # outside the approved roots must be rejected before mkdir.
+        from severian.cli.path_policy import check_write_destination
+
+        safe_output = check_write_destination(output, purpose="export")
+        safe_output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = safe_output.parent / f".{safe_output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         temporary.write_text(payload, encoding="utf-8")
-        os.replace(temporary, output)
-        _emit({"format": "severian-v1", "output": str(output), "bytes": len(payload.encode("utf-8"))})
+        os.replace(temporary, safe_output)
+        _emit({"format": "severian-v1", "output": str(safe_output), "bytes": len(payload.encode("utf-8"))})
     finally:
         bundle.close()
 
@@ -305,7 +304,13 @@ def import_(
     """
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
-        payload = input.read_text(encoding="utf-8")
+        # SEC-04: the snapshot source must be an approved regular file —
+        # a symlinked input could redirect the import to an arbitrary
+        # payload the operator did not intend to restore.
+        from severian.cli.path_policy import check_read_source
+
+        safe_input = check_read_source(input, purpose="import")
+        payload = safe_input.read_text(encoding="utf-8")
         bundle.repository.import_json(payload)
         touched_scopes: list[Scope] = []
         if rebuild:
@@ -342,7 +347,7 @@ def import_(
         _emit(
             {
                 "format": "severian-v1",
-                "input": str(input),
+                "input": str(safe_input),
                 "status": "imported",
                 "rebuilt_scopes": [scope.model_dump() for scope in touched_scopes],
             }

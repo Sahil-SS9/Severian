@@ -289,6 +289,39 @@ def test_list_memories_excludes_superseded_revisions(repo):
     assert repo.get_memory(scope(), original.id).superseded_by_id == revision.id
 
 
+def test_list_memories_orders_by_created_at_not_uuid(repo):
+    # E-1 repro: list_memories used to order by record id (UUID) which
+    # is random — memory listing was not chronological. Ordering must be
+    # by created_at (then id tiebreak) so lists are stable and temporal.
+    first_obs = IngestionService(repo).ingest(scope(), "first source", {}).observation
+    second_obs = IngestionService(repo).ingest(scope(), "second source", {}).observation
+    first = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="first",
+            source_observation_ids=[first_obs.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    second = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="second",
+            source_observation_ids=[second_obs.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    listed = repo.list_memories(scope())
+    assert [m.id for m in listed] == [first.id, second.id]
+    assert listed[0].created_at <= listed[1].created_at
+
+
 def test_list_memory_revisions_returns_full_chain(repo):
     observation = IngestionService(repo).ingest(scope(), "source", {}).observation
     original = repo.add_memory(

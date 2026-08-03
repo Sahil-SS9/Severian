@@ -63,7 +63,7 @@ class Observation(BaseModel):
     # derivation. ``raw_content`` preserves the immutable evidence as it
     # was received; ``raw_hash`` is the SHA-256 of the raw bytes. The
     # raw pair is never rewritten by ingestion or revision.
-    content: str
+    content: str = Field(min_length=1)
     content_hash: str = ""
     raw_content: str = ""
     raw_hash: str = ""
@@ -72,12 +72,25 @@ class Observation(BaseModel):
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
 
+    @field_validator("content_hash", "raw_hash")
+    @classmethod
+    def _hash_is_sha256_or_empty(cls, value: str) -> str:
+        # A hash field is either empty (not yet computed/verified) or a
+        # 64-char lowercase hex SHA-256 digest. Rejecting malformed
+        # hashes at the boundary keeps forged or truncated hashes from
+        # ever entering the canonical store.
+        if value == "":
+            return value
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("hash must be a 64-char lowercase hex SHA-256 digest")
+        return value
+
 
 class Memory(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
     kind: str
-    content: str
+    content: str = Field(min_length=1)
     source_observation_ids: list[str] = Field(min_length=1)
     model_id: str
     prompt_version: str

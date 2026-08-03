@@ -699,7 +699,7 @@ class PostgreSQLBackend:
                 *self._scope_predicates(scope),
                 records.c.payload["superseded_by_id"].astext.is_(None),
             )
-            .order_by(records.c.id)
+            .order_by(records.c.payload["created_at"].astext, records.c.id)
         )
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
@@ -710,7 +710,7 @@ class PostgreSQLBackend:
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "memory", *self._scope_predicates(scope))
-            .order_by(records.c.id)
+            .order_by(records.c.payload["created_at"].astext, records.c.id)
         )
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
@@ -1081,7 +1081,7 @@ class PostgreSQLBackend:
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "audit", *self._scope_predicates(scope))
-            .order_by(records.c.id)
+            .order_by(records.c.payload["created_at"].astext, records.c.id)
         )
         with self.engine.connect() as connection:
             return [AuditEvent.model_validate(value) for value in connection.execute(query).scalars()]

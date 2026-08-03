@@ -551,7 +551,7 @@ class SQLiteRepository:
                 *self._scope_predicates(scope),
                 func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
             )
-            .order_by(records.c.id)
+            .order_by(func.json_extract(records.c.payload, "$.created_at"), records.c.id)
         )
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
@@ -562,7 +562,7 @@ class SQLiteRepository:
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "memory", *self._scope_predicates(scope))
-            .order_by(records.c.id)
+            .order_by(func.json_extract(records.c.payload, "$.created_at"), records.c.id)
         )
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
@@ -971,7 +971,7 @@ class SQLiteRepository:
         query = (
             select(records.c.payload)
             .where(records.c.record_type == "audit", *self._scope_predicates(scope))
-            .order_by(records.c.id)
+            .order_by(func.json_extract(records.c.payload, "$.created_at"), records.c.id)
         )
         with self.engine.connect() as connection:
             return [AuditEvent.model_validate(value) for value in connection.execute(query).scalars()]
