@@ -7,6 +7,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
@@ -28,6 +29,19 @@ _STOPWORDS: frozenset[str] = frozenset(
         "which", "who", "whose", "will", "with", "would", "you",
     }
 )
+
+
+class EmbeddingProvider(Protocol):
+    """Pluggable semantic embedding provider (A-1).
+
+    Any implementation exposing ``dimension`` and ``encode`` satisfies
+    the protocol: the deterministic :class:`HashEmbedding` (default) or
+    a neural embedding such as Granite R2 (97M, Apache-2.0, CPU).
+    """
+
+    dimension: int
+
+    def encode(self, text: str) -> list[float]: ...
 
 
 class HashEmbedding:
@@ -52,7 +66,7 @@ class HashEmbedding:
 
 
 class LocalVectorIndex:
-    def __init__(self, path: str | Path, embedding: HashEmbedding):
+    def __init__(self, path: str | Path, embedding: EmbeddingProvider):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.embedding = embedding

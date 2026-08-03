@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.vector import HashEmbedding, VectorHit
+from severian.infrastructure.vector import EmbeddingProvider, HashEmbedding, VectorHit
 
 metadata = MetaData()
 
@@ -53,7 +53,7 @@ Index(
 class PGVectorIndex:
     """Vector projection stored as real ``vector(256)`` columns via pgvector."""
 
-    def __init__(self, dsn: str, embedding: HashEmbedding | None = None):
+    def __init__(self, dsn: str, embedding: EmbeddingProvider | None = None):
         if not dsn or not dsn.strip():
             raise ValueError("PGVectorIndex requires a non-empty DSN")
         self.dsn = dsn.strip()

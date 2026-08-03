@@ -76,6 +76,7 @@ def build_bundle(
     vectors: str | Path | None = None,
     dsn: str | None = None,
     gateway: object | None = None,
+    embedding: Any | None = None,
 ) -> ServiceBundle:
     """Compose the canonical service bundle for the requested backend.
 
@@ -85,12 +86,18 @@ def build_bundle(
     for the lexical index (FTS5 has no PG equivalent) while the vector
     projection uses pgvector when ``pg_vectors=True`` — see
     :func:`build_bundle` callers for production wiring.
+
+    ``embedding`` accepts any :class:`EmbeddingProvider` (e.g. Granite
+    R2). When omitted, the deterministic :class:`HashEmbedding` is used
+    — the default is always safe and dependency-free.
     """
     backend = (backend or "sqlite").lower()
     if backend == "sqlite":
-        return _build_sqlite(database=database, fts=fts, vectors=vectors, gateway=gateway)
+        return _build_sqlite(
+            database=database, fts=fts, vectors=vectors, gateway=gateway, embedding=embedding
+        )
     if backend in {"postgresql", "postgres"}:
-        return _build_postgresql(dsn=dsn, gateway=gateway)
+        return _build_postgresql(dsn=dsn, gateway=gateway, embedding=embedding)
     raise ValueError(f"unknown backend: {backend!r} (expected sqlite or postgresql)")
 
 
@@ -128,6 +135,7 @@ def _build_sqlite(
     fts: str | Path | None,
     vectors: str | Path | None,
     gateway: Any | None,
+    embedding: Any | None = None,
 ) -> ServiceBundle:
     import tempfile
 
@@ -142,7 +150,7 @@ def _build_sqlite(
     repository = SQLiteRepository(database)
     repository.initialize()
     lexical = FTS5Index(fts)
-    vector = LocalVectorIndex(vectors, HashEmbedding(dimension=256))
+    vector = LocalVectorIndex(vectors, embedding or HashEmbedding(dimension=256))
     return _compose(repository=repository, lexical=lexical, vector=vector, gateway=gateway, backend="sqlite")
 
 
@@ -150,6 +158,7 @@ def _build_postgresql(
     *,
     dsn: str | None,
     gateway: Any | None,
+    embedding: Any | None = None,
 ) -> ServiceBundle:
     import tempfile
 
@@ -161,7 +170,7 @@ def _build_postgresql(
     repository = PostgreSQLBackend(dsn=dsn)
     repository.initialize()
     repository.verify_schema()  # P1-3: fail startup on schema mismatch
-    vector = PGVectorIndex(dsn)
+    vector = PGVectorIndex(dsn, embedding)
     vector.initialize()
     scratch = Path(tempfile.mkdtemp(prefix="severian-fts-"))
     lexical = FTS5Index(scratch / "severian.fts")
