@@ -31,9 +31,9 @@ handoff updated to reflect closure + re-pass to 3rd party.
 | **Phase E** | P2 residuals: E-1 ordering, E-2 root policy, E-3 domain constraints, E-4 delete smoke, E-5 evidence re-stamp | DONE |
 | **Phase G** | Governance: G-1 merge audit→main, G-2 publish decision, G-3 CI doc, G-4 hold | PARTIAL (G-1 done, G-2/G-3 verified, G-4 hold) |
 | **Phase F** | Eval-process: all repo-side fixes already FIXED (F-1..F-4); F-5/F-6 auditor notes | VERIFIED DONE (see §F) |
-| **Phase C** | Vendor-claims table (`competitor-claims.md`) | PENDING |
-| **Phase B** | Conversation recollection: B-1 LOCOMO-tier benchmark, B-2 episodic summarization | PENDING |
-| **Phase A** | Engineering gaps: A-1 Granite R2 embeddings, A-2 versioning/rollback, A-3 real-data probes, A-4 Chroma batch comparison | PENDING |
+| **Phase C** | Vendor-claims table (`competitor-claims.md`) | DONE (C-1) |
+| **Phase B** | Conversation recollection: B-1 LOCOMO-tier benchmark, B-2 episodic summarization | PARTIAL (B-1 done, B-2 designed) |
+| **Phase A** | Engineering gaps: A-1 Granite R2 embeddings, A-2 versioning/rollback, A-3 real-data probes, A-4 Chroma batch comparison | PARTIAL (A-4 done; A-1/A-2/A-3 pending) |
 | **Phase D** | Weakness analysis implementation = A-1/A-2/A-4/B-2 (tracked under A/B) | PENDING |
 | **Phase AUDIT** | Final state verification + update HANDOFF-MASTER + marker READY TO BE AUDITED | PENDING |
 

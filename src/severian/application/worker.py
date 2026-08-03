@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
+from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.domain.errors import NotFoundError
@@ -56,10 +57,12 @@ class DerivationWorker:
         repository: CanonicalRepository,
         derivation: DerivationService,
         projection: ProjectionCoordinator,
+        episodes: EpisodeService | None = None,
     ) -> None:
         self._repository = repository
         self._derivation = derivation
         self._projection = projection
+        self._episodes = episodes if episodes is not None else EpisodeService(repository)
 
     def drain(
         self,
@@ -121,14 +124,18 @@ class DerivationWorker:
         gateway: DerivationGateway,
         policy: Mapping[str, Any] | None,
     ) -> None:
-        if job.kind != "derive":
-            raise ValueError(f"unsupported job kind: {job.kind}")
-        observation_id = str(job.payload.get("observation_id", ""))
-        if not observation_id:
-            raise ValueError("derive job missing observation_id")
-        self._derivation.derive_observation(
-            job.scope,
-            observation_id,
-            gateway,
-            policy=dict(policy or {}),
-        )
+        if job.kind == "derive":
+            observation_id = str(job.payload.get("observation_id", ""))
+            if not observation_id:
+                raise ValueError("derive job missing observation_id")
+            self._derivation.derive_observation(
+                job.scope,
+                observation_id,
+                gateway,
+                policy=dict(policy or {}),
+            )
+            return
+        if job.kind == "episode":
+            self._episodes.consolidate_session(job.scope, gateway=gateway, policy=dict(policy or {}))
+            return
+        raise ValueError(f"unsupported job kind: {job.kind}")
