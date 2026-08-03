@@ -29,13 +29,18 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from severian.benchmarks.adapters import LexicalBaselineAdapter, SeverianAdapter  # noqa: E402
 from severian.benchmarks.manifest import load_manifest  # noqa: E402
-from severian.benchmarks.runner import BenchmarkRunner, to_jsonable  # noqa: E402
+from severian.benchmarks.runner import (  # noqa: E402
+    BenchmarkRunner,
+    ProviderAdapter,
+    to_jsonable,
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -62,13 +67,13 @@ def git_branch() -> str:
         return "unknown"
 
 
-def build_adapters(manifest, args: argparse.Namespace) -> dict[str, object]:
+def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, ProviderAdapter]:
     """Construct one adapter per LIVE manifest provider id.
 
     Vendor-reported providers (``vendor_reported_only``) are never run;
     their claimed metrics are carried in the evidence as citations only.
     """
-    adapters: dict[str, object] = {}
+    adapters: dict[str, ProviderAdapter] = {}
     for provider in manifest.providers:
         pid = provider.id
         if provider.vendor_reported_only:
@@ -115,7 +120,7 @@ def build_adapters(manifest, args: argparse.Namespace) -> dict[str, object]:
     return adapters
 
 
-def canary(adapters: dict[str, object]) -> None:
+def canary(adapters: dict[str, ProviderAdapter]) -> None:
     """Pre-flight: prove each adapter can ingest+query one document."""
     for pid, adapter in adapters.items():
         adapter.ingest("canary-doc", "The benchmark canary flies at dawn.", scope="t0/p0/c0/a0/s0")
@@ -169,7 +174,7 @@ def main() -> None:
 
     # Rebuild adapters (canary consumed/closed them) for the real run.
     adapters = build_adapters(manifest, args)
-    runner = BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=True)  # type: ignore[arg-type]
+    runner = BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=True)
     print("\nrunning benchmark...")
     result = runner.run()
     payload = to_jsonable(result)

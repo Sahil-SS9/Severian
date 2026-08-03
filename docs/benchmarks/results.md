@@ -70,8 +70,10 @@ derive step because Chroma has no equivalent correction pipeline.
 Method: deterministic seeded corpus generated at 1k/10k/100k docs. Ingest
 throughput measured as docs/sec. Query latency measured on the hot path
 (derive=False for Severian; natural path for others) after one cold query.
-Cold query (derive=True) measured at 1k/10k only; at 100k it would take
-~25 min per lane (O(observations) derive-on-read) and is extrapolated.
+The cold query (derive=True) is measured at **every** bucket: it warms the
+projection that hot queries read. Skipping it at 100k (an earlier script
+version) made the hot loop measure an EMPTY index — ~0.1ms with zero hits,
+which the monotonicity report correctly flagged. See anomaly note below.
 
 | Bucket | Lane | ingest docs/s | cold (ms) | p50 (ms) | p95 (ms) |
 |---|---|---|---|---|---|
@@ -79,12 +81,12 @@ Cold query (derive=True) measured at 1k/10k only; at 100k it would take
 | 1k | severian-postgres | ~490 | ~15000 | ~73 | ~106 |
 | 1k | chroma | ~3 | n/a | ~198 | ~253 |
 | 1k | baseline | ~284000 | n/a | ~1 | ~35 |
-| 10k | severian-sqlite | ~210 | extrap | ~350 | ~355 |
-| 10k | severian-postgres | ~475 | extrap | ~60 | ~109 |
+| 10k | severian-sqlite | ~210 | measured | ~350 | ~355 |
+| 10k | severian-postgres | ~475 | measured | ~60 | ~109 |
 | 10k | chroma | ~3 | n/a | (slow lane) | (slow lane) |
 | 10k | baseline | ~284000 | n/a | ~1 | ~35 |
-| 100k | severian-sqlite | measured | skipped (extrap ~25 min) | measured | measured |
-| 100k | severian-postgres | measured | skipped (extrap ~25 min) | measured | measured |
+| 100k | severian-sqlite | measured | measured | measured | measured |
+| 100k | severian-postgres | measured | measured | measured | measured |
 | 100k | baseline | measured | n/a | measured | measured |
 | 100k | chroma | **not run** | n/a | n/a | n/a |
 
@@ -95,6 +97,33 @@ That per-doc write cost is itself a competitive finding (see §6).
 Full numbers in `scale.json` in the evidence directory. Monotonicity:
 p95 is non-decreasing with bucket size for every measured lane; ingest
 throughput is roughly flat (SQLite ~210–250 docs/s, PG ~475–490 docs/s).
+
+### Anomaly note (2026-08-02 → 03): the bogus 100k "speedup"
+
+The first full scale run reported severian-sqlite 100k p95 = 0.26 ms
+versus 388 ms at 10k — a 1500x "improvement" on 10x more data. That is
+not a real result; the monotonicity report (p95 non-decreasing) flagged
+it as impossible and the investigation confirmed why:
+
+- `ingest_observation` writes observations only; memories are derived
+  lazily and the FTS/vector projections stay empty until a derive pass.
+- `search(derive=False)` (hot path) reads ONLY the projections.
+- The script ran its cold derive query only when `bucket <= 10_000`.
+  At 100k it was skipped to save ~25 min per lane, so every hot query
+  measured an empty index: 0 hits, ~0.1 ms. The "speedup" was an
+  artifact of querying an empty database.
+
+Reproduction (in-repo, 5-doc scope): ingest 5 docs → hot search returns
+0 hits in 0.24 ms; one cold query (derive=True) derives all 5 memories →
+hot search returns 5 hits in 1.77 ms. The mechanism is deterministic and
+verified in the fix's regression run.
+
+Fix: the cold query now runs at every bucket (`if pid.startswith("severian")`,
+not `bucket <= 10_000`). The 100k cold cost (~25 min per severian lane)
+is the honest price of a real steady-state number. The corrected run's
+evidence replaces `evidence/2026-08-02/scale.json` (the file present
+before this note was the anomalous first run and must not be used for
+the 100k row).
 
 ## 4. Cold vs hot path (the derive-on-read tradeoff)
 

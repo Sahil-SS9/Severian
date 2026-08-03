@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import statistics
@@ -202,14 +203,18 @@ def run_lane(
 
         # Cold path: first query after writes pays full derive+reindex.
         # derive-on-read is O(observations) per cold query, so the cost
-        # is measured at the small buckets (establishes the curve) and
-        # skipped at the largest bucket where it would take ~25 min per
-        # lane (reported as extrapolated in results.md). Steady-state
-        # queries always run on the hot path (derive=False), which is
-        # what production serves after the worker derives. Only the
-        # Severian adapter has a derive toggle; competitors are measured
-        # on their natural path.
-        if pid.startswith("severian") and bucket <= 10_000:
+        # is measured at every bucket (establishes the curve). It must
+        # run at 100k too: derive=False hot queries read ONLY the
+        # projection, which is empty until a derive pass runs. Skipping
+        # the cold query at 100k silently made the hot loop measure an
+        # EMPTY index (~0.1ms, 0 hits) — the bogus "1500x speedup"
+        # caught by the monotonicity report. Cost at 100k is ~25 min
+        # per severian lane; that is the honest price of a real number.
+        # Steady-state queries then run on the hot path (derive=False),
+        # which is what production serves after the worker derives.
+        # Only the Severian adapter has a derive toggle; competitors
+        # are measured on their natural path.
+        if pid.startswith("severian"):
             t1 = time.perf_counter()
             adapter.query(QUERY_SET[0], limit=5, scope=QUERY_SCOPE)
             result.cold_query_ms = (time.perf_counter() - t1) * 1000.0
@@ -234,7 +239,12 @@ def monotonicity_report(results: list[LaneResult]) -> dict[str, dict[str, Any]]:
             report[pid] = {"assessed": False, "reason": "fewer than two buckets measured"}
             continue
         p95s = [r.p95 for r in lane]
-        monotonic = all(b >= a for a, b in zip(p95s, p95s[1:], strict=True))
+        # pairwise yields adjacent (a, b) pairs: for a 3-bucket lane it
+        # gives (b1,b2), (b2,b3) and for 0/1-item lists it yields nothing
+        # (all() -> True). Never use zip(..., strict=True) here: p95s[1:]
+        # is intentionally one element shorter than p95s, so strict mode
+        # would raise ValueError on every non-empty lane.
+        monotonic = all(b >= a for a, b in itertools.pairwise(p95s))
         throughput = [r.docs_per_sec for r in lane]
         report[pid] = {
             "assessed": True,
