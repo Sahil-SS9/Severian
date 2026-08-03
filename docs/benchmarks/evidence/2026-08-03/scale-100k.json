@@ -1,0 +1,82 @@
+{
+  "buckets": [
+    100000
+  ],
+  "instrument": "severian scale lane",
+  "lanes": [
+    "severian-sqlite",
+    "severian-postgres",
+    "chroma",
+    "baseline-lexical"
+  ],
+  "monotonicity": {
+    "baseline-lexical": {
+      "assessed": false,
+      "reason": "fewer than two buckets measured"
+    },
+    "severian-postgres": {
+      "assessed": false,
+      "reason": "fewer than two buckets measured"
+    },
+    "severian-sqlite": {
+      "assessed": false,
+      "reason": "fewer than two buckets measured"
+    }
+  },
+  "query_set": [
+    "What is the current office address?",
+    "Who founded the company?",
+    "What language does the core service use now?",
+    "What is the private launch date of Project Chrysalis?",
+    "What was the old office address?"
+  ],
+  "repro": {
+    "generated_corpus_sha256": "fc93f20588b2df1312ee695e52bf6bf345e51d1b49342150ce355e92efa4fe13",
+    "git_sha": "241e68b66c442dd0612739122e6f9cead39a2758"
+  },
+  "results": [
+    {
+      "bucket": 100000,
+      "cold_first_query_ms": 6457945.18,
+      "docs_per_sec": 205.9,
+      "ingest_seconds": 485.649,
+      "provider_id": "severian-sqlite",
+      "queries_run": 5,
+      "query_p50_ms": 3143.31,
+      "query_p95_ms": 3238.62,
+      "query_p99_ms": 3238.62
+    },
+    {
+      "bucket": 100000,
+      "cold_first_query_ms": 3147262.29,
+      "docs_per_sec": 159.9,
+      "ingest_seconds": 625.197,
+      "provider_id": "severian-postgres",
+      "queries_run": 5,
+      "query_p50_ms": 118.22,
+      "query_p95_ms": 151.63,
+      "query_p99_ms": 151.63
+    },
+    {
+      "bucket": 100000,
+      "cold_first_query_ms": 0.0,
+      "docs_per_sec": 299896.1,
+      "ingest_seconds": 0.333,
+      "provider_id": "baseline-lexical",
+      "queries_run": 5,
+      "query_p50_ms": 116.04,
+      "query_p95_ms": 134.76,
+      "query_p99_ms": 134.76
+    }
+  ],
+  "run_started_at": "2026-08-03T16:47:01.439451+00:00",
+  "run_state": "complete",
+  "seed": 20260802,
+  "skipped_lanes": [
+    {
+      "bucket": "100000",
+      "provider_id": "chroma",
+      "reason": "per-doc ingest ~0.31s/doc would take ~9h"
+    }
+  ]
+}

@@ -276,6 +276,38 @@ def main() -> None:
 
     all_results: list[LaneResult] = []
     skipped: list[dict[str, str]] = []
+    run_started_at = datetime.now(UTC).isoformat()
+    out_dir = args.out or (REPO_ROOT / "docs" / "benchmarks" / "evidence" / datetime.now(UTC).date().isoformat())
+    out_dir.mkdir(parents=True, exist_ok=True)
+    scale_path = out_dir / "scale.json"
+
+    def write_evidence() -> None:
+        payload = {
+            "instrument": "severian scale lane",
+            "seed": _SEED,
+            "buckets": buckets,
+            "lanes": lanes,
+            "query_set": QUERY_SET,
+            "results": [r.to_dict() for r in all_results],
+            "skipped_lanes": skipped,
+            "monotonicity": monotonicity_report(all_results),
+            "run_started_at": run_started_at,
+            "run_state": "complete" if len(all_results) + len(skipped) >= len(buckets) * len(lanes) else "partial",
+            "repro": {
+                "git_sha": subprocess.run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
+                ).stdout.strip(),
+                "generated_corpus_sha256": hashlib.sha256(
+                    json.dumps([c for c in generate_corpus(max(buckets))], sort_keys=True).encode()
+                ).hexdigest(),
+            },
+        }
+        scale_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    # Evidence is written after EVERY lane, not just at the end: a run
+    # killed by timeout/oom still preserves every completed lane instead
+    # of discarding ~45 minutes of work (the 2026-08-03 exit-124 loss).
+    # run_state distinguishes a partial dump from a full one.
     for bucket in buckets:
         docs = generate_corpus(bucket)
         for pid in lanes:
@@ -290,6 +322,7 @@ def main() -> None:
                     "bucket": str(bucket),
                     "reason": "per-doc ingest ~0.31s/doc would take ~9h",
                 })
+                write_evidence()
                 continue
             print(f"  [{bucket:>6} docs] {pid} ...", flush=True)
             try:
@@ -298,30 +331,9 @@ def main() -> None:
                 print(f"    ingest {result.docs_per_sec:,.0f} docs/s  p50 {result.p50:.1f}ms p95 {result.p95:.1f}ms")
             except Exception as exc:  # noqa: BLE001 - lane isolation
                 print(f"    FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+            write_evidence()
 
-    payload = {
-        "instrument": "severian scale lane",
-        "seed": _SEED,
-        "buckets": buckets,
-        "lanes": lanes,
-        "query_set": QUERY_SET,
-        "results": [r.to_dict() for r in all_results],
-        "skipped_lanes": skipped,
-        "monotonicity": monotonicity_report(all_results),
-        "run_started_at": datetime.now(UTC).isoformat(),
-        "repro": {
-            "git_sha": subprocess.run(
-                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
-            ).stdout.strip(),
-            "generated_corpus_sha256": hashlib.sha256(
-                json.dumps([c for c in generate_corpus(max(buckets))], sort_keys=True).encode()
-            ).hexdigest(),
-        },
-    }
-    out_dir = args.out or (REPO_ROOT / "docs" / "benchmarks" / "evidence" / datetime.now(UTC).date().isoformat())
-    out_dir.mkdir(parents=True, exist_ok=True)
-    scale_path = out_dir / "scale.json"
-    scale_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    write_evidence()
     print(f"\nscale evidence written to: {scale_path}")
     print(f"  scale.json sha256: {hashlib.sha256(scale_path.read_bytes()).hexdigest()}")
 

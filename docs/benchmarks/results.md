@@ -62,8 +62,9 @@ Notes: Severian's p95 on the 27-doc manifest corpus is dominated by the
 derive-on-read path (every query re-derives all observations in scope).
 This is the honest cost of the correctness guarantee — see §4 scale lane
 for the steady-state picture, where the hot path (derive=False, the
-production worker model) is ~40–60 ms. Chroma's p95 does not include a
-derive step because Chroma has no equivalent correction pipeline.
+production worker model) is ~52 ms at 1k rising to ~3.2 s at 100k.
+Chroma's p95 does not include a derive step because Chroma has no
+equivalent correction pipeline.
 
 ## 3. Scale lane (independent, synthetic corpus, seed 20260802)
 
@@ -75,28 +76,39 @@ projection that hot queries read. Skipping it at 100k (an earlier script
 version) made the hot loop measure an EMPTY index — ~0.1ms with zero hits,
 which the monotonicity report correctly flagged. See anomaly note below.
 
-| Bucket | Lane | ingest docs/s | cold (ms) | p50 (ms) | p95 (ms) |
+| Bucket | Lane | ingest docs/s | cold (s) | p50 (ms) | p95 (ms) |
 |---|---|---|---|---|---|
-| 1k | severian-sqlite | ~250 | ~14500 | ~40 | ~46 |
-| 1k | severian-postgres | ~490 | ~15000 | ~73 | ~106 |
-| 1k | chroma | ~3 | n/a | ~198 | ~253 |
-| 1k | baseline | ~284000 | n/a | ~1 | ~35 |
-| 10k | severian-sqlite | ~210 | measured | ~350 | ~355 |
-| 10k | severian-postgres | ~475 | measured | ~60 | ~109 |
-| 10k | chroma | ~3 | n/a | (slow lane) | (slow lane) |
-| 10k | baseline | ~284000 | n/a | ~1 | ~35 |
-| 100k | severian-sqlite | measured | measured | measured | measured |
-| 100k | severian-postgres | measured | measured | measured | measured |
-| 100k | baseline | measured | n/a | measured | measured |
+| 1k | severian-sqlite | 248 | 9.9 | 51.5 | 69.9 |
+| 1k | severian-postgres | 170 | 13.9 | 52.4 | 83.3 |
+| 1k | chroma | 4 | n/a | 203.6 | 247.7 |
+| 1k | baseline | 321,026 | n/a | 1.0 | 1.2 |
+| 10k | severian-sqlite | 254 | 149.5 | 330.7 | 382.1 |
+| 10k | severian-postgres | 156 | 156.8 | 52.3 | 98.6 |
+| 10k | chroma | 4 | n/a | 228.6 | 276.6 |
+| 10k | baseline | 298,034 | n/a | 11.5 | 13.9 |
+| 100k | severian-sqlite | 206 | 6,458 (107.6 min) | 3,143.3 | 3,238.6 |
+| 100k | severian-postgres | 160 | 3,147 (52.5 min) | 118.2 | 151.6 |
+| 100k | baseline | 299,896 | n/a | 116.0 | 134.8 |
 | 100k | chroma | **not run** | n/a | n/a | n/a |
+
+All values are independently reproduced from the two evidence files
+(`scale-1k-10k.json`, `scale-100k.json`) in the evidence directory.
+Cold = `cold_first_query_ms` from the trace; p50/p95 = `query_p50_ms` /
+`query_p95_ms` over the 5-query hot loop. The cold derive grows
+super-linearly with corpus size (10k→100k is 10x docs but 43x sqlite /
+20x postgres cold time): the derive pass re-derives every observation,
+and each derivation is heavier as the projection grows.
 
 Chroma 100k skip: chroma's per-document upsert path costs ~0.31 s/doc
 (the adapter protocol is one write per call), so 100k would take ~9 hours.
 That per-doc write cost is itself a competitive finding (see §6).
 
 Full numbers in `scale.json` in the evidence directory. Monotonicity:
-p95 is non-decreasing with bucket size for every measured lane; ingest
-throughput is roughly flat (SQLite ~210–250 docs/s, PG ~475–490 docs/s).
+p95 is non-decreasing with bucket size for every measured lane (verified
+by the in-script monotonicity report in both evidence files); ingest
+throughput is roughly flat (SQLite ~206–254 docs/s, PG ~156–170 docs/s).
+Note the corrected 100k numbers are now genuinely non-decreasing:
+sqlite p95 69.9 → 382.1 → 3,238.6 ms, PG p95 83.3 → 98.6 → 151.6 ms.
 
 ### Anomaly note (2026-08-02 → 03): the bogus 100k "speedup"
 
@@ -119,27 +131,30 @@ hot search returns 5 hits in 1.77 ms. The mechanism is deterministic and
 verified in the fix's regression run.
 
 Fix: the cold query now runs at every bucket (`if pid.startswith("severian")`,
-not `bucket <= 10_000`). The 100k cold cost (~25 min per severian lane)
-is the honest price of a real steady-state number. The corrected run's
-evidence replaces `evidence/2026-08-02/scale.json` (the file present
-before this note was the anomalous first run and must not be used for
-the 100k row).
+not `bucket <= 10_000`). The 100k cold cost is the honest price of a real
+steady-state number — measured at 107.6 min (sqlite) and 52.5 min (PG) per
+lane, which is exactly why the first 150-min run timed out mid-lane. The
+corrected evidence lives in `evidence/2026-08-03/scale-1k-10k.json` and
+`evidence/2026-08-03/scale-100k.json` (the file present before this note
+was the anomalous first run and must not be used for the 100k row).
 
 ## 4. Cold vs hot path (the derive-on-read tradeoff)
 
 Severian's default SDK path (`search(derive=True)`) re-derives every
 observation in scope before retrieval. This is the correctness-first
 design: a freshly ingested observation is always searchable and
-corrections always propagate before a read. The measured cost is O(N):
+corrections always propagate before a read. The measured cold cost is
+super-linear in corpus size:
 
-- 1k docs: ~14.5 s cold query
-- 10k docs: extrapolated ~2.5 min
-- 100k docs: extrapolated ~25 min
+- 1k docs: 9.9 s (sqlite) / 13.9 s (PG) measured
+- 10k docs: 149.5 s / 156.8 s measured (~15x the 1k cost for 10x data)
+- 100k docs: 6,458 s / 3,147 s measured (~43x / ~20x the 10k cost for
+  10x data)
 
 Production deployments use the worker model (`derive=False` hot path):
 the worker derives asynchronously per scope, and steady-state queries run
-at ~40–350 ms (measured). This is the same architecture the release gates
-already prove (crash-safe worker, idempotent drain). The tradeoff is
+at ~52–3,239 ms p50 (measured). This is the same architecture the release
+gates already prove (crash-safe worker, idempotent drain). The tradeoff is
 documented here so operators can choose: synchronous correctness at
 ingest-read cost, or asynchronous derivation with fast reads.
 
@@ -185,25 +200,27 @@ platform that cannot be safely deployed network-exposed.
 
 ### Where Severian is weaker
 
-1. **Cold derive latency (O(N))** — the correctness-first derive-on-read
-   path does not scale to 100k+ observations for synchronous reads.
+1. **Cold derive latency (super-linear)** — the correctness-first
+   derive-on-read path does not scale to 100k+ observations for
+   synchronous reads: 6,458 s (sqlite) / 3,147 s (PG) cold at 100k.
    Mitigation: worker model (derive=False), which is the production
-   deployment and measured at ~40–350 ms.
-2. **Ingest throughput** — ~210–490 docs/s vs baseline's pure in-memory
-   ~284k docs/s. Severian pays for durability and canonical storage
-   (SQLite/PG transactions, FTS + vector indexes). Chroma's ~3 docs/s
+   deployment and measured at ~52 ms–3.2 s p50 across the scale lane.
+2. **Ingest throughput** — ~156–254 docs/s vs baseline's pure in-memory
+   ~300k docs/s. Severian pays for durability and canonical storage
+   (SQLite/PG transactions, FTS + vector indexes). Chroma's ~4 docs/s
    per-doc write path is far slower, but Chroma supports batch ingest.
 3. **No semantic embeddings** — hash+BM25 retrieval is strong on this
    corpus (designed for it) but cannot match true semantic search on
    paraphrase-distant queries. A pluggable embedding provider is the
    documented roadmap item; the harness supports it (provider adapters).
 4. **Latency at manifest scale** — p95 1.4 s on the tiny corpus reflects
-   derive-on-read; hot path is ~40–350 ms and competitive.
+   derive-on-read; hot path is ~52 ms–3.2 s across the scale lane and
+   competitive at small/medium corpus sizes.
 
 ### Performance gaps vs Chroma (measured)
 
-- Chroma query p95 232 ms on 27 docs vs Severian hot-path ~40 ms: Severian
-  wins when derived. Cold path loses badly (1.4 s) — see §4.
+- Chroma query p95 232 ms on 27 docs vs Severian hot-path ~52 ms at 1k:
+  Severian wins when derived. Cold path loses badly (1.4 s) — see §4.
 - Chroma batch ingest (vectorized) vs Severian serial ingest: not directly
   measured here (adapter protocol is per-doc); honest gap to close.
 
@@ -212,11 +229,13 @@ platform that cannot be safely deployed network-exposed.
 On retrieval *quality* Severian is at or above every independently
 reproduced competitor on this corpus — perfect recall/precision, zero
 stale-fact leakage, zero cross-scope leakage, zero fabrication. On
-*latency* it is competitive on the hot path and honestly slow on the cold
-derive path at scale. On *operations* it is deterministically reproducible
-and offline, with a documented (and CVE-free) PostgreSQL deployment, while
-the principal open-source competitor lane is CVE-critical when
-network-exposed.
+*latency* it is competitive on the hot path at small/medium scale (52 ms
+at 1k, 382 ms sqlite / 99 ms PG at 10k) and honestly slow on both the
+cold derive path and the sqlite hot path at 100k (3.2 s) — PG keeps the
+hot path to ~150 ms p95 even at 100k. On *operations* it is
+deterministically reproducible and offline, with a documented (and
+CVE-free) PostgreSQL deployment, while the principal open-source
+competitor lane is CVE-critical when network-exposed.
 
 The gaps that matter are engineering roadmap items, not design flaws:
 pluggable semantic embeddings, batch ingest, and a background derive

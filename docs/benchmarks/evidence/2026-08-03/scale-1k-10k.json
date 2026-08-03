@@ -1,0 +1,168 @@
+{
+  "buckets": [
+    1000,
+    10000
+  ],
+  "instrument": "severian scale lane",
+  "lanes": [
+    "severian-sqlite",
+    "severian-postgres",
+    "chroma",
+    "baseline-lexical"
+  ],
+  "monotonicity": {
+    "baseline-lexical": {
+      "assessed": true,
+      "p95_monotonic_non_decreasing": true,
+      "p95_series": [
+        1.23,
+        13.92
+      ],
+      "throughput_series": [
+        321025.9,
+        298033.8
+      ]
+    },
+    "chroma": {
+      "assessed": true,
+      "p95_monotonic_non_decreasing": true,
+      "p95_series": [
+        247.68,
+        276.64
+      ],
+      "throughput_series": [
+        4.2,
+        3.7
+      ]
+    },
+    "severian-postgres": {
+      "assessed": true,
+      "p95_monotonic_non_decreasing": true,
+      "p95_series": [
+        83.28,
+        98.64
+      ],
+      "throughput_series": [
+        170.2,
+        156.2
+      ]
+    },
+    "severian-sqlite": {
+      "assessed": true,
+      "p95_monotonic_non_decreasing": true,
+      "p95_series": [
+        69.9,
+        382.07
+      ],
+      "throughput_series": [
+        247.9,
+        254.2
+      ]
+    }
+  },
+  "query_set": [
+    "What is the current office address?",
+    "Who founded the company?",
+    "What language does the core service use now?",
+    "What is the private launch date of Project Chrysalis?",
+    "What was the old office address?"
+  ],
+  "repro": {
+    "generated_corpus_sha256": "2e432878c3be8f5992ad22124391469a5f12e28dc23a0544d03540854dbd5a08",
+    "git_sha": "241e68b66c442dd0612739122e6f9cead39a2758"
+  },
+  "results": [
+    {
+      "bucket": 1000,
+      "cold_first_query_ms": 9876.7,
+      "docs_per_sec": 247.9,
+      "ingest_seconds": 4.035,
+      "provider_id": "severian-sqlite",
+      "queries_run": 5,
+      "query_p50_ms": 51.5,
+      "query_p95_ms": 69.9,
+      "query_p99_ms": 69.9
+    },
+    {
+      "bucket": 1000,
+      "cold_first_query_ms": 13864.18,
+      "docs_per_sec": 170.2,
+      "ingest_seconds": 5.876,
+      "provider_id": "severian-postgres",
+      "queries_run": 5,
+      "query_p50_ms": 52.43,
+      "query_p95_ms": 83.28,
+      "query_p99_ms": 83.28
+    },
+    {
+      "bucket": 1000,
+      "cold_first_query_ms": 0.0,
+      "docs_per_sec": 4.2,
+      "ingest_seconds": 239.131,
+      "provider_id": "chroma",
+      "queries_run": 5,
+      "query_p50_ms": 203.64,
+      "query_p95_ms": 247.68,
+      "query_p99_ms": 247.68
+    },
+    {
+      "bucket": 1000,
+      "cold_first_query_ms": 0.0,
+      "docs_per_sec": 321025.9,
+      "ingest_seconds": 0.003,
+      "provider_id": "baseline-lexical",
+      "queries_run": 5,
+      "query_p50_ms": 0.98,
+      "query_p95_ms": 1.23,
+      "query_p99_ms": 1.23
+    },
+    {
+      "bucket": 10000,
+      "cold_first_query_ms": 149462.69,
+      "docs_per_sec": 254.2,
+      "ingest_seconds": 39.343,
+      "provider_id": "severian-sqlite",
+      "queries_run": 5,
+      "query_p50_ms": 330.68,
+      "query_p95_ms": 382.07,
+      "query_p99_ms": 382.07
+    },
+    {
+      "bucket": 10000,
+      "cold_first_query_ms": 156802.63,
+      "docs_per_sec": 156.2,
+      "ingest_seconds": 64.018,
+      "provider_id": "severian-postgres",
+      "queries_run": 5,
+      "query_p50_ms": 52.27,
+      "query_p95_ms": 98.64,
+      "query_p99_ms": 98.64
+    },
+    {
+      "bucket": 10000,
+      "cold_first_query_ms": 0.0,
+      "docs_per_sec": 3.7,
+      "ingest_seconds": 2720.388,
+      "provider_id": "chroma",
+      "queries_run": 5,
+      "query_p50_ms": 228.62,
+      "query_p95_ms": 276.64,
+      "query_p99_ms": 276.64
+    },
+    {
+      "bucket": 10000,
+      "cold_first_query_ms": 0.0,
+      "docs_per_sec": 298033.8,
+      "ingest_seconds": 0.034,
+      "provider_id": "baseline-lexical",
+      "queries_run": 5,
+      "query_p50_ms": 11.51,
+      "query_p95_ms": 13.92,
+      "query_p99_ms": 13.92
+    }
+  ],
+  "run_started_at": "2026-08-03T15:50:10.733881+00:00",
+  "run_state": "complete",
+  "seed": 20260802,
+  "skipped_lanes": []
+}
