@@ -28,8 +28,8 @@ handoff updated to reflect closure + re-pass to 3rd party.
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 0** | Verify base (git/pytest/mypy/ruff/PG/manifest/5-doc/1k scale) | DONE (base verified: 228/36, clean) |
-| **Phase E** | P2 residuals: E-1 ordering, E-2 root policy, E-3 domain constraints, E-4 delete smoke, E-5 evidence re-stamp | IN PROGRESS |
-| **Phase G** | Governance: G-1 merge audit→main, G-2 publish decision, G-3 CI doc, G-4 hold | PENDING |
+| **Phase E** | P2 residuals: E-1 ordering, E-2 root policy, E-3 domain constraints, E-4 delete smoke, E-5 evidence re-stamp | DONE |
+| **Phase G** | Governance: G-1 merge audit→main, G-2 publish decision, G-3 CI doc, G-4 hold | PARTIAL (G-1 done, G-2/G-3 verified, G-4 hold) |
 | **Phase F** | Eval-process: all repo-side fixes already FIXED (F-1..F-4); F-5/F-6 auditor notes | VERIFIED DONE (see §F) |
 | **Phase C** | Vendor-claims table (`competitor-claims.md`) | PENDING |
 | **Phase B** | Conversation recollection: B-1 LOCOMO-tier benchmark, B-2 episodic summarization | PENDING |
@@ -221,10 +221,10 @@ benchmark rerun shows no regression on manifest corpus.
 | E-2 root policy | DONE | src/severian/cli/path_policy.py (approved roots, symlink-every-component, traversal); wired export/import; tests/unit/test_path_policy.py (10 tests) |
 | E-3 domain constraints | DONE | models.py: content min_length=1 (Observation+Memory), SHA-256 hash validator; test_models.py |
 | E-4 delete smoke | DONE | git rm docs/benchmarks/phase3-smoke.json; no code/test loads it |
-| E-5 evidence re-stamp | IN PROGRESS | re-running 1k/10k at current commit (proc_cce60f77239d); 100k re-stamp + provenance note |
-| G-1 merge → main | PENDING | — |
-| G-2 publish decision | PENDING | — |
-| G-3 CI doc | PENDING | — |
+| E-5 evidence re-stamp | DONE | 1k/10k re-run at HEAD 9566937 (8 lanes, corpus sha 2e432878, numbers within jitter); 100k git_sha → e6ead47 + provenance note; committed 73bef60 |
+| G-1 merge to main | DONE | merged 6f32354 (--no-ff) into main; 241 passed / mypy / ruff green on main; tree clean |
+| G-2 publish decision | DONE | wheel installed in fresh venv + CLI runs (verified); decision: local install validated, no creds → publish step documented as future action |
+| G-3 CI doc | DONE | already documented in .github/workflows/ci.yml (Chroma optional, platform lanes gated) |
 | F-1..F-4 | DONE | eval verified |
 | C-1 competitor table | DONE | docs/benchmarks/competitor-claims.md (3 sections, verdicts) |
 | B-1 LOCOMO-tier | DONE (honest, improving) | manifest-locomo-tier-v1.json + evidence/2026-08-03-locomo-tier/ + locomo-tier-analysis: after harness fixes (temporal via observation layer, stale-gate exclusion) recall 0.923, temporal 1.000, stale 0.000; residual = A-1 semantic gap + q9/q11 corpus artifacts; committed 2173c63, 783dcd3 |

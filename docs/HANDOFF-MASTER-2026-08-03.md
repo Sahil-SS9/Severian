@@ -137,21 +137,21 @@ yet scheduled).
 | A-1 | **No semantic embeddings** — hash+BM25 only | results.md §6; roadmap T2 | Roadmap technique #1: pluggable Granite R2 97M (Apache-2.0, 60.3 MTEB, 384-dim, CPU). Seam exists (adapter/provider interface). |
 | A-2 | **Super-linear cold derivation** — 9.9 s@1k → 6,458 s@100k (sqlite) | results.md §4; scale evidence | Design consequence of correctness-first derive-on-read. Production worker (derive=False) mitigates. Roadmap technique #3 (ChronoMem versioning/rollback). |
 | A-3 | **Synthetic 27-doc quality corpus** — not real-world | results.md §8 | It is a gate, not universal truth. Real-data probes documented as a future lane, not run. |
-| A-4 | **No Chroma batch-ingest comparison** | results.md §8; roadmap #5 | Adapter protocol is per-doc; Chroma's vectorized batch path unexercised. Roadmap benchmark #5. |
+| A-4 | **No Chroma batch-ingest comparison** | results.md §8; roadmap #5 | **DONE (2026-08-03):** `ingest_batch` protocol + Chroma vectorized override (9566937). Measured: chroma per-doc 2.1, batch 22.8, severian 184.4 docs/s — severian still ~8x faster than chroma's best path. Evidence: `evidence/2026-08-03-batch-compare/`. |
 
-### B. Conversation recollection (Sahil's requirement (d) — NOT yet built)
+### B. Conversation recollection (Sahil's requirement (d) — B-1 measured, B-2 designed/PENDING)
 
 | ID | Issue | Notes |
 |---|---|---|
-| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | Roadmap benchmark #1 (LOCOMO-tier) and #2 (MEMPROBE-style). This is the biggest honest gap vs Mem0/Hindsight/Honcho/SuperMemory narrative. |
+| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.865. Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-03-locomo-tier/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3). |
 | B-2 | No episodic summarization path | MemRefine/EvoMem pattern: long sessions must retrieve as episodes, not 10k raw observations. Roadmap technique #4. |
 | B-3 | No claim may be made about conversation recall until B-1/B-2 exist | Per honest-numbers policy. |
 
-### C. Vendor-claim comparison (Sahil's requirement (b) — policy exists, table not built)
+### C. Vendor-claim comparison (Sahil's requirement (b) — table built, policy locked)
 
 | ID | Issue | Notes |
 |---|---|---|
-| C-1 | `competitor-claims.md` table not yet created | The required artifact: each vendor claim → our measured number on same dimension → verdict (ahead/behind/unverifiable). Rule: same manifest, same harness, vendor-reported stays labelled. |
+| C-1 | `competitor-claims.md` table not yet created | **DONE (2026-08-03):** `docs/benchmarks/competitor-claims.md` — each vendor claim → our measured number on same dimension → verdict (ahead/behind/unverifiable). Same manifest, same harness; vendor-reported stays labelled. (507c491) |
 
 ### D. Weakness analysis vs LLM-wiki research (Sahil's requirement (a) — analysis done, implementation pending)
 
@@ -163,11 +163,11 @@ yet scheduled).
 
 | ID | Issue | Current state | Action |
 |---|---|---|---|
-| E-1 | `list_memories` orders by record `id` (UUID), not time | sqlite.py:539+, postgresql.py:692+ `.order_by(records.c.id)` | Audit flagged "order by random UUID not time". Add `created_at` ordering (or documented decision to keep id). |
-| E-2 | No approved-root policy for export/import destinations | cli/app.py:269-275 refuses symlinks only | Full SEC-04: approved roots, traversal rejection, overwrite policy. Symlink check exists; root policy missing. |
-| E-3 | Domain models permit empty fields / unverified hashes | domain/models.py `content: str` no min-length; `content_hash: str = ""` | Add constraints or document why empty is legal. |
-| E-4 | `phase3-smoke.json` adversarial query marks unrelated `d1` as expected evidence | docs/benchmarks/phase3-smoke.json q5 | Superseded by manifest-v1.json (correct instrument), but the stale smoke file still rewards an unsupported answer. Either fix or delete/mark deprecated. |
-| E-5 | Evidence provenance: scale files record SHA `241e68b`, but neither file exists at that commit | evidence/2026-08-03/*.json | Algorithm unchanged (verified), recorded SHA does not identify exact evidence-producing script state. Handover doc already documents this caveat; ideally re-run or re-stamp evidence. |
+| E-1 | `list_memories` orders by record `id` (UUID), not time | **DONE (507c491):** created_at ordering (payload JSON) + id tiebreak in sqlite.py + postgresql.py for list_memories, list_memories_history, list_audit. Test: `test_list_memories_orders_by_created_at_not_uuid`. |
+| E-2 | No approved-root policy for export/import destinations | **DONE (507c491):** `cli/path_policy.py` — approved roots (SEVERIAN_APPROVED_ROOTS), symlink rejection at every component BEFORE resolve, traversal rejection, overwrite policy; wired into export/import. 10 unit tests. |
+| E-3 | Domain models permit empty fields / unverified hashes | **DONE (507c491):** `Observation.content`/`Memory.content` min_length=1; `content_hash`/`raw_hash` SHA-256 (or empty) validator. Tests added. |
+| E-4 | `phase3-smoke.json` adversarial query marks unrelated `d1` as expected evidence | **DONE (507c491, DECIDED):** stale file deleted (`git rm`). No code/test loads it (only a name string in test_manifest.py, harmless). |
+| E-5 | Evidence provenance: scale files record SHA `241e68b`, but neither file exists at that commit | **DONE (73bef60):** 1k/10k re-run at HEAD 9566937 (8 lanes, same corpus sha, numbers within jitter); 100k git_sha re-stamped to e6ead47 + provenance note. results.md §3 E-5 section added. |
 
 ### F. Eval-process artifacts (from the 3rd-party eval — repo-side fixes done, notes for next auditor)
 
@@ -184,9 +184,9 @@ yet scheduled).
 
 | ID | Issue | Notes |
 |---|---|---|
-| G-1 | `main` is 16 commits behind; audit branch is the only complete branch | Decide: merge audit branch to main (after review) or rename the branch. Nothing ships from `main` today. |
-| G-2 | Release artifact v0.1.0 built but not published anywhere | Wheel/sdist in `dist/`. No registry, no install test beyond local. |
-| G-3 | CI benchmark gate runs platform lanes only; Chroma lane optional | Documented decision; CI enforces the release contract. |
+| G-1 | `main` is 16 commits behind; audit branch is the only complete branch | **DONE (2026-08-03, DECIDED: MERGE):** audit/brutal-critique-v0.1.0 merged into main (6f32354, --no-ff). Full gate green on main: 241 passed, mypy/ruff clean, tree clean. |
+| G-2 | Release artifact v0.1.0 built but not published anywhere | **DONE (2026-08-03):** wheel install verified in fresh venv + CLI runs. Decision recorded: local install validated; no credentials → publishing to a registry stays a documented future action (no secrets preserved). |
+| G-3 | CI benchmark gate runs platform lanes only; Chroma lane optional | **DONE (2026-08-03):** already documented in .github/workflows/ci.yml (comment explains Chroma optional + platform lanes gated); verified present. |
 | G-4 | Kanban conversion on hold (Sahil's instruction) | Roadmap is committed as a document; nothing converted. |
 
 ---
