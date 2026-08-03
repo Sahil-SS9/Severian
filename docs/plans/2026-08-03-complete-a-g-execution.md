@@ -227,12 +227,12 @@ benchmark rerun shows no regression on manifest corpus.
 | G-3 CI doc | PENDING | — |
 | F-1..F-4 | DONE | eval verified |
 | C-1 competitor table | DONE | docs/benchmarks/competitor-claims.md (3 sections, verdicts) |
-| B-1 LOCOMO-tier | DONE (honest fail) | manifest-locomo-tier-v1.json + evidence/2026-08-03-locomo-tier/ + locomo-tier-analysis: severian recall 0.769 (gate FAIL — honest); analysis scopes A-1 fix + temporal-probe harness fix; committed 2173c63 |
-| B-2 episodic | PENDING | — |
-| A-1 embeddings | PENDING | — |
+| B-1 LOCOMO-tier | DONE (honest, improving) | manifest-locomo-tier-v1.json + evidence/2026-08-03-locomo-tier/ + locomo-tier-analysis: after harness fixes (temporal via observation layer, stale-gate exclusion) recall 0.923, temporal 1.000, stale 0.000; residual = A-1 semantic gap + q9/q11 corpus artifacts; committed 2173c63, 783dcd3 |
+| B-2 episodic | DESIGNED, PENDING | spec in plan §B-2 (episode Memory kind, EpisodeService, worker job kind, tests) |
+| A-1 embeddings | PENDING | B-1 proves the gap; needs onnxruntime + model + PG dim migration — next major phase |
 | A-2 versioning | PENDING | — |
 | A-3 real-data probes | PENDING (doc) | — |
-| A-4 batch compare | PENDING | — |
+| A-4 batch compare | DONE | ingest_batch protocol + chroma override; measured chroma batch 22.8 vs per-doc 2.1 docs/s, severian 184.4 (8x faster than chroma best); evidence/2026-08-03-batch-compare/; committed 9566937 |
 | D (impl of A/B) | PENDING | tracked w/ A/B |
 | AUDIT final + marker | PENDING | — |
 
