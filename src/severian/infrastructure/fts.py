@@ -7,6 +7,7 @@ from pathlib import Path
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
+from severian.infrastructure.vector import _STOPWORDS
 
 
 @dataclass(frozen=True)
@@ -93,9 +94,13 @@ class FTS5Index:
         tokens = [
             token.replace('"', '""')
             for token in re.findall(r"[\w]+", query, flags=re.UNICODE)
-            if token.casefold() not in operator_tokens
+            if token.casefold() not in operator_tokens and token.casefold() not in _STOPWORDS
         ]
-        return " AND ".join(f'"{token}"' for token in tokens)
+        # OR semantics: a natural-language query contains filler words
+        # that never match, so AND (FTS5 default) returns nothing for
+        # almost every real query. BM25 ranks rarer terms far above
+        # common ones, so distinctive matches still surface first.
+        return " OR ".join(f'"{token}"' for token in tokens)
 
     @classmethod
     def is_searchable(cls, query: str) -> bool:
@@ -121,3 +126,30 @@ class FTS5Index:
         self.clear(scope)
         for memory in repository.list_memories(scope):
             self.upsert(memory)
+
+    def digest(self, scope: Scope) -> str:
+        """Stable digest over (memory_id, content) pairs in scope."""
+        import hashlib
+
+        rows = self.connection.execute(
+            """SELECT memory_id, content FROM memory_fts
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?
+               ORDER BY memory_id""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        digest = hashlib.sha256()
+        for memory_id, content in rows:
+            digest.update(memory_id.encode())
+            digest.update(b"\x00")
+            digest.update(content.encode())
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def health(self) -> str:
+        """Adapter-neutral probe: returns ``ok`` or ``error``."""
+        try:
+            self.connection.execute("SELECT 1")
+            return "ok"
+        except Exception:  # pragma: no cover - defensive
+            return "error"

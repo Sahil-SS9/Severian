@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "manifest_id": "comparison-v1-2026-08-02",
+  "name": "Severian comparison benchmark v1 — deterministic retrieval quality vs external providers",
+  "corpus": {
+    "id": "comparison-corpus-v1",
+    "version": "v1",
+    "seed": 20260802,
+    "documents": [
+      {"id": "d01", "content": "Ada Lovelace founded a company in 1843.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d02", "content": "Grace Hopper invented COBOL in 1959.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d03", "content": "The old role of the project lead was software engineer.", "scope": "t1/p1/c1/a1/s1", "is_stale": true},
+      {"id": "d04", "content": "The current role of the project lead is research scientist.", "scope": "t1/p1/c1/a1/s1", "supersedes": ["d03"]},
+      {"id": "d05", "content": "Severian stores observations with a five-dimensional scope boundary.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d06", "content": "The API exposes versioned endpoints under /api/v1.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d07", "content": "PostgreSQL backend uses pgvector for the vector projection.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d08", "content": "SQLite is the reference backend with WAL journal mode.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d09", "content": "Derivation jobs are claimed with leases and reaped on expiry.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d10", "content": "A malformed derivation candidate aborts the whole batch atomically.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d11", "content": "The old password manager stored secrets in plain text.", "scope": "t1/p1/c1/a1/s1", "is_stale": true},
+      {"id": "d12", "content": "The current password manager stores secrets using scrypt hashing.", "scope": "t1/p1/c1/a1/s1", "supersedes": ["d11"]},
+      {"id": "d13", "content": "Project Aurora moved from weekly releases to continuous deployment.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d14", "content": "The team chose Python for the core service in 2024.", "scope": "t1/p1/c1/a1/s1", "is_stale": true},
+      {"id": "d15", "content": "The team migrated the core service from Python to Rust in 2025.", "scope": "t1/p1/c1/a1/s1", "supersedes": ["d14"]},
+      {"id": "d16", "content": "Observations preserve raw content as immutable evidence.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d17", "content": "Superseded facts never resurface in default recall.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d18", "content": "Cross-scope access raises NotFoundError from the storage layer.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d19", "content": "The CLI funnels every command through the canonical service.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d20", "content": "Benchmarks run deterministically with a pinned manifest and seed.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d26", "content": "Project Chrysalis is a joint initiative whose launch date is undisclosed.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d27", "content": "The team's office address is documented in the tenant workspace.", "scope": "t1/p1/c1/a1/s1"},
+      {"id": "d21", "content": "Private marker: launch date of Project Chrysalis is 2027-03-01.", "scope": "t2/p2/c2/a2/s2"},
+      {"id": "d22", "content": "Project Chrysalis uses a hardware security module for key custody.", "scope": "t2/p2/c2/a2/s2"},
+      {"id": "d23", "content": "The finance team approves budgets over fifty thousand pounds.", "scope": "t2/p2/c2/a2/s2"},
+      {"id": "d24", "content": "The old office address was 10 Downing Lane.", "scope": "t2/p2/c2/a2/s2", "is_stale": true},
+      {"id": "d25", "content": "The current office address is 42 Example Street.", "scope": "t2/p2/c2/a2/s2", "supersedes": ["d24"]}
+    ]
+  },
+  "queries": [
+    {
+      "id": "q1",
+      "kind": "fact",
+      "query": "Who founded a company in 1843?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d01", "weight": 1.0}]
+    },
+    {
+      "id": "q2",
+      "kind": "fact",
+      "query": "Who invented COBOL?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d02", "weight": 1.0}]
+    },
+    {
+      "id": "q3",
+      "kind": "paraphrase",
+      "query": "Which woman created the COBOL programming language?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d02", "weight": 1.0}]
+    },
+    {
+      "id": "q4",
+      "kind": "temporal",
+      "query": "What is the current role of the project lead?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d04", "weight": 1.0}]
+    },
+    {
+      "id": "q5",
+      "kind": "temporal",
+      "query": "How are secrets stored by the password manager today?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d12", "weight": 1.0}]
+    },
+    {
+      "id": "q6",
+      "kind": "correction",
+      "query": "Which language does the core service use now?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d15", "weight": 1.0}]
+    },
+    {
+      "id": "q7",
+      "kind": "multi_source",
+      "query": "What does Severian do with raw observation content?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {"document_id": "d16", "weight": 0.5},
+        {"document_id": "d05", "weight": 0.5}
+      ]
+    },
+    {
+      "id": "q8",
+      "kind": "paraphrase",
+      "query": "How does the system keep old facts from reappearing?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d17", "weight": 1.0}]
+    },
+    {
+      "id": "q9",
+      "kind": "fact",
+      "query": "What happens on a malformed derivation candidate?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d10", "weight": 1.0}]
+    },
+    {
+      "id": "q10",
+      "kind": "fact",
+      "query": "Which journal mode does SQLite use in the reference backend?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d08", "weight": 1.0}]
+    },
+    {
+      "id": "q11",
+      "kind": "adversarial",
+      "query": "What is the private launch date of Project Chrysalis?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d26", "weight": 1.0}]
+    },
+    {
+      "id": "q12",
+      "kind": "negative",
+      "query": "Who walked on the surface of Mars in 1972?",
+      "scope": "t1/p1/c1/a1/s1",
+      "answerable": false,
+      "expected_evidence": []
+    },
+    {
+      "id": "q13",
+      "kind": "adversarial",
+      "query": "What is the office address of the team?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [{"document_id": "d27", "weight": 1.0}]
+    },
+    {
+      "id": "q14",
+      "kind": "paraphrase",
+      "query": "Which component handles key custody for Project Chrysalis?",
+      "scope": "t2/p2/c2/a2/s2",
+      "expected_evidence": [{"document_id": "d22", "weight": 1.0}]
+    },
+    {
+      "id": "q15",
+      "kind": "fact",
+      "query": "What is the current office address?",
+      "scope": "t2/p2/c2/a2/s2",
+      "expected_evidence": [{"document_id": "d25", "weight": 1.0}]
+    },
+    {
+      "id": "q16",
+      "kind": "adversarial",
+      "query": "What was the old office address?",
+      "scope": "t2/p2/c2/a2/s2",
+      "expected_evidence": [{"document_id": "d25", "weight": 1.0}]
+    }
+  ],
+  "providers": [
+    {
+      "id": "severian-sqlite",
+      "kind": "severian",
+      "backend": "sqlite",
+      "model": {"id": "severian/hash+fts", "prompt_version": "prompt-v1"},
+      "config": {"dimension": 256}
+    },
+    {
+      "id": "severian-postgres",
+      "kind": "severian",
+      "backend": "postgresql",
+      "model": {"id": "severian/hash+fts", "prompt_version": "prompt-v1"},
+      "config": {"dimension": 256}
+    },
+    {
+      "id": "chroma",
+      "kind": "external",
+      "vendor": "ChromaDB",
+      "deployment": "self-hosted",
+      "model": {"id": "chroma-default-embedding", "prompt_version": "n/a"},
+      "config": {"note": "CVE-2026-45829 critical unpatched; local-only use"}
+    },
+    {
+      "id": "baseline-lexical",
+      "kind": "external",
+      "vendor": "Baseline (bag-of-words)",
+      "deployment": "self-hosted",
+      "model": {"id": "tf-dot-product", "prompt_version": "n/a"},
+      "config": {}
+    },
+    {
+      "id": "mem0",
+      "kind": "external",
+      "vendor": "Mem0",
+      "deployment": "hosted",
+      "model": {"id": "mem0-token-efficient-2026", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://mem0.ai/blog/state-of-ai-agent-memory-2026"},
+      "vendor_reported_only": true
+    },
+    {
+      "id": "hindsight",
+      "kind": "external",
+      "vendor": "Hindsight",
+      "deployment": "hosted",
+      "model": {"id": "hindsight-default", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://hindsight.so/"},
+      "vendor_reported_only": true
+    },
+    {
+      "id": "honcho",
+      "kind": "external",
+      "vendor": "Honcho",
+      "deployment": "hosted",
+      "model": {"id": "honcho-default", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://honcho.dev/"},
+      "vendor_reported_only": true
+    },
+    {
+      "id": "supermemory",
+      "kind": "external",
+      "vendor": "SuperMemory",
+      "deployment": "hosted",
+      "model": {"id": "supermemory-default", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://supermemory.ai/"},
+      "vendor_reported_only": true
+    },
+    {
+      "id": "mempalace",
+      "kind": "external",
+      "vendor": "MemPalace",
+      "deployment": "hosted",
+      "model": {"id": "mempalace-default", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://mempalace.ai/"},
+      "vendor_reported_only": true
+    },
+    {
+      "id": "mnemosyne",
+      "kind": "external",
+      "vendor": "Mnemosyne",
+      "deployment": "hosted",
+      "model": {"id": "mnemosyne-default", "prompt_version": "vendor"},
+      "config": {"reference_url": "https://github.com/NousResearch/hermes-agent"},
+      "vendor_reported_only": true
+    }
+  ],
+  "metrics": [
+    "recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
+    "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
+    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"
+  ],
+  "release_gate": {
+    "min_recall_at_10": 0.95,
+    "min_citation_precision": 1.0,
+    "max_stale_fact_rate": 0.0,
+    "max_cross_scope_leakage": 0.0,
+    "max_unsupported_answer_rate": 0.0,
+    "require_external_providers": 1
+  }
+}

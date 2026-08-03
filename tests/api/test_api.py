@@ -19,7 +19,7 @@ from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService
-from severian.domain.models import Collection
+from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -185,4 +185,138 @@ def test_search_rejects_missing_query(client):
         "/api/v1/search",
         json={"scope": _scope_payload(), "limit": 5},
     )
+    assert response.status_code == 422
+
+
+# -- P0-6: scope is authorization, not a client-supplied selector ---------
+
+
+def _principal_client(tmp_path: Path):
+    """Build a client with a bound principal (tenant t1 / profile p1)."""
+    repo = SQLiteRepository(tmp_path / "severian-p.db")
+    repo.initialize()
+    repo.create_collection(Collection(id="c1", tenant_id="t1", name="Primary"))
+    fts = FTS5Index(tmp_path / "fts-p.db")
+    vector = LocalVectorIndex(tmp_path / "vectors-p.db", HashEmbedding(dimension=64))
+    service = BuildMemoryService(
+        repository=repo,
+        ingestion=IngestionService(repo),
+        retrieval=RetrievalService(repo, fts, vector),
+        projection=ProjectionCoordinator(repo, fts, vector),
+        derivation=DerivationService(repo),
+        context=ContextAssembler(),
+    )
+    app = create_app(
+        service=service,
+        gateway=lambda: FakeGateway(),
+        principal=Scope(
+            tenant_id="t1",
+            profile_id="p1",
+            collection_id="c1",
+            agent_id="a1",
+            session_id="s1",
+        ),
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+    fts.close()
+    vector.close()
+    repo.close()
+
+
+def test_principal_rejects_cross_tenant_scope(tmp_path):
+    # P0-6 repro: a client could claim any tenant/profile; the API bound
+    # no principal, so scope was a pure selector. With a principal bound,
+    # claiming a foreign tenant must be 403 (authorization), never 422
+    # (validation) — otherwise existence can be probed via error codes.
+    test_client = next(_principal_client(tmp_path))
+    for path, payload in (
+        ("/api/v1/observations", {"scope": _scope_payload(tenant="evil"), "content": "x", "source": {}}),
+        (
+            "/api/v1/search",
+            {"scope": _scope_payload(tenant="evil"), "query": "x", "limit": 5, "derive": False},
+        ),
+    ):
+        response = test_client.post(path, json=payload)
+        assert response.status_code == 403
+
+
+def test_principal_rejects_cross_profile_scope(tmp_path):
+    test_client = next(_principal_client(tmp_path))
+    response = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(profile="other"), "content": "x", "source": {}},
+    )
+    assert response.status_code == 403
+
+
+def test_principal_accepts_matching_scope(tmp_path):
+    test_client = next(_principal_client(tmp_path))
+    response = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(), "content": "authorized", "source": {}},
+    )
+    assert response.status_code == 201
+    assert response.json()["scope"]["tenant_id"] == "t1"
+    assert response.json()["scope"]["profile_id"] == "p1"
+
+
+# -- P1-4: memory detail endpoint -----------------------------------------
+
+def test_memory_endpoint_resolves_derived_memory(client):
+    # P1-4 repro: search returns memory ids; the dashboard detail route
+    # called the OBSERVATION endpoint with a memory id, so derived
+    # memories 404'd. The memories endpoint must resolve any hit.
+    test_client, service, gateway = client
+    ingest = test_client.post(
+        "/api/v1/observations",
+        json={"scope": _scope_payload(), "content": "Severian stores observations", "source": {}},
+    )
+    assert ingest.status_code == 201
+
+    # Drain the derive queue so a derived memory exists (real path).
+    from severian.application.derivation import DerivationService
+    from severian.application.projections import ProjectionCoordinator
+    from severian.application.worker import DerivationWorker
+
+    repo = service._repository
+    worker = DerivationWorker(
+        repo,
+        DerivationService(repo),
+        ProjectionCoordinator(repo, service._projection.lexical, service._projection.vector),
+    )
+    worker.drain(worker_id="api-test", gateway=gateway, max_jobs=10)
+
+    search = test_client.post(
+        "/api/v1/search",
+        json={"scope": _scope_payload(), "query": "Severian", "limit": 5, "derive": False},
+    )
+    assert search.status_code == 200
+    hits = search.json()["hits"]
+    assert hits, "expected at least one derived memory hit"
+    memory_id = hits[0]["memory_id"]
+
+    detail = test_client.get(
+        f"/api/v1/memories/{memory_id}", params=_scope_payload()
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["memory_id"] == memory_id
+    assert body["content"]
+    assert body["kind"] == "fact"
+
+
+def test_memory_endpoint_is_scope_isolated(client):
+    test_client, _service, _gateway = client
+    response = test_client.get(
+        "/api/v1/memories/does-not-exist", params=_scope_payload(profile="p2")
+    )
+    assert response.status_code == 404
+
+
+def test_memory_endpoint_scope_validation_is_422_not_500(client):
+    # P1-4 repro: ScopeModel was built outside the route try in the
+    # observation detail route; a missing scope dimension became 500.
+    test_client, _service, _gateway = client
+    response = test_client.get("/api/v1/memories/abc", params={"profile_id": "p1"})
     assert response.status_code == 422

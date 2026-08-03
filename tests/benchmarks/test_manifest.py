@@ -9,8 +9,10 @@ Severian against stub external adapters through the same query set.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,7 +25,7 @@ from severian.benchmarks.manifest import (
 from severian.benchmarks.runner import BenchmarkRunner, ProviderAdapter, ProviderQueryResponse
 
 
-def _minimal_manifest() -> dict[str, object]:
+def _minimal_manifest() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "manifest_id": "bench-2026-07-31-001",
@@ -118,7 +120,7 @@ def _minimal_manifest() -> dict[str, object]:
     }
 
 
-def test_manifest_round_trip(tmp_path: Path):
+def test_manifest_round_trip(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     manifest_path = tmp_path / "bench.json"
     manifest_path.write_text(json.dumps(payload))
@@ -128,7 +130,7 @@ def test_manifest_round_trip(tmp_path: Path):
     assert manifest.release_gate.require_external_providers == 2
 
 
-def test_manifest_rejects_unknown_schema_version(tmp_path: Path):
+def test_manifest_rejects_unknown_schema_version(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     payload["schema_version"] = 99
     manifest_path = tmp_path / "bench.json"
@@ -137,7 +139,7 @@ def test_manifest_rejects_unknown_schema_version(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_manifest_rejects_invalid_metric(tmp_path: Path):
+def test_manifest_rejects_invalid_metric(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     payload["metrics"] = ["totally_made_up_metric"]
     manifest_path = tmp_path / "bench.json"
@@ -146,7 +148,7 @@ def test_manifest_rejects_invalid_metric(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_manifest_requires_two_external_providers(tmp_path: Path):
+def test_manifest_requires_two_external_providers(tmp_path: Path) -> None:
     payload = _minimal_manifest()
     # Keep only severian
     payload["providers"] = [payload["providers"][0]]
@@ -156,12 +158,12 @@ def test_manifest_requires_two_external_providers(tmp_path: Path):
         load_manifest(manifest_path)
 
 
-def test_validate_manifest_passes_for_minimal():
+def test_validate_manifest_passes_for_minimal() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
     assert validate_manifest(manifest) is manifest
 
 
-def test_runner_executes_queries_through_each_provider():
+def test_runner_executes_queries_through_each_provider() -> None:
     payload = _minimal_manifest()
     manifest = BenchmarkManifest.model_validate(payload)
 
@@ -170,10 +172,10 @@ def test_runner_executes_queries_through_each_provider():
         provider_id: str
         documents: list[tuple[str, str]]
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str):
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -189,10 +191,10 @@ def test_runner_executes_queries_through_each_provider():
     class FakeSeverian(ProviderAdapter):
         documents: list[tuple[str, str]]
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str):
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -233,17 +235,17 @@ def test_runner_executes_queries_through_each_provider():
         assert external.citation_precision == 1.0
 
 
-def test_runner_computes_stale_temporal_scope_and_unsupported_metrics():
+def test_runner_computes_stale_temporal_scope_and_unsupported_metrics() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
 
     @dataclass
     class AdversarialAdapter(ProviderAdapter):
         closed: bool = False
 
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             if query == "Who founded a company?":
                 item = {"document_id": "d2", "citation": "d2"}
             elif query == "What is current?":
@@ -271,16 +273,18 @@ def test_runner_computes_stale_temporal_scope_and_unsupported_metrics():
     assert adapters["severian"].closed is True
 
 
-def test_runner_rejects_response_without_explicit_cost():
+def test_runner_rejects_response_without_explicit_cost() -> None:
     manifest = BenchmarkManifest.model_validate(_minimal_manifest())
 
     @dataclass
     class MissingCostAdapter(ProviderAdapter):
-        def ingest(self, document_id: str, content: str, *, scope: str) -> None:
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str):
-            return [{"document_id": "d1"}]
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
+            # Deliberately violates the protocol: returns a raw list so
+            # the runner's validator must reject it.
+            return [{"document_id": "d1"}]  # type: ignore[return-value]
 
         def close(self) -> None:
             return None
@@ -290,3 +294,105 @@ def test_runner_rejects_response_without_explicit_cost():
             manifest=manifest,
             adapters={provider.id: MissingCostAdapter() for provider in manifest.providers},
         ).run()
+
+
+def test_runner_allow_missing_skips_absent_adapter_and_surfaces_skipped_lane() -> None:
+    manifest = BenchmarkManifest.model_validate(_minimal_manifest())
+
+    @dataclass
+    class PerfectAdapter(ProviderAdapter):
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
+            return None
+
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
+            # Return the expected evidence for the matching query and
+            # abstain (empty result) on unanswerable queries so every
+            # platform metric passes the gate.
+            for q in manifest.queries:
+                if q.query == query:
+                    if not q.expected_evidence:
+                        return ProviderQueryResponse(items=[], cost_usd=0.0)
+                    expected = q.expected_evidence[0].document_id
+                    return ProviderQueryResponse(items=[{"document_id": expected, "citation": expected}], cost_usd=0.0)
+            return ProviderQueryResponse(items=[], cost_usd=0.0)
+
+        def close(self) -> None:
+            return None
+
+    # Provide only one of the two providers: the other is 'missing'.
+    present = next(p for p in manifest.providers if p.kind == "severian")
+    adapters = {present.id: PerfectAdapter()}
+    result = BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=True).run()
+
+    assert present.id in result.results
+    assert result.skipped_lanes == [p.id for p in manifest.providers if p.id != present.id]
+    # Skipped lanes are surfaced, never silently passed. The platform lane
+    # itself passes every metric; only the manifest-level external-provider
+    # contract fails because the comparison lanes are absent.
+    assert result.gate_passed is False
+    assert result.gate_failures.get("__manifest__") == ["external_provider_count"]
+    assert present.id not in result.gate_failures
+
+
+def test_runner_allow_missing_false_raises_on_missing_adapter() -> None:
+    manifest = BenchmarkManifest.model_validate(_minimal_manifest())
+
+    @dataclass
+    class PerfectAdapter(ProviderAdapter):
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
+            return None
+
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
+            return ProviderQueryResponse(items=[], cost_usd=0.0)
+
+        def close(self) -> None:
+            return None
+
+    present = next(p for p in manifest.providers if p.kind == "severian")
+    adapters = {present.id: PerfectAdapter()}
+    with pytest.raises(ValueError, match="missing"):
+        BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=False).run()
+
+
+def test_runner_gate_only_checks_severian_kind_providers() -> None:
+    """Competitor failures are reported but never block the release gate."""
+    manifest = BenchmarkManifest.model_validate(_minimal_manifest())
+
+    @dataclass
+    class PerfectSeverian(ProviderAdapter):
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
+            return None
+
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
+            for q in manifest.queries:
+                if q.query == query:
+                    if not q.expected_evidence:
+                        return ProviderQueryResponse(items=[], cost_usd=0.0)
+                    expected = q.expected_evidence[0].document_id
+                    return ProviderQueryResponse(items=[{"document_id": expected, "citation": expected}], cost_usd=0.0)
+            return ProviderQueryResponse(items=[], cost_usd=0.0)
+
+        def close(self) -> None:
+            return None
+
+    @dataclass
+    class TerribleCompetitor(ProviderAdapter):
+        def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
+            return None
+
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
+            # Deliberately awful: wrong document, no citation.
+            return ProviderQueryResponse(items=[{"document_id": "wrong", "citation": "wrong"}], cost_usd=0.0)
+
+        def close(self) -> None:
+            return None
+
+    adapters: dict[str, ProviderAdapter] = {}
+    for provider in manifest.providers:
+        adapters[provider.id] = PerfectSeverian() if provider.kind == "severian" else TerribleCompetitor()
+
+    result = BenchmarkRunner(manifest=manifest, adapters=adapters).run()
+    assert result.gate_passed is True
+    # Competitor results are still present for comparison.
+    for provider in manifest.providers:
+        assert provider.id in result.results

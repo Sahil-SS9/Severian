@@ -41,6 +41,17 @@ class CorpusDocument(BaseModel):
     content: str
     scope: str
     is_stale: bool = False
+    # Document ids this document supersedes. The runner passes these to
+    # adapters at ingest so a capable provider (Severian) can exercise
+    # its correction/supersession machinery; naive providers ignore it
+    # and are expected to fail the stale-fact gate.
+    supersedes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_supersedes(self) -> CorpusDocument:
+        if self.id in self.supersedes:
+            raise ManifestValidationError(f"document {self.id!r} cannot supersede itself")
+        return self
 
 
 class CorpusSpec(BaseModel):
@@ -80,11 +91,21 @@ class ProviderSpec(BaseModel):
     backend: str | None = None
     model: ModelSpec
     config: dict[str, Any] = Field(default_factory=dict)
+    # When True the provider is NOT run by the harness; its metrics are
+    # recorded from the vendor's own publications/docs with a citation
+    # (``config.reference_url`` required). Vendor-reported providers
+    # never count toward the live release gate.
+    vendor_reported_only: bool = False
 
     @model_validator(mode="after")
     def _require_external_deployment(self) -> ProviderSpec:
-        if self.kind == "external" and self.deployment not in {"hosted", "self-hosted"}:
+        if self.kind == "external" and not self.vendor_reported_only and self.deployment not in {
+            "hosted",
+            "self-hosted",
+        }:
             raise ValueError("external providers require hosted or self-hosted deployment")
+        if self.vendor_reported_only and not self.config.get("reference_url"):
+            raise ValueError("vendor_reported_only providers require config.reference_url")
         return self
 
 
@@ -130,7 +151,11 @@ class BenchmarkManifest(BaseModel):
     @model_validator(mode="after")
     def _check_provider_counts(self) -> BenchmarkManifest:
         severian = [provider for provider in self.providers if provider.kind == "severian"]
-        externals = [provider for provider in self.providers if provider.kind == "external"]
+        # Only LIVE externals count toward the release gate; vendor-reported
+        # providers are informational and never satisfy the gate.
+        externals = [
+            provider for provider in self.providers if provider.kind == "external" and not provider.vendor_reported_only
+        ]
         if not severian:
             raise ManifestValidationError("manifest must include at least one Severian provider")
         if len(externals) < self.release_gate.require_external_providers:
@@ -138,12 +163,18 @@ class BenchmarkManifest(BaseModel):
                 "manifest requires at least "
                 f"{self.release_gate.require_external_providers} external providers; got {len(externals)}"
             )
-        if not any(provider.deployment == "hosted" for provider in externals):
-            raise ManifestValidationError("manifest must include at least one hosted external provider")
-        if not any(provider.deployment == "self-hosted" for provider in externals):
-            raise ManifestValidationError(
-                "manifest must include at least one self-hosted/open-source external provider"
-            )
+        # The hosted+self-hosted distribution requirement only applies when
+        # the gate asks for at least two live externals (the release
+        # contract). A comparison manifest that runs a single self-hosted
+        # lane and carries the rest as vendor-reported citations must be
+        # validatable now, without an unreachable hosted requirement.
+        if self.release_gate.require_external_providers >= 2:
+            if not any(provider.deployment == "hosted" for provider in externals):
+                raise ManifestValidationError("manifest must include at least one hosted external provider")
+            if not any(provider.deployment == "self-hosted" for provider in externals):
+                raise ManifestValidationError(
+                    "manifest must include at least one self-hosted/open-source external provider"
+                )
         return self
 
     @model_validator(mode="after")

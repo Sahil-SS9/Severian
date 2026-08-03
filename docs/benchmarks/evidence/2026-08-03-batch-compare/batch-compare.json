@@ -1,0 +1,22 @@
+{
+  "docs": 200,
+  "instrument": "A-4 chroma batch-ingest comparison",
+  "results": {
+    "chroma_batch": {
+      "docs_per_sec": 22.8,
+      "seconds": 8.785
+    },
+    "chroma_batch_speedup_vs_perdoc": 0.09,
+    "chroma_per_doc": {
+      "docs_per_sec": 2.1,
+      "seconds": 96.24
+    },
+    "severian_sqlite_per_doc": {
+      "docs_per_sec": 184.4,
+      "seconds": 1.085
+    }
+  },
+  "run_started_at": "2026-08-03T22:38:06.497492+00:00",
+  "scope": "t1/p1/c1/a1/s1",
+  "seed": 20260803
+}

@@ -174,3 +174,43 @@ def test_client_propagates_server_errors_with_safe_detail():
     client = SeverianClient(base_url="http://testserver", transport=transport)  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="500"):
         client.ingest_observation(scope=SDKScope(**_scope_dict()), content="x", source={})
+
+
+def test_real_transport_500_raises_severian_error_not_http_status_error():
+    # P1-4 repro: the real HTTPX transport called raise_for_status()
+    # before the client could map non-2xx responses, so a 500 surfaced
+    # as httpx.HTTPStatusError instead of SeverianError. The transport
+    # must pass the response through untouched.
+    import http.server
+    import threading
+
+    import httpx
+
+    from severian.sdk.client import SeverianError
+
+    class _BoomHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 (stdlib naming)
+            body = b'{"detail":"internal error"}'
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _BoomHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    client = SeverianClient(base_url=base)
+    try:
+        with pytest.raises(SeverianError) as excinfo:
+            client.ingest_observation(scope=SDKScope(**_scope_dict()), content="x", source={})
+        assert excinfo.value.status_code == 500
+        assert not isinstance(excinfo.value, httpx.HTTPStatusError)
+    finally:
+        client.close()
+        server.shutdown()
+        thread.join(timeout=2)

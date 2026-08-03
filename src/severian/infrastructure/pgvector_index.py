@@ -158,5 +158,37 @@ class PGVectorIndex:
         for memory in repository.list_memories(scope):
             self.upsert(memory)
 
+    def digest(self, scope: Scope) -> str:
+        """Stable digest over (memory_id, content) pairs in scope."""
+        import hashlib
+
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(memory_vectors.c.memory_id, memory_vectors.c.content)
+                .where(
+                    *(
+                        memory_vectors.c[key] == value
+                        for key, value in scope.model_dump().items()
+                    )
+                )
+                .order_by(memory_vectors.c.memory_id)
+            ).all()
+        digest = hashlib.sha256()
+        for memory_id, content in rows:
+            digest.update(str(memory_id).encode())
+            digest.update(b"\x00")
+            digest.update(str(content).encode())
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def health(self) -> str:
+        """Adapter-neutral probe: returns ``ok`` or ``error``."""
+        try:
+            with self.engine.connect() as connection:
+                connection.exec_driver_sql("SELECT 1")
+            return "ok"
+        except Exception:  # pragma: no cover - defensive
+            return "error"
+
 
 __all__ = ["PGVectorIndex"]

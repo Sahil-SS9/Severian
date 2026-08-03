@@ -13,35 +13,17 @@ or index directly: every command funnels through
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from severian.application.derivation import DerivationService
-from severian.application.ingestion import IngestionService
-from severian.application.projections import ProjectionCoordinator
-from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.application.service import BuildMemoryService, MemoryService
+from severian.composition import ServiceBundle, build_bundle
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import NotFoundError, SQLiteRepository
-from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
-
-
-@dataclass
-class ServiceBundle:
-    service: MemoryService
-    repository: SQLiteRepository
-    lexical: FTS5Index
-    vector: LocalVectorIndex
-    gateway: Any
-
-    def close(self) -> None:
-        self.vector.close()
-        self.lexical.close()
-        self.repository.close()
 
 
 def build_default_service(
@@ -49,28 +31,29 @@ def build_default_service(
     database: Path,
     fts: Path,
     vectors: Path,
+    dsn: str | None = None,
 ) -> ServiceBundle:
     """Compose the default on-disk wiring for the CLI.
 
-    This is the only place where the CLI may build a service. The
-    service itself is the canonical write/read path; the CLI only
-    marshals flags into service calls.
+    P1-3: delegates to the shared composition root so CLI, dev launcher,
+    MCP server, and API all wire through one path. The service itself is
+    the canonical write/read path; the CLI only marshals flags into
+    service calls. ``dsn`` switches to the PostgreSQL backend; the
+    SQLite paths are still required for the lexical/vector indexes.
     """
-    repository = SQLiteRepository(database)
-    repository.initialize()
-    lexical = FTS5Index(fts)
-    vector = LocalVectorIndex(vectors, HashEmbedding(dimension=256))
-    service = BuildMemoryService(
-        repository=repository,
-        ingestion=IngestionService(repository),
-        retrieval=RetrievalService(repository, lexical, vector),
-        projection=ProjectionCoordinator(repository, lexical, vector),
-        derivation=DerivationService(repository),
-        context=ContextAssembler(),
-    )
-    gateway = _HashingGateway()
-    return ServiceBundle(
-        service=service, repository=repository, lexical=lexical, vector=vector, gateway=gateway
+    if dsn:
+        return build_bundle(
+            backend="postgresql",
+            dsn=dsn,
+            database=database,
+            fts=fts,
+            vectors=vectors,
+        )
+    return build_bundle(
+        backend="sqlite",
+        database=database,
+        fts=fts,
+        vectors=vectors,
     )
 
 
@@ -282,11 +265,17 @@ def export(
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
         payload = bundle.repository.export_json()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_suffix(output.suffix + ".tmp")
+        # SEC-04: enforce the approved-path policy before creating any
+        # output parent directory — a symlinked ancestor or a path
+        # outside the approved roots must be rejected before mkdir.
+        from severian.cli.path_policy import check_write_destination
+
+        safe_output = check_write_destination(output, purpose="export")
+        safe_output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = safe_output.parent / f".{safe_output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         temporary.write_text(payload, encoding="utf-8")
-        temporary.replace(output)
-        _emit({"format": "severian-v1", "output": str(output), "bytes": len(payload.encode("utf-8"))})
+        os.replace(temporary, safe_output)
+        _emit({"format": "severian-v1", "output": str(safe_output), "bytes": len(payload.encode("utf-8"))})
     finally:
         bundle.close()
 
@@ -315,7 +304,13 @@ def import_(
     """
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
-        payload = input.read_text(encoding="utf-8")
+        # SEC-04: the snapshot source must be an approved regular file —
+        # a symlinked input could redirect the import to an arbitrary
+        # payload the operator did not intend to restore.
+        from severian.cli.path_policy import check_read_source
+
+        safe_input = check_read_source(input, purpose="import")
+        payload = safe_input.read_text(encoding="utf-8")
         bundle.repository.import_json(payload)
         touched_scopes: list[Scope] = []
         if rebuild:
@@ -352,13 +347,35 @@ def import_(
         _emit(
             {
                 "format": "severian-v1",
-                "input": str(input),
+                "input": str(safe_input),
                 "status": "imported",
                 "rebuilt_scopes": [scope.model_dump() for scope in touched_scopes],
             }
         )
     except ValueError as exc:
         raise typer.BadParameter(f"cannot import snapshot: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+@cli.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    dsn: str | None = typer.Option(None, "--dsn", help="PostgreSQL DSN (uses PG backend when set)."),
+) -> None:
+    """Serve the versioned HTTP API (P2: wheel console entry)."""
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        from severian.api.app import create_app
+
+        app = create_app(service=bundle.service, gateway=lambda: bundle.gateway)
+        import uvicorn
+
+        uvicorn.run(app, host=host, port=port)
     finally:
         bundle.close()
 

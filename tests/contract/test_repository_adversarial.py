@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -234,7 +235,15 @@ def test_import_rejects_conflict_and_checksum_tampering(repo):
     conflicting = json.loads(repo.export_json())
     for record in conflicting["records"]:
         if record["id"] == observation.id:
+            # Forge the content coherently (payload content, payload
+            # content_hash, column content_hash, identity key) so the
+            # import passes semantic validation and is rejected at the
+            # existing-record conflict check.
+            digest = hashlib.sha256(b"changed").hexdigest()
             record["payload"]["content"] = "changed"
+            record["payload"]["content_hash"] = digest
+            record["content_hash"] = digest
+            record["identity_key"] = SQLiteRepository._identity(digest)
     conflicting["checksum"] = SQLiteRepository.export_checksum(conflicting["records"])
     with pytest.raises(ConflictError, match="conflict"):
         repo.import_json(json.dumps(conflicting))
@@ -289,3 +298,94 @@ def test_collection_populates_tenant_and_collection_columns(repo):
     assert repo.get_collection("t1", collection.id) == collection
     with pytest.raises(NotFoundError):
         repo.get_collection("t2", collection.id)
+
+
+def test_import_rejects_rechecksummed_scope_metadata_forgery(repo, tmp_path):
+    seed_collection(repo)
+    repo.add_observation(Observation(scope=scope(), content="private"))
+    document = json.loads(repo.export_json())
+    observation_record = next(item for item in document["records"] if item["record_type"] == "observation")
+    observation_record["tenant_id"] = "attacker"
+    document["checksum"] = SQLiteRepository.export_checksum(document["records"])
+
+    restored = SQLiteRepository(tmp_path / "restored.db")
+    restored.initialize()
+    try:
+        with pytest.raises(ValueError, match="payload metadata"):
+            restored.import_json(json.dumps(document))
+        assert restored.list_observations(scope()) == []
+    finally:
+        restored.close()
+
+
+# -- P0-4: job/outbox crash-safety semantics ------------------------------
+
+
+def test_job_claim_leases_and_owner_check_completion(repo):
+    seed_collection(repo)
+    job = repo.enqueue_job(scope(), "derive", {"observation_id": "x"})
+
+    claimed = repo.claim_job("w1")
+    assert claimed.id == job.id
+    assert claimed.status == "running"
+    assert claimed.worker_id == "w1"
+    assert claimed.attempts == 1
+    assert claimed.lease_until is not None
+
+    # Another worker cannot complete it.
+    with pytest.raises(ConflictError, match="owned by another worker"):
+        repo.complete_job(job.id, "done", worker_id="w2")
+
+    # The owning worker completes it; it is gone from pending.
+    done = repo.complete_job(job.id, "done", worker_id="w1")
+    assert done.status == "done"
+    with pytest.raises(NotFoundError, match="no pending job"):
+        repo.claim_job("w3")
+
+
+def test_job_reap_requeues_expired_lease_and_dead_letters_exhausted(repo):
+    seed_collection(repo)
+    first = repo.enqueue_job(scope(), "derive", {"observation_id": "a"})
+
+    # Claim with a short lease, then let it expire.
+    repo.claim_job("w1", lease_seconds=1)
+    assert repo.reap_expired_jobs(now=datetime(2030, 1, 1, tzinfo=UTC), max_attempts=3) == 1
+
+    # Re-claim: attempts incremented; job is not wedged.
+    claimed = repo.claim_job("w1")
+    assert claimed.id == first.id
+    assert claimed.attempts == 2
+
+    # Expire repeatedly; after max_attempts the job dead-letters.
+    for _ in range(5):
+        repo.reap_expired_jobs(now=datetime(2030, 1, 2, tzinfo=UTC), max_attempts=3)
+        try:
+            repo.claim_job("w1")
+        except NotFoundError:
+            break
+    assert repo.reap_expired_jobs(now=datetime(2030, 1, 3, tzinfo=UTC), max_attempts=3) == 0
+    with pytest.raises(NotFoundError, match="no pending job"):
+        repo.claim_job("w1")
+
+
+def test_atomic_ingest_and_enqueue_is_idempotent(repo):
+    seed_collection(repo)
+    observation, job = repo.add_observation_and_enqueue(
+        Observation(scope=scope(), content="evidence", source={"uri": "note://atomic"})
+    )
+    again, job_again = repo.add_observation_and_enqueue(
+        Observation(scope=scope(), content="evidence", source={"uri": "note://atomic"})
+    )
+    assert again.id == observation.id
+    assert job_again.id == job.id
+    assert len(repo.list_observations(scope())) == 1
+
+
+def test_outbox_ack_removes_event_from_pending(repo):
+    seed_collection(repo)
+    event = repo.append_outbox(scope(), "test.created", {"id": "x"})
+    assert [(e.id, e.kind) for e in repo.pending_outbox()] == [(event.id, "test.created")]
+    repo.ack_outbox(event.id)
+    assert repo.pending_outbox() == []
+    with pytest.raises(NotFoundError, match="already acked"):
+        repo.ack_outbox(event.id)

@@ -9,7 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.domain.models import Scope
+from severian.domain.models import Collection, Memory, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -84,7 +84,9 @@ def test_cloud_derivation_is_denied_by_collection_policy(repo):
         )
 
 
-def test_derivation_skips_malformed_gateway_candidates(repo):
+def test_derivation_rejects_malformed_candidates_without_partial_publication(repo):
+    """P0-4: a malformed candidate aborts the whole batch — no partial
+    publication of the valid candidates that preceded it."""
     observation = IngestionService(repo).ingest(scope(), "private", {}).observation
 
     class MalformedGateway:
@@ -93,11 +95,14 @@ def test_derivation_skips_malformed_gateway_candidates(repo):
         is_cloud = False
 
         def derive(self, content: str, *, policy: dict[str, object]):  # type: ignore[no-untyped-def]
-            return [None, "not-a-candidate", 42, {"kind": "fact", "content": "valid"}]
+            return [{"kind": "fact", "content": "valid"}, None, {"kind": "fact", "content": "also-valid"}]
 
-    memories = DerivationService(repo).derive_observation(scope(), observation.id, MalformedGateway(), policy={})
+    with pytest.raises(ValueError, match="malformed derivation candidate"):
+        DerivationService(repo).derive_observation(scope(), observation.id, MalformedGateway(), policy={})
 
-    assert [memory.content for memory in memories] == ["valid"]
+    # Nothing was published — the valid candidate that appeared before
+    # the malformed one must not have been written.
+    assert repo.list_memories(scope()) == []
 
 
 def test_fts_projection_is_scope_aware_and_rebuildable(repo, tmp_path: Path):
@@ -179,3 +184,190 @@ def test_projection_coordinator_tracks_lag_repairs_and_deletes(repo, tmp_path: P
     assert coordinator.status(scope()).in_sync is True
     fts.close()
     vector.close()
+
+
+# -- P0-1: source evidence preservation -----------------------------------
+
+
+def test_ingestion_preserves_raw_evidence_alongside_normalised_content(repo):
+    result = IngestionService(repo).ingest(scope(), "  Hello\r\nWorld  ", {"uri": "note://1"})
+
+    assert result.observation.content == "Hello\nWorld"
+    assert result.observation.raw_content == "  Hello\r\nWorld  "
+    assert result.observation.raw_hash
+    stored = repo.list_observations(scope())[0]
+    assert stored.raw_content == "  Hello\r\nWorld  "
+    assert stored.raw_hash == result.observation.raw_hash
+
+
+def test_ingestion_keeps_distinct_sources_separate_when_normalised_collides(repo):
+    # P0-1 repro: ``①`` from note://A and ``1`` from note://B normalise to
+    # the same content but are DIFFERENT evidence. They must not collapse
+    # into one record.
+    first = IngestionService(repo).ingest(scope(), "①", {"uri": "note://A"})
+    second = IngestionService(repo).ingest(scope(), "1", {"uri": "note://B"})
+
+    assert first.observation.id != second.observation.id
+    assert first.observation.content == second.observation.content == "1"
+    records = repo.list_observations(scope())
+    assert len(records) == 2
+    assert {record.raw_content for record in records} == {"①", "1"}
+
+
+def test_ingestion_same_source_same_raw_evidence_dedupes(repo):
+    first = IngestionService(repo).ingest(scope(), "same", {"uri": "note://A"})
+    second = IngestionService(repo).ingest(scope(), "same", {"uri": "note://A"})
+
+    assert first.observation.id == second.observation.id
+    assert len(repo.list_observations(scope())) == 1
+
+
+# -- P0-2: cloud policy is deny-dominant and provenance is trusted ---------
+
+
+def test_cloud_derivation_cannot_be_enabled_by_caller_policy(repo):
+    # P0-2 repro: stored policy denies cloud; caller passing
+    # ``cloud_allowed: True`` must NOT flip the decision.
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+    repo.create_collection(Collection(id="c", tenant_id="t", name="Primary", policy={"cloud_allowed": False}))
+    cloud = FakeGateway(model_id="cloud/model", is_cloud=True)
+
+    with pytest.raises(CloudPolicyError):
+        DerivationService(repo).derive_observation(
+            scope(), observation.id, cloud, policy={"cloud_allowed": True}
+        )
+
+
+def test_derivation_provenance_comes_from_gateway_not_candidate(repo):
+    # P0-2 repro: a model-produced candidate must not forge model_id /
+    # prompt_version. Provenance is taken from the trusted gateway.
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+
+    class ForgingGateway:
+        model_id = "trusted/model"
+        prompt_version = "trusted-prompt"
+        is_cloud = False
+
+        def derive(self, content: str, *, policy: dict[str, object]):
+            return [{"kind": "fact", "content": "derived", "model_id": "forged/model", "prompt_version": "forged"}]
+
+    memories = DerivationService(repo).derive_observation(
+        scope(), observation.id, ForgingGateway(), policy={}
+    )
+    assert len(memories) == 1
+    assert memories[0].model_id == "trusted/model"
+    assert memories[0].prompt_version == "trusted-prompt"
+
+
+# -- P0-5: active-head reads; superseded facts never resurface -----------
+
+
+def test_list_memories_excludes_superseded_revisions(repo):
+    # P0-5 repro: list_memories used to return every record_type memory
+    # including superseded heads — stale facts resurfaced by default.
+    observation = IngestionService(repo).ingest(scope(), "source", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="old fact",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    revision = repo.revise_memory(
+        scope(), original.id, content="new fact", model_id="local/model", prompt_version="v2"
+    )
+
+    active = repo.list_memories(scope())
+    history = repo.list_memories_history(scope())
+
+    assert [m.id for m in active] == [revision.id]
+    assert {m.id for m in history} == {original.id, revision.id}
+    assert repo.get_memory(scope(), original.id).superseded_by_id == revision.id
+
+
+def test_list_memories_orders_by_created_at_not_uuid(repo):
+    # E-1 repro: list_memories used to order by record id (UUID) which
+    # is random — memory listing was not chronological. Ordering must be
+    # by created_at (then id tiebreak) so lists are stable and temporal.
+    first_obs = IngestionService(repo).ingest(scope(), "first source", {}).observation
+    second_obs = IngestionService(repo).ingest(scope(), "second source", {}).observation
+    first = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="first",
+            source_observation_ids=[first_obs.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    second = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="second",
+            source_observation_ids=[second_obs.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    listed = repo.list_memories(scope())
+    assert [m.id for m in listed] == [first.id, second.id]
+    assert listed[0].created_at <= listed[1].created_at
+
+
+def test_list_memory_revisions_returns_full_chain(repo):
+    observation = IngestionService(repo).ingest(scope(), "source", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="v1",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="p1",
+            confidence=0.8,
+        )
+    )
+    v2 = repo.revise_memory(
+        scope(), original.id, content="v2", model_id="local/model", prompt_version="p2"
+    )
+    v3 = repo.revise_memory(scope(), v2.id, content="v3", model_id="local/model", prompt_version="p3")
+
+    # Naming the middle revision still yields the whole lineage.
+    chain = repo.list_memory_revisions(scope(), v2.id)
+    assert [m.id for m in chain] == [original.id, v2.id, v3.id]
+    assert [m.content for m in chain] == ["v1", "v2", "v3"]
+
+
+def test_source_revision_supersedes_derived_memories(repo):
+    # P0-5 repro: revising the source observation left memories derived
+    # from the OLD head active — zero-stale-facts violated.
+    observation = IngestionService(repo).ingest(scope(), "original claim", {}).observation
+    repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="stale derived fact",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+
+    revision = repo.revise_observation(scope(), observation.id, "corrected claim")
+    superseded = repo.supersede_memories_for_source(scope(), observation.id)
+
+    assert revision.content == "corrected claim"
+    assert superseded == 1
+    # Default reads are active-head only; the stale fact is gone.
+    assert repo.list_memories(scope()) == []
+    # Explicit history preserves the stale head.
+    assert len(repo.list_memories_history(scope())) == 1

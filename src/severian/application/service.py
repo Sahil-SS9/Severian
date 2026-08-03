@@ -14,24 +14,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.ingestion import IngestionResult, IngestionService
+from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
-from severian.domain.models import Observation, Scope
+from severian.domain.errors import NotFoundError
+from severian.domain.models import Memory, Observation, Scope
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.sqlite import NotFoundError
-
-
-# Narrow protocol for the bits of the repository the service depends on.
-# The SQLite repository implements it; adapters cannot reach a wider
-# surface from the service.
-class CanonicalRepository(Protocol):
-    def add_observation(self, observation: Observation) -> Observation: ...
-    def get_observation(self, scope: Scope, observation_id: str) -> Observation: ...
-    def list_observations(self, scope: Scope) -> list[Observation]: ...
 
 
 @dataclass(frozen=True)
@@ -122,6 +114,54 @@ class MemoryService:
         result = self._ingestion.ingest(scope, content, dict(source or {}))
         return ObservationView.from_result(result)
 
+    def correct_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        content: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> Memory:
+        """Correct a derived memory: revise, tombstone the old head from
+        projections, and index the new revision (P0-5).
+
+        The repository records the revision chain; the projection is
+        updated so the stale fact never resurfaces in search.
+        """
+        revision = self._repository.revise_memory(
+            scope,
+            memory_id,
+            content=content,
+            model_id=model_id,
+            prompt_version=prompt_version,
+        )
+        # Tombstone the old projection head; index the replacement.
+        self._projection.remove_memory(memory_id)
+        self._projection.index_memory(revision)
+        return revision
+
+    def revise_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        content: str,
+    ) -> Observation:
+        """Revise a source observation and propagate the correction (P0-5).
+
+        Memories derived from the OLD head are superseded (dropped from
+        default reads and projections); the revised head is re-derived
+        through the same canonical pipeline on the next derive pass.
+        """
+        revision = self._repository.revise_observation(scope, observation_id, content)
+        superseded = self._repository.supersede_memories_for_source(scope, observation_id)
+        if superseded:
+            # The worker's per-scope rebuild will drop the tombstones;
+            # the revise path also converges now so search cannot return
+            # a stale fact before the next drain.
+            self._projection.rebuild(scope)
+        return revision
+
     # -- reads ----------------------------------------------------------
 
     def get_observation(self, scope: Scope, observation_id: str) -> Observation:
@@ -129,6 +169,16 @@ class MemoryService:
         # in SQLite. We forward unchanged; cross-scope access raises
         # ``NotFoundError`` from the storage layer.
         return self._repository.get_observation(scope, observation_id)
+
+    def get_memory(self, scope: Scope, memory_id: str) -> Memory:
+        """Resolve a projected memory by id within scope.
+
+        P1-4: search results are memory ids (both observation-derived
+        and derived memories). The API needs a memory-detail endpoint so
+        the dashboard can open any search hit without assuming it is an
+        observation. Cross-scope access raises ``NotFoundError``.
+        """
+        return self._repository.get_memory(scope, memory_id)
 
     def search(
         self,
@@ -139,6 +189,7 @@ class MemoryService:
         derive: bool = False,
         gateway: DerivationGateway | None = None,
         policy: Mapping[str, Any] | None = None,
+        min_vector_score: float | None = None,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -153,7 +204,12 @@ class MemoryService:
                     scope, observation.id, gateway, policy=dict(policy or {})  # type: ignore[arg-type]
                 )
             self._projection.rebuild(scope)
-        results = self._retrieval.search(scope, query, limit=limit)
+        results = self._retrieval.search(
+            scope,
+            query,
+            limit=limit,
+            min_vector_score=min_vector_score,
+        )
         return [SearchHitView.from_result(item) for item in results]
 
     def assemble_context(
@@ -188,10 +244,10 @@ class MemoryService:
     def health(self) -> HealthReport:
         components: dict[str, str] = {}
         # Repository health: cheap SQL probe if the concrete repository
-        # exposes ``engine`` (SQLiteRepository does). Adapters must not
-        # assume this attribute, so we tolerate absence and treat the
-        # repository as healthy in that case (a no-op repository used in
-        # tests).
+        # exposes ``engine`` (SQLiteRepository and PostgreSQLBackend
+        # both do). Adapters must not assume this attribute, so we
+        # tolerate absence and treat the repository as healthy in that
+        # case (a no-op repository used in tests).
         engine = getattr(self._repository, "engine", None)
         if engine is not None:
             try:
@@ -202,26 +258,12 @@ class MemoryService:
                 components["repository"] = "error"
         else:
             components["repository"] = "ok"
-        if self._lexical is not None:
-            try:
-                self._lexical.connection.execute("SELECT 1")
-                components["lexical"] = "ok"
-            except Exception:  # pragma: no cover - defensive
-                components["lexical"] = "error"
-        else:
-            components["lexical"] = "ok"
-        # Vector index is the second projection wired into the
-        # coordinator; exercise its ``count`` method with a non-empty
-        # probe scope that should always return >=0.
-        vector_index = getattr(self._projection, "vector", None)
-        if vector_index is not None:
-            try:
-                vector_index.connection.execute("SELECT 1")
-                components["vector"] = "ok"
-            except Exception:  # pragma: no cover - defensive
-                components["vector"] = "error"
-        else:
-            components["vector"] = "ok"
+        # Projection health is adapter-neutral: each index probes its own
+        # surface (``connection`` for SQLite, ``engine`` for PostgreSQL),
+        # so a healthy PG/pgvector index reports ok (P1-2).
+        projection_components = self._projection.health()
+        components["lexical"] = projection_components.get("lexical", "ok")
+        components["vector"] = projection_components.get("vector", "ok")
         return HealthReport(ready=all(v == "ok" for v in components.values()), components=components)
 
 

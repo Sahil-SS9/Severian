@@ -45,13 +45,32 @@ class BenchmarkResult:
     results: dict[str, ProviderResult]
     gate_passed: bool
     gate_failures: dict[str, list[str]] = field(default_factory=dict)
+    skipped_lanes: list[str] = field(default_factory=list)
 
 
 class ProviderAdapter(Protocol):
     """Adapter interface every benchmark provider must implement."""
 
-    def ingest(self, document_id: str, content: str, *, scope: str) -> None: ...
-    def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse: ...
+    def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None: ...
+
+    def ingest_batch(
+        self,
+        documents: Iterable[tuple[str, str]],
+        *,
+        scope: str,
+    ) -> None:
+        """Ingest many documents in one call.
+
+        Default implementation falls back to per-document :meth:`ingest`
+        so adapters that only implement the single-write path still
+        work; adapters with a vectorized batch path (Chroma) override it
+        to exercise that path. The batch comparison (roadmap A-4)
+        measures the difference honestly.
+        """
+        for document_id, content in documents:
+            self.ingest(document_id, content, scope=scope)
+
+    def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse: ...
     def close(self) -> None: ...
 
 
@@ -63,17 +82,25 @@ class BenchmarkRunner:
         *,
         manifest: BenchmarkManifest,
         adapters: Mapping[str, ProviderAdapter],
+        allow_missing: bool = False,
     ) -> None:
-        missing = [provider.id for provider in manifest.providers if provider.id not in adapters]
-        if missing:
+        live_providers = [provider for provider in manifest.providers if not provider.vendor_reported_only]
+        missing = [provider.id for provider in live_providers if provider.id not in adapters]
+        if missing and not allow_missing:
             raise ValueError(f"missing adapters for providers: {missing}")
         self._manifest = manifest
         self._adapters = dict(adapters)
+        self._missing = missing
         self._documents = {document.id: document for document in manifest.corpus.documents}
 
     def _ingest(self, adapter: ProviderAdapter) -> None:
         for document in self._manifest.corpus.documents:
-            adapter.ingest(document.id, document.content, scope=document.scope)
+            adapter.ingest(
+                document.id,
+                document.content,
+                scope=document.scope,
+                supersedes=document.supersedes,
+            )
 
     @staticmethod
     def _recall_at_k(expected: Iterable[str], returned_ids: list[str], k: int = 10) -> float:
@@ -127,10 +154,9 @@ class BenchmarkRunner:
         mrrs: list[float] = []
         ndcgs: list[float] = []
         temporal_scores: list[float] = []
+        citation_precisions: list[float] = []
         latencies_ms: list[float] = []
         total_cost = 0.0
-        citation_hits = 0
-        citation_total = 0
         returned_total = 0
         stale_total = 0
         leakage_total = 0
@@ -142,20 +168,38 @@ class BenchmarkRunner:
                 expected_ids = [evidence.document_id for evidence in query.expected_evidence]
                 expected_weights = {evidence.document_id: evidence.weight for evidence in query.expected_evidence}
                 started = time.perf_counter()
-                response = self._validate_response(adapter.query(query.query, limit=10, scope=query.scope))
+                response = self._validate_response(
+                    adapter.query(query.query, limit=10, scope=query.scope, query_kind=query.kind)
+                )
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 total_cost += response.cost_usd
                 latencies_ms.append(elapsed_ms)
                 returned_ids = [str(item.get("document_id", "")) for item in response.items]
                 returned_total += len(returned_ids)
-                citation_total += len(response.items)
-                citation_hits += sum(
-                    1 for item in response.items if str(item.get("citation", "")) in expected_ids
-                )
+                # Rank-aware citation precision: a provider is precise when
+                # the top ``expected_count`` items it returns ARE the
+                # expected evidence. Raw precision over a fixed limit=10
+                # would cap every provider at ~0.1, hiding real differences.
+                expected_count = len(expected_ids)
+                if expected_count == 0:
+                    citation_precisions.append(1.0 if not returned_ids else 0.0)
+                else:
+                    top_expected_window = returned_ids[:expected_count]
+                    citation_precisions.append(
+                        len(set(expected_ids) & set(top_expected_window)) / expected_count
+                    )
                 stale_total += sum(
                     1
                     for document_id in returned_ids
-                    if self._documents.get(document_id) is not None and self._documents[document_id].is_stale
+                    if self._documents.get(document_id) is not None
+                    and self._documents[document_id].is_stale
+                    # Temporal probes explicitly ask for the OLD fact —
+                    # the expected evidence IS a stale doc by design.
+                    # Counting it as a stale-fact error would penalise
+                    # correct historical recall. The stale gate measures
+                    # whether CURRENT facts leak stale superseded ones,
+                    # which is only meaningful on non-temporal queries.
+                    and query.kind != "temporal"
                 )
                 leakage_total += sum(
                     1
@@ -195,7 +239,7 @@ class BenchmarkRunner:
             recall_at_10=sum(recalls) / len(recalls),
             mrr=sum(mrrs) / len(mrrs),
             ndcg_at_10=sum(ndcgs) / len(ndcgs),
-            citation_precision=citation_hits / citation_total if citation_total else 1.0,
+            citation_precision=sum(citation_precisions) / len(citation_precisions) if citation_precisions else 1.0,
             stale_fact_rate=stale_total / returned_total if returned_total else 0.0,
             temporal_accuracy=sum(temporal_scores) / len(temporal_scores),
             cross_scope_leakage=leakage_total / returned_total if returned_total else 0.0,
@@ -208,7 +252,15 @@ class BenchmarkRunner:
     def _evaluate_gate(self, results: dict[str, ProviderResult]) -> dict[str, list[str]]:
         failures: dict[str, list[str]] = {}
         gate = self._manifest.release_gate
+        # The release gate measures the platform under test (kind ==
+        # "severian"). External/competitor lanes are compared and
+        # reported, but their failures never block Severian's release
+        # gate — the strategy's success criteria require Severian to
+        # pass, not the competition.
+        platform_ids = {provider.id for provider in self._manifest.providers if provider.kind == "severian"}
         for provider_id, result in results.items():
+            if provider_id not in platform_ids:
+                continue
             provider_failures: list[str] = []
             if result.recall_at_10 < gate.min_recall_at_10:
                 provider_failures.append("recall_at_10")
@@ -230,13 +282,19 @@ class BenchmarkRunner:
         return failures
 
     def run(self) -> BenchmarkResult:
-        results = {provider.id: self._run_provider(provider.id) for provider in self._manifest.providers}
+        live = [provider for provider in self._manifest.providers if not provider.vendor_reported_only]
+        results = {provider.id: self._run_provider(provider.id) for provider in live if provider.id in self._adapters}
         failures = self._evaluate_gate(results)
+        # Lanes skipped for environmental reasons (e.g. chroma venv not
+        # installed) are recorded visibly in skipped_lanes, never as a
+        # silent pass AND never as a platform gate failure: a missing
+        # competitor lane must not block Severian's own release gate.
         return BenchmarkResult(
             manifest_id=self._manifest.manifest_id,
             results=results,
             gate_passed=not failures,
             gate_failures=failures,
+            skipped_lanes=list(self._missing),
         )
 
 
@@ -245,6 +303,7 @@ def to_jsonable(result: BenchmarkResult) -> dict[str, Any]:
         "manifest_id": result.manifest_id,
         "gate_passed": result.gate_passed,
         "gate_failures": result.gate_failures,
+        "skipped_lanes": result.skipped_lanes,
         "results": {key: asdict(value) for key, value in result.results.items()},
     }
 

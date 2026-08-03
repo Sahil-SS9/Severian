@@ -27,6 +27,7 @@ from severian.backends import (
     check_scope,
 )
 from severian.domain.models import (
+    AuditEvent,
     Collection,
     Entity,
     Event,
@@ -54,23 +55,12 @@ def _scope(**overrides: str) -> Scope:
 
 # -- contract satisfaction ------------------------------------------------
 
-def test_sqlite_backend_satisfies_contract() -> None:
-    assert isinstance(SQLiteRepository, type)
-    assert hasattr(SQLiteRepository, "initialize")
-    assert hasattr(SQLiteRepository, "add_observation")
-    assert hasattr(SQLiteRepository, "get_observation")
-    assert hasattr(SQLiteRepository, "list_observations")
-    assert hasattr(SQLiteRepository, "get_collection")
-    assert hasattr(SQLiteRepository, "add_memory")
-    assert hasattr(SQLiteRepository, "get_memory")
-    assert hasattr(SQLiteRepository, "list_memories")
-    assert hasattr(SQLiteRepository, "enqueue_job")
-    assert hasattr(SQLiteRepository, "claim_job")
-    assert hasattr(SQLiteRepository, "add_entity")
-    assert hasattr(SQLiteRepository, "add_relation")
-    assert hasattr(SQLiteRepository, "export_json")
-    assert hasattr(SQLiteRepository, "import_json")
-    assert hasattr(SQLiteRepository, "backup")
+def test_sqlite_backend_satisfies_contract(tmp_path: Path) -> None:
+    repository = SQLiteRepository(tmp_path / "contract.db")
+    try:
+        assert isinstance(repository, CanonicalRepository)
+    finally:
+        repository.close()
 
 
 def test_postgresql_backend_satisfies_contract() -> None:
@@ -114,6 +104,18 @@ class _FakeRepository:
     def list_observations(self, scope: Scope) -> list[Observation]:
         return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
 
+    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
+        original = self.get_observation(scope, observation_id)
+        revision = original.model_copy(
+            update={
+                "id": Observation(scope=scope, content=content).id,
+                "content": content,
+                "revision_of_id": original.id,
+            }
+        )
+        self._observations[self._key(scope, revision.id)] = revision
+        return revision
+
     def add_memory(self, memory: Memory) -> Memory:
         self._memories[self._key(memory.scope, memory.id)] = memory
         return memory
@@ -125,16 +127,93 @@ class _FakeRepository:
         return found
 
     def list_memories(self, scope: Scope) -> list[Memory]:
+        return [
+            m
+            for (rid, *s), m in self._memories.items()
+            if tuple(s) == tuple(scope.model_dump().values()) and m.superseded_by_id is None
+        ]
+
+    def list_memories_history(self, scope: Scope) -> list[Memory]:
         return [m for (rid, *s), m in self._memories.items() if tuple(s) == tuple(scope.model_dump().values())]
+
+    def revise_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        content: str,
+        model_id: str,
+        prompt_version: str,
+    ) -> Memory:
+        original = self.get_memory(scope, memory_id)
+        revision = original.model_copy(
+            update={
+                "id": Memory(
+                    scope=scope,
+                    kind=original.kind,
+                    content=content,
+                    source_observation_ids=original.source_observation_ids,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    confidence=original.confidence,
+                ).id,
+                "content": content,
+                "model_id": model_id,
+                "prompt_version": prompt_version,
+                "revision_of_id": original.id,
+            }
+        )
+        self._memories[self._key(scope, revision.id)] = revision
+        return revision
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         return Job(scope=scope, kind=kind, payload=payload)
 
-    def claim_job(self, worker_id: str) -> Job:
+    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
         raise NotFoundError("no pending job")
 
-    def complete_job(self, job_id: str, status: str) -> Job:
+    def complete_job(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        worker_id: str | None = None,
+        error: str | None = None,
+    ) -> Job:
         raise NotFoundError("job not claimed")
+
+    def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
+        return 0
+
+    def ack_outbox(self, event_id: str) -> None:
+        raise NotFoundError("outbox event not found or already acked")
+
+    def add_observation_and_enqueue(
+        self, observation: Observation, job_kind: str = "derive"
+    ) -> tuple[Observation, Job]:
+        return (
+            observation,
+            Job(scope=observation.scope, kind=job_kind, payload={"observation_id": observation.id}),
+        )
+
+    def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
+        return [self.add_memory(memory) for memory in memories]
+
+    def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
+        memory = self.get_memory(scope, memory_id)
+        return [memory]
+
+    def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
+        superseded = 0
+        for key in list(self._memories):
+            rid, *s = key
+            if tuple(s) != tuple(scope.model_dump().values()):
+                continue
+            memory = self._memories[key]
+            if memory.superseded_by_id is None and observation_id in memory.source_observation_ids:
+                self._memories[key] = memory.model_copy(update={"superseded_by_id": f"source-rev:{observation_id}"})
+                superseded += 1
+        return superseded
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)
@@ -161,8 +240,13 @@ class _FakeRepository:
             valid_to=valid_to,
         )
 
-    def append_audit(self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]) -> None:
-        pass
+    def append_audit(
+        self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]
+    ) -> AuditEvent:
+        return AuditEvent(scope=scope, action=action, target_id=target_id, metadata=dict(metadata))
+
+    def list_audit(self, scope: Scope) -> list[AuditEvent]:
+        return []
 
     def append_outbox(self, scope: Scope, kind: str, payload: Mapping[str, Any]) -> Event:
         return Event(scope=scope, kind=kind, payload=dict(payload))
@@ -260,3 +344,20 @@ def test_projection_index_protocol_exists() -> None:
             pass
 
     assert isinstance(_FakeIndex(), ProjectionIndex)
+
+
+def test_sqlite_store_permissions_are_user_private(tmp_path: Path):
+    """P2: memory store files must not be world-readable (0644 default)."""
+    import os
+    import stat
+
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    db = tmp_path / "private.db"
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    repo.close()
+
+    mode = stat.S_IMODE(os.stat(db).st_mode)
+    assert mode & 0o077 == 0  # no group/other bits
+    assert mode == 0o600

@@ -18,16 +18,31 @@ class VectorHit:
     score: float
 
 
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "by", "can",
+        "could", "did", "do", "does", "for", "from", "had", "has", "have",
+        "how", "in", "into", "is", "it", "its", "no", "not", "of", "on",
+        "or", "should", "that", "the", "their", "these", "they", "this",
+        "those", "to", "was", "we", "were", "what", "when", "where",
+        "which", "who", "whose", "will", "with", "would", "you",
+    }
+)
+
+
 class HashEmbedding:
-    def __init__(self, dimension: int = 256):
+    def __init__(self, dimension: int = 256, *, skip_stopwords: bool = True):
         if dimension < 8:
             raise ValueError("embedding dimension must be at least 8")
         self.dimension = dimension
+        self.skip_stopwords = skip_stopwords
 
     def encode(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
         tokens = re.findall(r"[\w]+", text.casefold(), flags=re.UNICODE)
         for token in tokens:
+            if self.skip_stopwords and token in _STOPWORDS:
+                continue
             digest = hashlib.sha256(token.encode()).digest()
             index = int.from_bytes(digest[:4], "big") % self.dimension
             sign = 1.0 if digest[4] & 1 else -1.0
@@ -129,3 +144,30 @@ class LocalVectorIndex:
         self.clear(scope)
         for memory in repository.list_memories(scope):
             self.upsert(memory)
+
+    def digest(self, scope: Scope) -> str:
+        """Stable digest over (memory_id, content) pairs in scope."""
+        import hashlib
+
+        rows = self.connection.execute(
+            """SELECT memory_id, content FROM memory_vectors
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?
+               ORDER BY memory_id""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        digest = hashlib.sha256()
+        for memory_id, content in rows:
+            digest.update(memory_id.encode())
+            digest.update(b"\x00")
+            digest.update(content.encode())
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def health(self) -> str:
+        """Adapter-neutral probe: returns ``ok`` or ``error``."""
+        try:
+            self.connection.execute("SELECT 1")
+            return "ok"
+        except Exception:  # pragma: no cover - defensive
+            return "error"

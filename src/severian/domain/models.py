@@ -11,6 +11,28 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+# Source-identity keys probed (in order) when building the idempotency
+# identity for an observation. The identity must be STABLE across
+# re-ingests of the same evidence, and DIFFERENT for evidence from
+# different sources even when the normalised content collides (P0-1).
+_SOURCE_IDENTITY_KEYS = ("uri", "source_id", "idempotency_key")
+
+
+def source_identity(source: dict[str, Any]) -> str:
+    """Stable identity of an evidence source.
+
+    Returns the first non-empty value among the source-identity keys,
+    or ``""`` when the source carries no identity. The empty string is
+    treated as "no source identity" so legacy ingests (no source) keep
+    deduping on content alone.
+    """
+    for key in _SOURCE_IDENTITY_KEYS:
+        value = source.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 class Scope(BaseModel, frozen=True):
     tenant_id: str
     profile_id: str
@@ -37,19 +59,38 @@ class Collection(BaseModel):
 class Observation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
-    content: str
+    # ``content`` is the DERIVED, normalised form used for search and
+    # derivation. ``raw_content`` preserves the immutable evidence as it
+    # was received; ``raw_hash`` is the SHA-256 of the raw bytes. The
+    # raw pair is never rewritten by ingestion or revision.
+    content: str = Field(min_length=1)
     content_hash: str = ""
+    raw_content: str = ""
+    raw_hash: str = ""
     source: dict[str, Any] = Field(default_factory=dict)
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
+
+    @field_validator("content_hash", "raw_hash")
+    @classmethod
+    def _hash_is_sha256_or_empty(cls, value: str) -> str:
+        # A hash field is either empty (not yet computed/verified) or a
+        # 64-char lowercase hex SHA-256 digest. Rejecting malformed
+        # hashes at the boundary keeps forged or truncated hashes from
+        # ever entering the canonical store.
+        if value == "":
+            return value
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("hash must be a 64-char lowercase hex SHA-256 digest")
+        return value
 
 
 class Memory(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
     kind: str
-    content: str
+    content: str = Field(min_length=1)
     source_observation_ids: list[str] = Field(min_length=1)
     model_id: str
     prompt_version: str
@@ -91,6 +132,11 @@ class Job(BaseModel):
     payload: dict[str, Any]
     status: str = "pending"
     worker_id: str | None = None
+    attempts: int = 0
+    lease_until: datetime | None = None
+    last_error: str | None = None
+    retry_after: datetime | None = None
+    dead_letter: bool = False
     created_at: datetime = Field(default_factory=now)
 
 
@@ -99,6 +145,7 @@ class Event(BaseModel):
     scope: Scope
     kind: str
     payload: dict[str, Any]
+    acked: bool = False
     created_at: datetime = Field(default_factory=now)
 
 

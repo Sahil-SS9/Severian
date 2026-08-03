@@ -24,6 +24,7 @@ from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
 from severian.integrations.hermes import (
     ScopeNotEstablishedError,
     SeverianMemoryProvider,
+    register,
 )
 
 
@@ -366,3 +367,56 @@ def test_invalid_tool_scope_is_rejected_before_service_access(service_and_provid
     monkeypatch.setattr(provider._service, "search", fail)
     result = json.loads(provider.handle_tool_call("severian_search", {"query": "Ada"}))
     assert result == {"error": "scope is required"}
+
+
+# -- P1-4: zero-arg construction and plugin entry -------------------------
+
+def test_zero_arg_construction_builds_service_from_env(tmp_path, monkeypatch):
+    # P1-4 repro: the real Hermes loader instantiates providers with a
+    # zero-arg constructor; an injected-only provider could never load.
+    monkeypatch.setenv("SEVERIAN_STORAGE", str(tmp_path))
+    monkeypatch.delenv("SEVERIAN_DSN", raising=False)
+    provider = SeverianMemoryProvider()
+    try:
+        assert provider.is_available() is True
+        provider.initialize(session_id="s1", **_scope_kwargs())
+        result = json.loads(
+            provider.handle_tool_call(
+                "severian_ingest", {**_tool_scope_args(), "content": "plugin probe"}
+            )
+        )
+        assert "observation_id" in result
+    finally:
+        provider.shutdown()
+
+
+def test_zero_arg_construction_rejects_blank_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEVERIAN_STORAGE", str(tmp_path))
+    monkeypatch.delenv("SEVERIAN_DSN", raising=False)
+    provider = SeverianMemoryProvider()
+    try:
+        with pytest.raises(ScopeNotEstablishedError):
+            provider.initialize(session_id="s1")  # no scope dimensions
+    finally:
+        provider.shutdown()
+
+
+def test_register_entry_point_hands_provider_to_context(tmp_path, monkeypatch):
+    # P1-4: the Hermes loader calls register(ctx) with a context exposing
+    # register_memory_provider; the plugin must hand back a usable
+    # provider instance without an injected service.
+    monkeypatch.setenv("SEVERIAN_STORAGE", str(tmp_path))
+    monkeypatch.delenv("SEVERIAN_DSN", raising=False)
+
+    class Collector:
+        def __init__(self):
+            self.provider = None
+
+        def register_memory_provider(self, provider):
+            self.provider = provider
+
+    collector = Collector()
+    register(collector)
+    assert collector.provider is not None
+    assert collector.provider.name == "severian"
+    collector.provider.shutdown()

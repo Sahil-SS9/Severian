@@ -20,6 +20,7 @@ from severian.api.schemas import (
     HealthResponse,
     IngestRequest,
     IngestResponse,
+    MemoryResponse,
     ObservationResponse,
     ScopeModel,
     SearchHit,
@@ -28,13 +29,14 @@ from severian.api.schemas import (
 )
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
+from severian.domain.errors import ForbiddenError, NotFoundError
 from severian.domain.models import Scope
-from severian.infrastructure.sqlite import NotFoundError
 
 # Constants kept here so URL paths and tests share the same source of
 # truth. Versioned under ``/api/v1`` per Phase 3 plan.
 API_PREFIX = "/api/v1"
 OBSERVATIONS_PATH = f"{API_PREFIX}/observations"
+MEMORIES_PATH = f"{API_PREFIX}/memories"
 SEARCH_PATH = f"{API_PREFIX}/search"
 
 
@@ -48,6 +50,26 @@ def _scope_from_model(model: ScopeModel) -> Scope:
         collection_id=model.collection_id,
         agent_id=model.agent_id,
         session_id=model.session_id,
+    )
+
+
+def _bind_principal(requested: ScopeModel, principal: Scope) -> Scope:
+    """Derive the effective scope from the authenticated principal.
+
+    P0-6: the security-sensitive dimensions (tenant/profile) are NOT
+    client-selectable when a principal is bound. A request that claims
+    a different tenant or profile than the principal is an
+    authorization violation (403) — it is NOT a validation error, so
+    callers cannot probe for cross-tenant existence via 422 vs 403.
+    """
+    if requested.tenant_id != principal.tenant_id or requested.profile_id != principal.profile_id:
+        raise ForbiddenError("requested scope is outside the authenticated principal")
+    return Scope(
+        tenant_id=principal.tenant_id,
+        profile_id=principal.profile_id,
+        collection_id=requested.collection_id,
+        agent_id=requested.agent_id,
+        session_id=requested.session_id,
     )
 
 
@@ -90,6 +112,7 @@ def create_app(
     *,
     service: MemoryService,
     gateway: GatewayFactory | DerivationGateway,
+    principal: Scope | None = None,
 ) -> FastAPI:
     """Build a FastAPI app bound to a ``MemoryService`` instance.
 
@@ -97,6 +120,14 @@ def create_app(
     request (preferred — derivation may hold per-request state) or a
     fixed gateway instance used for every request (suitable for
     deterministic local fixtures).
+
+    ``principal`` optionally binds a fixed authenticated scope. When
+    set, the security-sensitive dimensions (``tenant_id`` and
+    ``profile_id``) are derived server-side from the principal and any
+    request body/token that disagrees with them is rejected with 403 —
+    scope becomes authorization, not a client-supplied selector. When
+    unset (local/dev mode), the client must supply a fully-populated
+    scope as before.
     """
 
     def _get_gateway() -> DerivationGateway:
@@ -117,14 +148,39 @@ def create_app(
     def get_gateway() -> DerivationGateway:
         return _get_gateway()
 
+    def resolve_scope(scope_model: ScopeModel) -> Scope:
+        """Resolve the effective scope for a request.
+
+        With a bound principal, tenant/profile are derived server-side
+        and any disagreement is a 403. Without one, the client-supplied
+        scope is used as-is (local/dev mode).
+        """
+        if principal is not None:
+            return _bind_principal(scope_model, principal)
+        return _scope_from_model(scope_model)
+
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
+        # Liveness: always 200 while the process serves requests.
         return HealthResponse(ready=True, components={})
 
     @app.get("/readyz", response_model=HealthResponse)
     def readyz(svc: MemoryService = Depends(get_service)) -> HealthResponse:
+        # Readiness: dependency gate. P1-2: a service whose
+        # dependencies are down must NOT report ready — callers (load
+        # balancers, orchestrators) get 503 so traffic is routed away.
         report = svc.health()
-        return HealthResponse(ready=report.ready, components=report.components)
+        response = HealthResponse(ready=report.ready, components=report.components)
+        if not report.ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "ready": False,
+                    "components": report.components,
+                    "type": "not_ready",
+                },
+            )
+        return response
 
     @app.post(
         OBSERVATIONS_PATH,
@@ -137,10 +193,15 @@ def create_app(
     ) -> IngestResponse:
         try:
             view = svc.ingest_observation(
-                _scope_from_model(payload.scope),
+                resolve_scope(payload.scope),
                 content=payload.content,
                 source=payload.source,
             )
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             # Pydantic surface for client errors — never leak internals.
             raise HTTPException(
@@ -176,15 +237,23 @@ def create_app(
         session_id: str = "",
         svc: MemoryService = Depends(get_service),
     ) -> ObservationResponse:
-        scope = ScopeModel(
-            tenant_id=tenant_id,
-            profile_id=profile_id,
-            collection_id=collection_id,
-            agent_id=agent_id,
-            session_id=session_id,
-        )
+        # P1-4: ScopeModel construction lives INSIDE the try so pydantic
+        # validation failures surface as 422, not 500. Missing/invalid
+        # scope dimensions are client errors, never server errors.
         try:
-            scope_obj = _scope_from_model(scope)
+            scope = ScopeModel(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                collection_id=collection_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+            scope_obj = resolve_scope(scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -202,6 +271,61 @@ def create_app(
             ) from exc
         return _view_to_observation_response(observation)
 
+    @app.get(
+        f"{MEMORIES_PATH}/{{memory_id}}",
+        response_model=MemoryResponse,
+    )
+    def get_memory(
+        memory_id: str = Path(..., min_length=1),
+        tenant_id: str = "",
+        profile_id: str = "",
+        collection_id: str = "",
+        agent_id: str = "",
+        session_id: str = "",
+        svc: MemoryService = Depends(get_service),
+    ) -> MemoryResponse:
+        # P1-4: memory-detail endpoint. Search returns memory ids (both
+        # observation-derived and derived memories); the dashboard needs
+        # to open any hit. Scope construction lives INSIDE the try so
+        # validation failures are 422, not 500.
+        try:
+            scope = ScopeModel(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                collection_id=collection_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+            scope_obj = resolve_scope(scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        try:
+            memory = svc.get_memory(scope_obj, memory_id)
+        except NotFoundError as exc:
+            # Same discipline as observations: a well-formed request for
+            # an id the scope cannot see is 404; the body never
+            # discloses cross-scope existence.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="memory not found in scope",
+            ) from exc
+        return MemoryResponse(
+            memory_id=memory.id,
+            content=memory.content,
+            kind=memory.kind,
+            source_observation_ids=list(memory.source_observation_ids),
+            scope=ScopeModel.from_domain(memory.scope),
+            created_at=str(memory.created_at),
+        )
+
     @app.post(SEARCH_PATH, response_model=SearchResponse)
     def search(
         payload: SearchRequest,
@@ -209,7 +333,12 @@ def create_app(
         svc: MemoryService = Depends(get_service),
     ) -> SearchResponse:
         try:
-            scope = _scope_from_model(payload.scope)
+            scope = resolve_scope(payload.scope)
+        except ForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -234,9 +363,17 @@ def create_app(
     async def safe_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
+        # HTTPException (404/403/422/503) must pass through with its
+        # intended status; only unexpected exceptions become 500.
         # Defence-in-depth: never leak stack traces or canonical
         # payloads. QA gate SEC-03 requires no sensitive content in
         # error responses.
+        if isinstance(exc, HTTPException):
+            detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else "error"
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": detail, "type": "http_error"},
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "internal error", "type": "server_error"},
@@ -248,6 +385,7 @@ def create_app(
 __all__ = [
     "API_PREFIX",
     "OBSERVATIONS_PATH",
+    "MEMORIES_PATH",
     "SEARCH_PATH",
     "create_app",
 ]
