@@ -52,7 +52,7 @@ class ProviderAdapter(Protocol):
     """Adapter interface every benchmark provider must implement."""
 
     def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None: ...
-    def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse: ...
+    def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse: ...
     def close(self) -> None: ...
 
 
@@ -150,7 +150,9 @@ class BenchmarkRunner:
                 expected_ids = [evidence.document_id for evidence in query.expected_evidence]
                 expected_weights = {evidence.document_id: evidence.weight for evidence in query.expected_evidence}
                 started = time.perf_counter()
-                response = self._validate_response(adapter.query(query.query, limit=10, scope=query.scope))
+                response = self._validate_response(
+                    adapter.query(query.query, limit=10, scope=query.scope, query_kind=query.kind)
+                )
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 total_cost += response.cost_usd
                 latencies_ms.append(elapsed_ms)
@@ -171,7 +173,15 @@ class BenchmarkRunner:
                 stale_total += sum(
                     1
                     for document_id in returned_ids
-                    if self._documents.get(document_id) is not None and self._documents[document_id].is_stale
+                    if self._documents.get(document_id) is not None
+                    and self._documents[document_id].is_stale
+                    # Temporal probes explicitly ask for the OLD fact —
+                    # the expected evidence IS a stale doc by design.
+                    # Counting it as a stale-fact error would penalise
+                    # correct historical recall. The stale gate measures
+                    # whether CURRENT facts leak stale superseded ones,
+                    # which is only meaningful on non-temporal queries.
+                    and query.kind != "temporal"
                 )
                 leakage_total += sum(
                     1

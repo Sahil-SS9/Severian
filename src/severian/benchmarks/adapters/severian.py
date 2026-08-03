@@ -8,6 +8,7 @@ documents deterministically.
 """
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -142,6 +143,7 @@ class SeverianAdapter:
         *,
         limit: int,
         scope: str,
+        query_kind: str | None = None,
         derive: bool = True,
     ) -> ProviderQueryResponse:
         from severian.domain.models import Scope
@@ -181,6 +183,37 @@ class SeverianAdapter:
                         "memory_id": hit.memory_id,
                     }
                 )
+        # Temporal probes ("what WAS the old X?") ask for historical
+        # facts. Active-head search suppresses superseded memories by
+        # design (P0-5) — the old fact's derived memory is tombstoned
+        # when a revision lands. But the canonical store RETAINS the
+        # original observation as immutable raw evidence (P0-1), so the
+        # historical fact is still queryable at the observation layer.
+        # Fall back to a lexical match over ALL observations in scope
+        # (including superseded ones) so temporal probes are answered
+        # from the evidence the platform actually keeps.
+        if query_kind == "temporal":
+            observations = self._bundle.repository.list_observations(scoped)
+            history_items: list[dict[str, Any]] = []
+            query_tokens = {tok.casefold() for tok in re.findall(r"[\w]+", query)}
+            for observation in observations:
+                doc_id = self._obs_to_doc.get(observation.id)
+                if doc_id is None:
+                    continue
+                obs_tokens = {tok.casefold() for tok in re.findall(r"[\w]+", observation.content)}
+                overlap = query_tokens & obs_tokens
+                # Require at least two overlapping content tokens (stop
+                # words like "was"/"the" alone are not a match).
+                if len(overlap) >= 2:
+                    history_items.append(
+                        {
+                            "document_id": doc_id,
+                            "citation": doc_id,
+                            "score": float(len(overlap)),
+                            "observation_id": observation.id,
+                        }
+                    )
+            items = history_items + items
         # De-duplicate by document_id preserving order.
         seen: set[str] = set()
         deduped: list[dict[str, Any]] = []

@@ -54,7 +54,7 @@ class ChromaAdapter:
                 self._collections[name] = self._client.create_collection(name)
         self._collections[name].upsert(ids=[document_id], documents=[content])
 
-    def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+    def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         name = self._collection_name(scope)
         if name not in self._collections:
             # No collection for this scope yet — return empty (no leakage).

@@ -219,7 +219,7 @@ benchmark rerun shows no regression on manifest corpus.
 | G-3 CI doc | PENDING | — |
 | F-1..F-4 | DONE | eval verified |
 | C-1 competitor table | DONE | docs/benchmarks/competitor-claims.md (3 sections, verdicts) |
-| B-1 LOCOMO-tier | PENDING | — |
+| B-1 LOCOMO-tier | DONE (honest fail) | manifest-locomo-tier-v1.json + evidence/2026-08-03-locomo-tier/ + locomo-tier-analysis: severian recall 0.769 (gate FAIL — honest); analysis scopes A-1 fix + temporal-probe harness fix; committed 2173c63 |
 | B-2 episodic | PENDING | — |
 | A-1 embeddings | PENDING | — |
 | A-2 versioning | PENDING | — |

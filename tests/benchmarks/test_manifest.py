@@ -175,7 +175,7 @@ def test_runner_executes_queries_through_each_provider() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -194,7 +194,7 @@ def test_runner_executes_queries_through_each_provider() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             self.documents.append((document_id, content))
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             document_id = "d3" if query == "What is current?" else "d1"
             if query == "What is impossible?":
                 return ProviderQueryResponse(items=[], cost_usd=0.01)
@@ -245,7 +245,7 @@ def test_runner_computes_stale_temporal_scope_and_unsupported_metrics() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             if query == "Who founded a company?":
                 item = {"document_id": "d2", "citation": "d2"}
             elif query == "What is current?":
@@ -281,7 +281,7 @@ def test_runner_rejects_response_without_explicit_cost() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             # Deliberately violates the protocol: returns a raw list so
             # the runner's validator must reject it.
             return [{"document_id": "d1"}]  # type: ignore[return-value]
@@ -304,7 +304,7 @@ def test_runner_allow_missing_skips_absent_adapter_and_surfaces_skipped_lane() -
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             # Return the expected evidence for the matching query and
             # abstain (empty result) on unanswerable queries so every
             # platform metric passes the gate.
@@ -342,7 +342,7 @@ def test_runner_allow_missing_false_raises_on_missing_adapter() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             return ProviderQueryResponse(items=[], cost_usd=0.0)
 
         def close(self) -> None:
@@ -363,7 +363,7 @@ def test_runner_gate_only_checks_severian_kind_providers() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             for q in manifest.queries:
                 if q.query == query:
                     if not q.expected_evidence:
@@ -380,7 +380,7 @@ def test_runner_gate_only_checks_severian_kind_providers() -> None:
         def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
             return None
 
-        def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+        def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
             # Deliberately awful: wrong document, no citation.
             return ProviderQueryResponse(items=[{"document_id": "wrong", "citation": "wrong"}], cost_usd=0.0)
 

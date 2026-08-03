@@ -35,7 +35,7 @@ class LexicalBaselineAdapter:
         # stale-fact gate is exactly what this lane is expected to fail.
         self._corpus.setdefault(scope, {})[document_id] = _tokens(content)
 
-    def query(self, query: str, *, limit: int, scope: str) -> ProviderQueryResponse:
+    def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         query_tokens = _tokens(query)
         docs = self._corpus.get(scope, {})
         scores: list[tuple[float, str]] = []
