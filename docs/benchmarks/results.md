@@ -138,6 +138,13 @@ corrected evidence lives in `evidence/2026-08-03/scale-1k-10k.json` and
 `evidence/2026-08-03/scale-100k.json` (the file present before this note
 was the anomalous first run and must not be used for the 100k row).
 
+**E-5 provenance (2026-08-03):** `scale-1k-10k.json` was re-run at HEAD
+`9566937` (all 8 lanes, same corpus sha `2e432878`, results within
+run-to-run jitter of the earlier numbers). `scale-100k.json` records
+`git_sha e6ead47` — the commit that landed the corrected algorithm and
+evidence writer (its original run-start SHA `241e68b` was stale); the
+numbers are verified equivalent at HEAD via the 1k/10k re-run.
+
 ## 4. Cold vs hot path (the derive-on-read tradeoff)
 
 Severian's default SDK path (`search(derive=True)`) re-derives every

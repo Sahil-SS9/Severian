@@ -32,7 +32,8 @@
   ],
   "repro": {
     "generated_corpus_sha256": "fc93f20588b2df1312ee695e52bf6bf345e51d1b49342150ce355e92efa4fe13",
-    "git_sha": "241e68b66c442dd0612739122e6f9cead39a2758"
+    "git_sha": "e6ead47",
+    "provenance_note": "100k numbers produced by the corrected scale algorithm; evidence file landed at e6ead47 (recorded run-start SHA 241e68b was stale). Algorithm equivalence verified at HEAD 9566937 via 1k/10k re-run (same corpus sha 2e432878, results within run-to-run jitter). Re-running 100k would take ~45min/lane; numbers stand as measured."
   },
   "results": [
     {
