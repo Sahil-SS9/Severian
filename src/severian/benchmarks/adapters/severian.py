@@ -86,6 +86,24 @@ class SeverianAdapter:
     # -- provider protocol -------------------------------------------------
 
     def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
+        # see _supersede below for the correction path
+        self._ingest_observation(document_id, content, scope, supersedes)
+
+    def ingest_batch(
+        self,
+        documents: Iterable[tuple[str, str]],
+        *,
+        scope: str,
+    ) -> None:
+        # No vectorized batch path on the canonical store yet — the
+        # per-doc protocol path IS the measured production path (roadmap
+        # A-4 compares this against Chroma's batch override).
+        for document_id, content in documents:
+            self.ingest(document_id, content, scope=scope)
+
+    def _ingest_observation(
+        self, document_id: str, content: str, scope: str, supersedes: Iterable[str]
+    ) -> None:
         from severian.domain.models import Collection, Scope
 
         parts = parse_scope(scope)

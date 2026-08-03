@@ -52,6 +52,24 @@ class ProviderAdapter(Protocol):
     """Adapter interface every benchmark provider must implement."""
 
     def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None: ...
+
+    def ingest_batch(
+        self,
+        documents: Iterable[tuple[str, str]],
+        *,
+        scope: str,
+    ) -> None:
+        """Ingest many documents in one call.
+
+        Default implementation falls back to per-document :meth:`ingest`
+        so adapters that only implement the single-write path still
+        work; adapters with a vectorized batch path (Chroma) override it
+        to exercise that path. The batch comparison (roadmap A-4)
+        measures the difference honestly.
+        """
+        for document_id, content in documents:
+            self.ingest(document_id, content, scope=scope)
+
     def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse: ...
     def close(self) -> None: ...
 

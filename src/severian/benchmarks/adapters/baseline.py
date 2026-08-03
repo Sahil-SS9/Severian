@@ -35,6 +35,15 @@ class LexicalBaselineAdapter:
         # stale-fact gate is exactly what this lane is expected to fail.
         self._corpus.setdefault(scope, {})[document_id] = _tokens(content)
 
+    def ingest_batch(
+        self,
+        documents: Iterable[tuple[str, str]],
+        *,
+        scope: str,
+    ) -> None:
+        for document_id, content in documents:
+            self.ingest(document_id, content, scope=scope)
+
     def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         query_tokens = _tokens(query)
         docs = self._corpus.get(scope, {})

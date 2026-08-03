@@ -46,13 +46,33 @@ class ChromaAdapter:
     def ingest(self, document_id: str, content: str, *, scope: str, supersedes: Iterable[str] = ()) -> None:
         # Chroma has no native supersession. The stale-fact gate is
         # exactly what this lane is expected to fail honestly.
+        self._collection_for(scope).upsert(ids=[document_id], documents=[content])
+
+    def ingest_batch(
+        self,
+        documents: Iterable[tuple[str, str]],
+        *,
+        scope: str,
+    ) -> None:
+        # Vectorized batch path: one upsert call for many documents
+        # instead of one call per document. This is the path Chroma's
+        # docs recommend for throughput; the scale lane measures the
+        # difference against the per-doc path (roadmap A-4).
+        collection = self._collection_for(scope)
+        pairs = list(documents)
+        if not pairs:
+            return
+        ids, contents = zip(*pairs, strict=True)
+        collection.upsert(ids=list(ids), documents=list(contents))
+
+    def _collection_for(self, scope: str) -> Any:
         name = self._collection_name(scope)
         if name not in self._collections:
             try:
                 self._collections[name] = self._client.get_or_create_collection(name)
             except Exception:
                 self._collections[name] = self._client.create_collection(name)
-        self._collections[name].upsert(ids=[document_id], documents=[content])
+        return self._collections[name]
 
     def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         name = self._collection_name(scope)
