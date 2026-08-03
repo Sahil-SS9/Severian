@@ -149,12 +149,20 @@ labelled.
 - Deliverable: new manifest + evidence file + results.md addition.
 **Gate:** evidence file written; numbers recorded; honesty taxonomy respected.
 
-### B-2 — Episodic summarization path (roadmap technique #4)
-- MemRefine/EvoMem pattern: budgeted consolidation of session observations into
-  episode summaries; retrieval returns episodes + raw observations.
-- Seam: derive worker + consolidation pass; optional LLM-judge merge/delete with
-  rule-based fallback (deterministic default).
-**Gate:** episodic path tested; retrieval returns episodes; storage bounded.
+### B-2 — Episodic summarization path (roadmap technique #4) — DESIGNED, PENDING
+**Design (grounded in seams, ready to implement):**
+- New `Memory(kind="episode")` produced by a consolidation pass per scope/session.
+- `EpisodeService`: consolidates a session's observations into one episode whose
+  `source_observation_ids` spans all session observations; content = budgeted
+  summary (deterministic aggregation default — local-first, no LLM; optional
+  LLM-judge merge/delete with rule-based fallback per memrefine/evodata).
+- Job kind: add `episode` alongside `derive` in `DerivationWorker._derive` gate
+  (worker.py:124) + enqueue path in ingestion; same lease/reap/idempotent drain.
+- Retrieval: episodes indexed like any memory (FTS+vector); session recall query
+  retrieves episode + raw observations.
+- Tests: episode consolidation (deterministic), retrieval returns episodes,
+  storage bounded, worker crash-safety (lease/reap).
+**Gate:** pytest + mypy + ruff; re-run LOCOMO-tier manifest to show episode recall.
 
 ---
 
