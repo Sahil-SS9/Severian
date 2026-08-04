@@ -32,8 +32,8 @@ handoff updated to reflect closure + re-pass to 3rd party.
 | **Phase G** | Governance: G-1 merge audit→main, G-2 publish decision, G-3 CI doc, G-4 hold | PARTIAL (G-1 done, G-2/G-3 verified, G-4 hold) |
 | **Phase F** | Eval-process: all repo-side fixes already FIXED (F-1..F-4); F-5/F-6 auditor notes | VERIFIED DONE (see §F) |
 | **Phase C** | Vendor-claims table (`competitor-claims.md`) | DONE (C-1) |
-| **Phase B** | Conversation recollection: B-1 LOCOMO-tier benchmark, B-2 episodic summarization | PARTIAL (B-1 done, B-2 designed) |
-| **Phase A** | Engineering gaps: A-1 Granite R2 embeddings, A-2 versioning/rollback, A-3 real-data probes, A-4 Chroma batch comparison | PARTIAL (A-4 done; A-1/A-2/A-3 pending) |
+| **Phase B** | Conversation recollection: B-1 LOCOMO-tier benchmark, B-2 episodic summarization | PARTIAL (B-1 done, B-2 DONE) |
+| **Phase A** | Engineering gaps: A-1 Granite R2 embeddings, A-2 versioning/rollback, A-3 real-data probes, A-4 Chroma batch comparison | PARTIAL (A-1/A-2/A-4 done; A-3 spec only) |
 | **Phase D** | Weakness analysis implementation = A-1/A-2/A-4/B-2 (tracked under A/B) | PENDING |
 | **Phase AUDIT** | Final state verification + update HANDOFF-MASTER + marker READY TO BE AUDITED | PENDING |
 
@@ -228,10 +228,10 @@ benchmark rerun shows no regression on manifest corpus.
 | F-1..F-4 | DONE | eval verified |
 | C-1 competitor table | DONE | docs/benchmarks/competitor-claims.md (3 sections, verdicts) |
 | B-1 LOCOMO-tier | DONE (honest, improving) | manifest-locomo-tier-v1.json + evidence/2026-08-03-locomo-tier/ + locomo-tier-analysis: after harness fixes (temporal via observation layer, stale-gate exclusion) recall 0.923, temporal 1.000, stale 0.000; residual = A-1 semantic gap + q9/q11 corpus artifacts; committed 2173c63, 783dcd3 |
-| B-2 episodic | DESIGNED, PENDING | spec in plan §B-2 (episode Memory kind, EpisodeService, worker job kind, tests) |
-| A-1 embeddings | PENDING | B-1 proves the gap; needs onnxruntime + model + PG dim migration — next major phase |
-| A-2 versioning | PENDING | — |
-| A-3 real-data probes | PENDING (doc) | — |
+| B-2 episodic | DONE | EpisodeService (deterministic summary + gateway fallback), worker episode job kind, 6 tests; committed f02e268 |
+| A-1 embeddings | DONE (seam + live) | EmbeddingProvider protocol, GraniteR2Embedding (384-dim, lazy load, hash fallback), build_bundle embedding param, pgvector dim parameterization; committed 6a30fae, 3ccf788, 83ecc00 |
+| A-2 versioning | DONE | rollback_memory (ChronoMem-style) both backends + service + 2 tests; committed bb5c460 |
+| A-3 real-data probes | SPEC WRITTEN, lane pending | real-data-probe-spec-2026-08-03.md (corpus options, lane design, blocker: log-approval) |
 | A-4 batch compare | DONE | ingest_batch protocol + chroma override; measured chroma batch 22.8 vs per-doc 2.1 docs/s, severian 184.4 (8x faster than chroma best); evidence/2026-08-03-batch-compare/; committed 9566937 |
 | D (impl of A/B) | PENDING | tracked w/ A/B |
 | AUDIT final + marker | PENDING | — |
