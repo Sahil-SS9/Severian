@@ -97,8 +97,16 @@ class RetrievalService:
         # is what stops lexical token-overlap (e.g. "annual revenue"
         # matching a doc that mentions revenue once) from fabricating
         # answers to unanswerable probes (LOCOMO q9/q11 class).
+        # The floor applies ONLY to hits with no lexical component
+        # (pure hash-embedding noise): a hit with a real token match is
+        # genuine evidence and must survive even at low fused score
+        # (LOCOMO q7: weak-but-genuine lexical match).
         if min_fused_score is not None:
-            ranked = [item for item in ranked if item.fused_score >= min_fused_score]
+            ranked = [
+                item
+                for item in ranked
+                if item.lexical_score > 0.0 or item.fused_score >= min_fused_score
+            ]
         return ranked[:limit]
 
 

@@ -153,20 +153,22 @@ def test_cross_scope_isolation_in_benchmark_corpus(bench: tuple[SeverianAdapter,
 
 
 def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
-    """LOCOMO q11 class: pure hash-noise probes must abstain.
+    """The fused-score abstention floor rejects pure hash-noise hits.
 
     "What is the company's annual revenue?" has no lexical match in the
     corpus, but hash embeddings collide with unrelated docs producing
-    spurious vector hits. The fused-score floor rejects them (fused
-    ~0.016 < 0.02) — the honest empty result. Genuine queries (lexical
-    match present) are unaffected.
+    spurious vector hits. With the floor enabled (opt-in), those hits
+    (no lexical component, low fused score) are rejected — the honest
+    empty result. Genuine queries (lexical match present) are
+    unaffected, and the floor is OFF by default (embedding-aware
+    abstention is a policy decision).
     """
     adapter = SeverianAdapter(provider_id="test", backend="sqlite", min_fused_score=0.02)
     manifest = json.loads(Path("docs/benchmarks/manifest-locomo-tier-v1.json").read_text())
     for doc in manifest["corpus"]["documents"]:
         adapter.ingest(str(doc["id"]), str(doc["content"]), scope=str(doc["scope"]))
 
-    # Unanswerable noise probe -> abstain.
+    # Unanswerable noise probe -> abstain with floor enabled.
     resp = adapter.query(
         "What is the company's annual revenue?",
         limit=10,
@@ -183,3 +185,17 @@ def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
         query_kind="fact",
     )
     assert resp2.items and resp2.items[0]["document_id"] == "c01"
+
+    # Default (no floor): raw capability — the noise probe returns hits
+    # (hash collision), which is the measured, honest limitation.
+    adapter_default = SeverianAdapter(provider_id="test2", backend="sqlite")
+    manifest = json.loads(Path("docs/benchmarks/manifest-locomo-tier-v1.json").read_text())
+    for doc in manifest["corpus"]["documents"]:
+        adapter_default.ingest(str(doc["id"]), str(doc["content"]), scope=str(doc["scope"]))
+    resp3 = adapter_default.query(
+        "What is the company's annual revenue?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="negative",
+    )
+    assert resp3.items != [], "default lane must report raw hash capability (no hidden floor)"

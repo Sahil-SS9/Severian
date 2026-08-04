@@ -38,7 +38,7 @@ class SeverianAdapter:
         dimension: int = 256,
         embedding: Any | None = None,
         min_vector_score: float | None = 0.15,
-        min_fused_score: float | None = 0.02,
+        min_fused_score: float | None = None,
         reset_db: bool = False,
     ) -> None:
         from severian.composition import build_bundle
