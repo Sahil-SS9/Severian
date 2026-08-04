@@ -46,7 +46,7 @@ def _import_batch() -> Any:
 
 def test_speedup_ratio_is_batch_over_perdoc() -> None:
     """Fixed synthetic timings: batch 200 docs in 1s (200 dps), per-doc 200 in 10s (20 dps)."""
-    batch = _import_batch()
+    _import_batch()  # ensure the module imports cleanly (regression guard)
     # emulate the payload assembly with fixed timings
     results = {
         "chroma_per_doc": {"docs_per_sec_median": 20.0},
@@ -61,7 +61,7 @@ def test_speedup_ratio_is_batch_over_perdoc() -> None:
 
 def test_zero_denominator_raises() -> None:
     """Zero per-doc throughput must raise, not emit 0.0."""
-    module = _import_batch()
+    _import_batch()  # ensure the module imports cleanly (regression guard)
     with pytest.raises(SystemExit):
         # replicate the guard from main()
         per_doc_dps = 0.0
@@ -108,7 +108,7 @@ def test_legacy_inverted_field_not_written(tmp_path: Path) -> None:
 
 def test_reps_below_three_rejected() -> None:
     """--reps < 3 must exit non-zero (C-03 requires >= 3 repetitions)."""
-    module = _import_batch()
+    _import_batch()  # ensure the module imports cleanly (regression guard)
     parser = argparse.ArgumentParser()
     parser.add_argument("--reps", type=int, default=3)
     # emulate the guard
