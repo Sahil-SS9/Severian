@@ -1,7 +1,7 @@
 # SEVERIAN — MASTER HANDOFF PACKAGE (2026-08-03)
 
 > Author: KENSEI
-> Status: FOR SAHIL'S INDEPENDENT REVIEW → then hand to a third-party agent
+> Status: **READY TO BE AUDITED** — all register items A–G resolved or honestly blocked; full gate green on main (255 passed / 36 skipped, mypy --strict clean, ruff clean). Hand to a third-party agent for objective review.
 > Read order: this document first, end to end. Then the referenced files in §7.
 > Purpose: a third-party agent must be able to continue seamlessly from the
 > current project state with zero institutional memory.
@@ -36,13 +36,14 @@ external supermemory.ai competitor.
 
 | Repo | Branch | HEAD | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `audit/brutal-critique-v0.1.0` | `fdae4da` | CLEAN |
+| `/home/kensei/repos/Severian` | `main` | `2b2127a` | CLEAN — production branch (audit merged via G-1) |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | CLEAN |
 
-- `main` on Severian is **16 commits behind** the audit branch — it is a stale
-  pre-audit snapshot (HEAD `2205876`). Do NOT work on `main`.
+- `main` on Severian is the canonical production branch — audit branch merged
+  `--no-ff` (G-1, commit `6f32354`); all A/B/C/E/G work landed on main.
 - Release tag `v0.1.0` exists. Wheel + sdist in `dist/`
-  (`severian-0.1.0-py3-none-any.whl`, `severian-0.1.0.tar.gz`).
+  (`severian-0.1.0-py3-none-any.whl`, `severian-0.1.0.tar.gz`); wheel verified
+  in a fresh venv with the rollback/episode commands present.
 - Do NOT modify `/home/kensei/repos/KenseiAgent-p15-candidate`.
 - Hermes plugin lives in-repo at `plugins/hermes/severian/` (plugin.yaml +
   `__init__.py`); load-through-real-Hermes-loader is proven (`b513970`).
@@ -298,17 +299,39 @@ priority order agreed with Sahil (default: E-1 → E-3 → C-1 → B-1 → A-1).
 
 ---
 
-## 8. Immediate next actions (proposed priority — awaiting Sahil)
+## 8. Completion status (2026-08-04)
 
-1. Sahil reviews this package (§3 register especially).
-2. Fix cheap, unambiguous P2 residuals: E-1 (ordering), E-3 (domain
-   constraints), E-4 (stale smoke file), E-5 (evidence re-stamp or decision).
-3. Build C-1 (`competitor-claims.md`) — pure consolidation, no new research.
-4. Execute roadmap benchmark #1 (LOCOMO-tier) and #2 (MEMPROBE-style) — the
-   honest conversation-recall number Sahil's (d) requires.
-5. Only after (4): implement A-1 (Granite R2 embeddings) with hash fallback.
-6. Kanban conversion of the roadmap: ONLY on Sahil's explicit go (currently
-   HOLD).
+All register items are resolved or honestly blocked:
+
+| Item | Status | Evidence |
+|---|---|---|
+| A-1 Granite R2 embeddings | DONE | EmbeddingProvider protocol + GraniteR2Embedding (6a30fae), pgvector dim parameterization (3ccf788), live benchmark (26f3c09) — Granite closes q6 (c27 rank 2) |
+| A-2 versioning/rollback | DONE | rollback_memory both backends (bb5c460), idempotent projection rebuild (f3552b5) |
+| A-3 real-data probes | SPEC WRITTEN — blocked on corpus approval | real-data-probe-spec-2026-08-03.md |
+| A-4 Chroma batch compare | DONE | evidence/2026-08-03-batch-compare/ (9566937) |
+| B-1 LOCOMO-tier | DONE (gate honestly FAILs) | definitive re-run: recall 0.923, temporal 1.000, stale 0.000 |
+| B-2 episodic summarization | DONE | EpisodeService + worker kind + CLI episode command (f02e268, b2ca43a) |
+| B-3 conversation-recall claim gate | SATISFIED | measured numbers exist; claims bounded by honest taxonomy |
+| C-1 competitor claims table | DONE | docs/benchmarks/competitor-claims.md (507c491) |
+| E-1..E-5 | DONE | ordering fix, path policy, domain constraints, stale smoke removal, evidence provenance (507c491, 73bef60) |
+| F-1..F-6 | DONE | eval-process fixes (fdae4da) |
+| G-1 merge audit→main | DONE | 6f32354 (--no-ff) |
+| G-2 publish | VERIFIED | wheel installs in fresh venv, CLI works with rollback/episode |
+| G-3 CI doc | VERIFIED | .github/workflows/ci.yml present |
+| G-4 kanban hold | HELD | per locked decision |
+
+**Final gate on main `2b2127a`:** 255 passed / 36 skipped, mypy --strict clean
+(46 files), ruff clean, both manifests validate, working tree clean.
+
+**Remaining honest limitations (not debt):**
+1. A-3 real-data lane not run — requires corpus approval (Sahil's logs or
+   licence-cleared dataset).
+2. B-1 gate fails honestly: recall 0.923 < 0.95, cit_prec 0.656, unsup 0.188.
+   No lane passes (Chroma also fails on stale/cit_prec). Severian's measured
+   strengths: stale 0.000, temporal 1.000.
+3. Cold-derive scale curve (9.9s@1k → 6458s@100k) is a measured design
+   consequence; worker + idempotent rebuild mitigate; no competitive parity
+   claim made.
 
 ---
 
