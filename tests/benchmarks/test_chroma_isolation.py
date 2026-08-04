@@ -115,18 +115,21 @@ def test_run_order_independence() -> None:
     """manifest-v1 then LOCOMO == LOCOMO then manifest-v1 (non-latency metrics + IDs).
 
     Both manifests run into the SAME Chroma persistence root, each with its
-    own run namespace. This is the real contamination scenario: a shared
-    store that must not bleed between corpora regardless of execution order.
+    OWN unique run namespace. This is the real contamination scenario: a
+    shared store that must not bleed between corpora regardless of execution
+    order. Each invocation has a unique namespace (the adapter enforces
+    namespace-scoped persistence subdirs), so v1's documents can never be
+    visible to the LOCOMO run even though they share the root.
     """
     workdir = Path(tempfile.mkdtemp(prefix="severian-bench-order-"))
     try:
-        # Order A: manifest-v1 first, then LOCOMO, same store.
-        _run_manifest(MANIFEST_V1, "order-a", workdir)
-        locomo_a = _run_manifest(MANIFEST_LOCOMO, "order-a", workdir)
-        # Order B: LOCOMO first, then manifest-v1, same store (fresh dir).
+        # Order A: manifest-v1 first, then LOCOMO, same root.
+        _run_manifest(MANIFEST_V1, "order-a-v1", workdir)
+        locomo_a = _run_manifest(MANIFEST_LOCOMO, "order-a-loco", workdir)
+        # Order B: LOCOMO first, then manifest-v1, same root (fresh dir).
         workdir_b = Path(tempfile.mkdtemp(prefix="severian-bench-order-b-"))
-        _run_manifest(MANIFEST_V1, "order-b", workdir_b)
-        locomo_b = _run_manifest(MANIFEST_LOCOMO, "order-b", workdir_b)
+        _run_manifest(MANIFEST_V1, "order-b-v1", workdir_b)
+        locomo_b = _run_manifest(MANIFEST_LOCOMO, "order-b-loco", workdir_b)
         for key in ("recall", "mrr", "ndcg", "cit_prec", "stale", "leak", "unsup", "temporal"):
             assert locomo_a[key] == locomo_b[key], f"{key}: {locomo_a[key]} != {locomo_b[key]}"
         assert locomo_a["ids"] == locomo_b["ids"]
@@ -157,6 +160,37 @@ def test_reset_refuses_non_benchmark_path() -> None:
         assert bogus.exists(), "reset() must not delete a non-benchmark directory"
     finally:
         shutil.rmtree(bogus, ignore_errors=True)
+
+
+def test_same_workdir_different_namespace_is_isolated() -> None:
+    """Two invocations sharing a workdir root must not contaminate each other.
+
+    This is the exact contamination path C-01 forbids: manifest-v1 documents
+    (d*) must NEVER appear in a LOCOMO run's results even when both share a
+    persistence root. Each invocation gets its own namespace, and the adapter
+    scopes persistence by namespace (workdir/<namespace>).
+    """
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    workdir = Path(tempfile.mkdtemp(prefix="severian-bench-shared-"))
+    try:
+        # v1 docs into namespace "v1"
+        a = ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="v1")
+        a.ingest("d1", "the annual revenue is 10 million", scope="t1/p1/c1/a1/s1")
+        a.close()
+        # LOCOMO-style docs into namespace "loco" — SAME root
+        b = ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="loco")
+        b.ingest("c01", "project aurora reached milestone five", scope="t1/p1/c1/a1/s1")
+        response = b.query("annual revenue", limit=10, scope="t1/p1/c1/a1/s1")
+        ids = [item["document_id"] for item in response.items]
+        assert "d1" not in ids, f"contamination: v1 doc visible in loco namespace: {ids}"
+        assert "c01" in ids
+        b.close()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def test_default_workdir_is_unique_per_adapter() -> None:

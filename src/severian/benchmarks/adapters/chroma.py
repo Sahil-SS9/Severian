@@ -42,6 +42,16 @@ class ChromaAdapter:
             import tempfile
 
             workdir = tempfile.mkdtemp(prefix="severian-bench-chroma-")
+        # When BOTH workdir and run_namespace are provided, the namespace
+        # is applied at the PERSISTENCE level too (workdir/<namespace>),
+        # not just in collection names. Two runs with the same namespace
+        # and the same workdir would otherwise share collections and
+        # contaminate each other (C-01: same-namespace reuse is a real
+        # contamination path — corpus isolation must be independent of
+        # execution order).
+        if run_namespace:
+            workdir = str(Path(workdir) / run_namespace)
+            Path(workdir).mkdir(parents=True, exist_ok=True)
         self._workdir = workdir
         self._client = chromadb.PersistentClient(path=workdir)
         # One collection per scope: Chroma has no native scope filter, so
