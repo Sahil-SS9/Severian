@@ -109,7 +109,15 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
             try:
                 from severian.benchmarks.adapters.chroma import ChromaAdapter
 
-                adapters[pid] = ChromaAdapter(provider_id=pid)
+                adapters[pid] = ChromaAdapter(
+                    provider_id=pid,
+                    workdir=(
+                        str(args.chroma_workdir)
+                        if args.chroma_workdir
+                        else None
+                    ),
+                    run_namespace=getattr(args, "run_id", None),
+                )
             except ImportError as exc:
                 venv_hint = ""
                 if args.chroma_venv:
@@ -149,6 +157,12 @@ def main() -> None:
     parser.add_argument("--chroma-venv", type=Path)
     parser.add_argument("--pg-dsn", type=str)
     parser.add_argument("--embedding", choices=["hash", "granite"], default="hash")
+    parser.add_argument("--run-id", type=str, default=None,
+                        help="unique run namespace for this benchmark invocation "
+                             "(C-01: prevents Chroma collection collisions between runs)")
+    parser.add_argument("--chroma-workdir", type=Path, default=None,
+                        help="explicit Chroma persistence root (benchmark-owned). "
+                             "Default: a fresh unique temp root per adapter.")
     args = parser.parse_args()
 
     # If a chroma venv is supplied, make its site-packages importable so
