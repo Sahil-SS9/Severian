@@ -346,6 +346,56 @@ def test_list_memory_revisions_returns_full_chain(repo):
     assert [m.content for m in chain] == ["v1", "v2", "v3"]
 
 
+def test_rollback_memory_restores_historical_revision(repo):
+    # A-2 (ChronoMem): a bad correction must be reversible. Rolling back
+    # to v2 restores it as the active head; the current head (v3) is
+    # superseded.
+    observation = IngestionService(repo).ingest(scope(), "original claim", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="v1",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="p1",
+            confidence=0.8,
+        )
+    )
+    v2 = repo.revise_memory(scope(), original.id, content="v2", model_id="local/model", prompt_version="p2")
+    v3 = repo.revise_memory(scope(), v2.id, content="v3", model_id="local/model", prompt_version="p3")
+
+    # v2 is currently superseded (by v3); rollback restores it.
+    assert repo.get_memory(scope(), v2.id).superseded_by_id == v3.id
+    restored = repo.rollback_memory(scope(), v2.id)
+
+    assert restored.id == v2.id
+    assert restored.superseded_by_id is None  # active again
+    # The old head (v3) is now superseded by the restored v2.
+    assert repo.get_memory(scope(), v3.id).superseded_by_id == v2.id
+    # list_memories (active heads) now returns v2, not v3.
+    active = [m.id for m in repo.list_memories(scope())]
+    assert v2.id in active
+    assert v3.id not in active
+
+
+def test_rollback_memory_rejects_already_active_revision(repo):
+    observation = IngestionService(repo).ingest(scope(), "original claim", {}).observation
+    original = repo.add_memory(
+        Memory(
+            scope=scope(),
+            kind="fact",
+            content="v1",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="p1",
+            confidence=0.8,
+        )
+    )
+    with pytest.raises(Exception):
+        repo.rollback_memory(scope(), original.id)
+
+
 def test_source_revision_supersedes_derived_memories(repo):
     # P0-5 repro: revising the source observation left memories derived
     # from the OLD head active — zero-stale-facts violated.

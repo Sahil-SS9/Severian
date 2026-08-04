@@ -166,6 +166,12 @@ class _FakeRepository:
         self._memories[self._key(scope, revision.id)] = revision
         return revision
 
+    def rollback_memory(self, scope: Scope, revision_id: str) -> Memory:
+        target = self.get_memory(scope, revision_id)
+        restored = target.model_copy(update={"superseded_by_id": None})
+        self._memories[self._key(scope, revision_id)] = restored
+        return restored
+
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         return Job(scope=scope, kind=kind, payload=payload)
 

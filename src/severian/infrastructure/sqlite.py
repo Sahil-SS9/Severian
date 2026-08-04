@@ -166,7 +166,7 @@ class SQLiteRepository:
         scope = getattr(model, "scope", None)
         if scope is None:
             return None
-        event_suffix = {"create": "created", "revise": "revised"}[operation]
+        event_suffix = {"create": "created", "revise": "revised", "rollback": "rolled_back"}[operation]
         event = Event(scope=scope, kind=f"{kind}.{event_suffix}", payload={"id": model.id})
         audit = AuditEvent(scope=scope, action=f"{kind}.{operation}", target_id=model.id, metadata={})
         return event, audit
@@ -686,6 +686,55 @@ class SQLiteRepository:
             connection.execute(records.insert().values(**self._record_values("memory", revision)))
             self._insert_events_in_transaction(connection, "memory", revision, operation="revise")
         return revision
+
+    def rollback_memory(self, scope: Scope, revision_id: str) -> Memory:
+        """Restore a historical revision as the active memory head (A-2).
+
+        Reverses a bad correction: the current head is marked
+        superseded and the target revision becomes the active head
+        again. The rollback itself is recorded as a new revision chain
+        (the restored revision keeps its identity; the current head
+        points at it).
+        """
+        target = self.get_memory(scope, revision_id)
+        # Find the CURRENT head of the same chain (walk superseded_by_id
+        # from the target's chain root forward).
+        chain_root = target.revision_of_id or target.id
+        current = self.get_memory(scope, chain_root)
+        # Walk forward: if current has been superseded, follow the link
+        # to the active head.
+        visited: set[str] = set()
+        while current.superseded_by_id is not None and current.superseded_by_id not in visited:
+            visited.add(current.superseded_by_id)
+            current = self.get_memory(scope, current.superseded_by_id)
+        if current.id == target.id:
+            raise ConflictError("revision is already the active head")
+        # Restore: supersede the current head, un-supersede the target.
+        changed_current = current.model_copy(update={"superseded_by_id": target.id})
+        restored = target.model_copy(update={"superseded_by_id": None})
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == current.id,
+                    records.c.record_type == "memory",
+                    *self._scope_predicates(scope),
+                )
+                .values(payload=changed_current.model_dump(mode="json"))
+            )
+            if result.rowcount != 1:
+                raise ConflictError("memory rollback conflict")
+            connection.execute(
+                update(records)
+                .where(
+                    records.c.id == target.id,
+                    records.c.record_type == "memory",
+                    *self._scope_predicates(scope),
+                )
+                .values(payload=restored.model_dump(mode="json"))
+            )
+            self._insert_events_in_transaction(connection, "memory", restored, operation="rollback")
+        return self.get_memory(scope, target.id)
 
     @classmethod
     def _insert_events_in_transaction(

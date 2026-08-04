@@ -73,6 +73,16 @@ class ScopedCanonicalPort(Protocol):
     def list_memories(self, scope: Scope) -> list[Memory]: ...
     def list_memories_history(self, scope: Scope) -> list[Memory]: ...
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]: ...
+
+    def rollback_memory(self, scope: Scope, revision_id: str) -> Memory:
+        """Restore a historical revision as the active memory head.
+
+        ChronoMem-style rollback (roadmap A-2): reverses a bad
+        correction by making ``revision_id`` the current head again.
+        The current head is superseded by the restored revision.
+        Returns the restored (now-active) memory.
+        """
+        ...
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int: ...
     def revise_memory(
         self,

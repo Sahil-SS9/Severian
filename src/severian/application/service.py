@@ -180,6 +180,18 @@ class MemoryService:
         """
         return self._repository.get_memory(scope, memory_id)
 
+    def rollback_memory(self, scope: Scope, revision_id: str) -> Memory:
+        """Restore a historical revision as the active memory head (A-2).
+
+        ChronoMem-style rollback: reverses a bad correction. The
+        restored revision becomes the active head; the current head is
+        superseded. The projection is rebuilt so retrieval reflects the
+        rollback immediately.
+        """
+        restored = self._repository.rollback_memory(scope, revision_id)
+        self._projection.rebuild(scope)
+        return restored
+
     def search(
         self,
         scope: Scope,
