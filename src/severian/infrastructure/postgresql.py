@@ -191,24 +191,24 @@ class PostgreSQLBackend:
         if not acknowledge:
             raise ValueError("reset() requires acknowledge=True (destructive)")
         from severian.infrastructure.pgvector_index import memory_vectors as pg_vectors
-        from severian.infrastructure.pgvector_index import metadata as pg_metadata
 
         db_name = self.dsn.rsplit("/", 1)[-1].split("?", 1)[0].strip()
         allow = db_name.lower().count("test") > 0 or os.environ.get("SEVERIAN_PG_ALLOW_RESET") == "1"
         if not allow:
             raise ValueError(
                 "reset() refused: database is not test-owned "
-                f"(name={db_name!r}); set SEVERIAN_PG_ALLOW_RESET=1 to override"
+                f"(db_name={db_name!r}, SEVERIAN_PG_ALLOW_RESET not set)"
             )
         with self.engine.begin() as connection:
             pg_vectors.drop(connection, checkfirst=True)
             metadata.drop_all(connection)
         self.initialize()
         # The pgvector projection table lives in a separate metadata
-        # object; recreate it so a bundle already holding a PGVectorIndex
-        # can keep writing after the reset.
+        # object (the default 256-dim table); recreate it so a bundle
+        # already holding a PGVectorIndex can keep writing after the
+        # reset.
         with self.engine.begin() as connection:
-            pg_metadata.create_all(connection)
+            pg_vectors.metadata.create_all(connection)
 
     def close(self) -> None:
         self.engine.dispose()

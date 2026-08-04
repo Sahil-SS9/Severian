@@ -55,7 +55,7 @@ class GraniteR2Embedding:
         if self._model is not None:
             return True
         try:
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
             return True

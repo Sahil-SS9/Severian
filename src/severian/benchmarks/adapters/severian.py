@@ -36,6 +36,7 @@ class SeverianAdapter:
         dsn: str | None = None,
         workdir: str | None = None,
         dimension: int = 256,
+        embedding: Any | None = None,
         min_vector_score: float | None = 0.15,
         reset_db: bool = False,
     ) -> None:
@@ -45,6 +46,7 @@ class SeverianAdapter:
         self.backend = backend
         self.dsn = dsn
         self._min_vector_score = min_vector_score
+        self._embedding = embedding
         self._root = Path(workdir or tempfile.mkdtemp(prefix="severian-bench-"))
         self._root.mkdir(parents=True, exist_ok=True)
         database = self._root / "severian.db"
@@ -59,6 +61,7 @@ class SeverianAdapter:
                 database=database,
                 fts=fts,
                 vectors=vectors,
+                embedding=self._embedding,
             )
         else:
             self._bundle = build_bundle(
@@ -66,6 +69,7 @@ class SeverianAdapter:
                 database=database,
                 fts=fts,
                 vectors=vectors,
+                embedding=self._embedding,
             )
         # A local, deterministic derivation gateway (never cloud).
         self._gateway = _LocalHashGateway()

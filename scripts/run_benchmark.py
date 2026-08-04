@@ -72,7 +72,15 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
 
     Vendor-reported providers (``vendor_reported_only``) are never run;
     their claimed metrics are carried in the evidence as citations only.
+
+    ``--embedding granite`` swaps the severian lanes to the pluggable
+    neural embedding (A-1); any load failure falls back to hash.
     """
+    embedding_provider = None
+    if getattr(args, "embedding", "hash") == "granite":
+        from severian.infrastructure.granite_embedding import GraniteR2Embedding
+
+        embedding_provider = GraniteR2Embedding().or_hash()
     adapters: dict[str, ProviderAdapter] = {}
     for provider in manifest.providers:
         pid = provider.id
@@ -88,10 +96,13 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
                 # every run measures exactly this corpus (see adapter).
                 os.environ["SEVERIAN_PG_ALLOW_RESET"] = "1"
                 adapters[pid] = SeverianAdapter(
-                    provider_id=pid, backend="postgresql", dsn=dsn, reset_db=True
+                    provider_id=pid, backend="postgresql", dsn=dsn, reset_db=True,
+                    embedding=embedding_provider,
                 )
             else:
-                adapters[pid] = SeverianAdapter(provider_id=pid, backend="sqlite")
+                adapters[pid] = SeverianAdapter(
+                    provider_id=pid, backend="sqlite", embedding=embedding_provider
+                )
         elif pid == "chroma" or (
             provider.kind == "external" and provider.vendor and "chroma" in provider.vendor.lower()
         ):
@@ -137,6 +148,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--chroma-venv", type=Path)
     parser.add_argument("--pg-dsn", type=str)
+    parser.add_argument("--embedding", choices=["hash", "granite"], default="hash")
     args = parser.parse_args()
 
     # If a chroma venv is supplied, make its site-packages importable so
