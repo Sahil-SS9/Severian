@@ -1,7 +1,7 @@
 # SEVERIAN — MASTER HANDOFF PACKAGE (2026-08-03)
 
 > Author: KENSEI
-> Status: **READY TO BE AUDITED** — all register items A–G resolved or honestly blocked; full gate green on main (255 passed / 36 skipped, mypy --strict clean, ruff clean). Hand to a third-party agent for objective review.
+> Status: **CORRECTION LANE COMPLETE — AWAITING INDEPENDENT REVIEW.** All register items A–G resolved or honestly blocked; auditor corrections C-01..C-10 implemented on branch `fix/auditor-corrections-2026-08-04` (HEAD `c58fdd0`): 267 passed / 36 skipped, mypy --strict clean (46 files), ruff clean. Do not merge without review; the reviewer owns the READY verdict.
 > Read order: this document first, end to end. Then the referenced files in §7.
 > Purpose: a third-party agent must be able to continue seamlessly from the
 > current project state with zero institutional memory.
@@ -36,11 +36,14 @@ external supermemory.ai competitor.
 
 | Repo | Branch | HEAD | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `main` | `2b2127a` | CLEAN — production branch (audit merged via G-1) |
+| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane) | `c58fdd0` | CLEAN — auditor corrections C-01..C-10 implemented; awaiting independent review before merge |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | CLEAN |
 
 - `main` on Severian is the canonical production branch — audit branch merged
   `--no-ff` (G-1, commit `6f32354`); all A/B/C/E/G work landed on main.
+  The correction lane (`fix/auditor-corrections-2026-08-04`, HEAD `c58fdd0`)
+  branches from `b628a97` (post-handover-prompt) and must be reviewed before
+  merge back to main.
 - Release tag `v0.1.0` exists. Wheel + sdist in `dist/`
   (`severian-0.1.0-py3-none-any.whl`, `severian-0.1.0.tar.gz`); wheel verified
   in a fresh venv with the rollback/episode commands present.
@@ -240,25 +243,28 @@ Run in order; each must pass before proceeding:
 ```bash
 cd /home/kensei/repos/Severian
 git status --short          # expect: clean
-git branch --show-current   # expect: audit/brutal-critique-v0.1.0
-git log --oneline -1        # expect: fdae4da docs(bench): apply 3rd-party eval corrections; land superiority roadmap
+git branch --show-current   # expect: fix/auditor-corrections-2026-08-04 (correction lane)
+git rev-parse HEAD          # expect: c58fdd0 (descendant of baseline dfc418f)
 
-uv run pytest -q            # expect: 228 passed, 36 skipped (3 warnings)
-uv run mypy --strict src/severian tests/benchmarks scripts/   # expect: Success
-uv run ruff check src/severian tests/benchmarks scripts/      # expect: All checks passed
+uv run pytest -q            # expect: 267 passed, 36 skipped (3 warnings)
+uv run mypy --strict src/severian   # expect: Success, 46 files
+uv run ruff check src/severian tests scripts      # expect: All checks passed
 
 # PG + pgvector reachable
-uv run python -c "from severian.infrastructure.postgresql import PostgreSQLBackend; from severian.infrastructure.pgvector_index import PGVectorIndex; r=PostgreSQLBackend(dsn='postgresql://severian:severian@127.0.0.1:54329/severian'); r.close(); i=PGVectorIndex(dsn='postgresql://severian:severian@127.0.0.1:54329/severian'); i.close(); print('PG OK')"
+uv run python -c "from severian.infrastructure.postgresql import PostgreSQLBackend; from severian.infrastructure.pgvector_index import PGVectorIndex; r=PostgreSQLBackend(dsn='postgresql://severian:***@127.0.0.1:54329/severian'); r.close(); i=PGVectorIndex(dsn='postgresql://severian:***@127.0.0.1:54329/severian'); i.close(); print('PG OK')"
 
-# Manifest validates
+# Manifests validate
 uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-v1.json
+uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-locomo-tier-v1.json
 
-# Quality benchmark (fast, manifest corpus) — must PASS gate
-uv run python scripts/run_benchmark.py --manifest docs/benchmarks/manifest-v1.json --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:severian@127.0.0.1:54329/severian" --out /tmp/verify-quality
+# Quality benchmark (fast, manifest corpus) — the gate HONESTLY FAILS on
+# citation_precision (0.9375 < 1.0); recall/stale/leak/unsup pass. This is
+# the product finding, not a green-light signal.
+uv run python scripts/run_benchmark.py --manifest docs/benchmarks/manifest-v1.json --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:***@127.0.0.1:54329/severian" --out /tmp/verify-quality
 
 # 5-doc anomaly repro through the SDK (0 → N → N pattern)
 # see docs/benchmarks/handover-third-party-eval-2026-08-03.md §protocol step 4
-
+```
 # Scale lane sanity (1k only, ~4 min)
 uv run python scripts/run_scale_benchmark.py --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:severian@127.0.0.1:54329/severian" --min-bucket 1000 --max-bucket 1000 --out /tmp/verify-scale
 # expect: run_state complete, 4 lanes (sqlite, postgres, chroma, baseline)
@@ -273,8 +279,10 @@ npm audit --omit=dev        # expect: 0 vulnerabilities
 npm run lint && npm run build   # expect: pass
 ```
 
-After verification: report PASS/FAIL per line, then start on §3 backlog in the
-priority order agreed with Sahil (default: E-1 → E-3 → C-1 → B-1 → A-1).
+After verification: report PASS/FAIL per line. The correction lane is
+COMPLETE (C-01..C-10); do NOT re-execute the audit — submit findings for
+independent review. The correction branch must not be merged without that
+review.
 
 ---
 
