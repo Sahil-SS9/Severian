@@ -370,6 +370,14 @@ class SQLiteRepository:
         return candidate, job
 
     def list_observations(self, scope: Scope) -> list[Observation]:
+        """All observations in scope, including superseded revisions.
+
+        Contract (append-only): the canonical store retains every
+        observation as immutable raw evidence (P0-1); a revision marks
+        the old head superseded but never removes it. Consumers that
+        need active-only semantics (e.g. the derive pass) filter
+        ``superseded_by_id`` themselves.
+        """
         self._require_scope(scope)
         query = (
             select(records.c.payload)
@@ -378,6 +386,15 @@ class SQLiteRepository:
         )
         with self.engine.connect() as connection:
             return [Observation.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def list_observations_history(self, scope: Scope) -> list[Observation]:
+        """All observations in scope INCLUDING superseded revisions.
+
+        Explicit alias of :meth:`list_observations` for consumers that
+        need the raw evidence trail (temporal probes, rollback). The
+        store is append-only: every revision is retained.
+        """
+        return self.list_observations(scope)
 
     def update_observation_content(self, observation_id: str, content: str) -> None:
         del observation_id, content

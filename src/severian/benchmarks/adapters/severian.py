@@ -223,7 +223,7 @@ class SeverianAdapter:
         # (including superseded ones) so temporal probes are answered
         # from the evidence the platform actually keeps.
         if query_kind == "temporal":
-            observations = self._bundle.repository.list_observations(scoped)
+            observations = self._bundle.repository.list_observations_history(scoped)
             history_items: list[dict[str, Any]] = []
             query_tokens = {tok.casefold() for tok in re.findall(r"[\w]+", query)}
             for observation in observations:

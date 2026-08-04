@@ -104,6 +104,11 @@ class _FakeRepository:
     def list_observations(self, scope: Scope) -> list[Observation]:
         return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
 
+    def list_observations_history(self, scope: Scope) -> list[Observation]:
+        # The fake retains every observation (revisions are added, the
+        # original is left untouched) — history == full list here.
+        return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
+
     def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
         original = self.get_observation(scope, observation_id)
         revision = original.model_copy(
