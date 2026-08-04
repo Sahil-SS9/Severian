@@ -82,6 +82,11 @@ class SeverianAdapter:
             if backend != "postgresql":
                 raise ValueError("reset_db only applies to the postgresql backend")
             self._bundle.repository.reset(acknowledge=True)
+            # reset() drops the pgvector projection table (owned by the
+            # index, dimension derived from the embedding provider).
+            # Re-initialize so the table exists at the correct dimension
+            # (256 hash / 384 Granite) before any insert.
+            self._bundle.vector.initialize()
         # observation_id -> document_id map for trace resolution.
         self._obs_to_doc: dict[str, str] = {}
         # scope -> collection created

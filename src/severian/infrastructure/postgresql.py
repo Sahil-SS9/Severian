@@ -203,12 +203,12 @@ class PostgreSQLBackend:
             pg_vectors.drop(connection, checkfirst=True)
             metadata.drop_all(connection)
         self.initialize()
-        # The pgvector projection table lives in a separate metadata
-        # object (the default 256-dim table); recreate it so a bundle
-        # already holding a PGVectorIndex can keep writing after the
-        # reset.
-        with self.engine.begin() as connection:
-            pg_vectors.metadata.create_all(connection)
+        # The pgvector projection table is owned by PGVectorIndex (its
+        # dimension derives from the embedding provider, 256 or 384).
+        # reset() drops it here but does NOT recreate it — the owning
+        # index recreates it at the correct dimension on its own
+        # initialize()/create_all call. Recreating at a hardcoded 256
+        # here would clobber a Granite (384-dim) schema.
 
     def close(self) -> None:
         self.engine.dispose()
