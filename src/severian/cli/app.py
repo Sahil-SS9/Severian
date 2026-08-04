@@ -358,6 +358,77 @@ def import_(
         bundle.close()
 
 
+@cli.command("rollback")
+def rollback(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    revision_id: str = typer.Option(..., "--revision-id", help="Historical revision to restore as active head."),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Restore a historical memory revision as the active head (A-2)."""
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
+        restored = bundle.service.rollback_memory(scope, revision_id)
+        _emit(
+            {
+                "format": "severian-v1",
+                "status": "rolled_back",
+                "revision_id": restored.id,
+                "content": restored.content,
+                "superseded_by_id": restored.superseded_by_id,
+            }
+        )
+    except Exception as exc:
+        raise typer.BadParameter(f"cannot rollback: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+@cli.command("episode")
+def episode(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Consolidate a session's observations into an episode memory (B-2)."""
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
+        from severian.application.episodes import EpisodeService
+
+        episode_memory = EpisodeService(bundle.repository).consolidate_session(scope)
+        if episode_memory is None:
+            _emit({"format": "severian-v1", "status": "skipped", "reason": "below min observations"})
+        else:
+            _emit(
+                {
+                    "format": "severian-v1",
+                    "status": "episode_created",
+                    "memory_id": episode_memory.id,
+                    "kind": episode_memory.kind,
+                    "source_observation_count": len(episode_memory.source_observation_ids),
+                    "content": episode_memory.content,
+                }
+            )
+    except Exception as exc:
+        raise typer.BadParameter(f"cannot consolidate episode: {exc}") from exc
+    finally:
+        bundle.close()
+
+
 @cli.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
