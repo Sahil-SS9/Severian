@@ -45,8 +45,18 @@ agent_id / session_id`. Local-first, deterministic, offline-capable.
 Repos:
 | Repo | Branch | HEAD (claimed) | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `main` | `dfc418f` | clean |
+| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane; main is the merged baseline) | `876f616` | clean |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | clean (out of scope unless you choose to extend) |
+
+CODE BASELINE (C-06): the audited code baseline is `dfc418f`
+(`dfc418f226e7705b4304ae30c9b720fc12ede210`). The correction lane adds:
+benchmark isolation (C-01), batch corrections (C-02/C-03), deterministic
+tiebreaks (C-08), plus tests and docs. Verify ancestry: the audit checkout
+must be a descendant of `dfc418f` and the intervening diff must be limited
+to `src/severian/benchmarks/`, `scripts/run_batch_compare.py`,
+`scripts/run_benchmark.py`, `tests/benchmarks/`, `docs/`, and
+`tests/contract/` — anything outside that set is a finding. Do NOT hardcode
+a single expected HEAD: assert ancestry + allowed-diff, not an exact SHA.
 
 Environment:
 - PostgreSQL 16 + pgvector at `postgresql://severian:severian@127.0.0.1:54329/severian`
@@ -63,14 +73,16 @@ Environment:
 Run these from `/home/kensei/repos/Severian`. Record actual vs expected.
 
 ```bash
-# 1. Repo state
-git rev-parse HEAD            # expected dfc418f226e7705b4304ae30c9b720fc12ede210
+# 1. Repo state (C-06: ancestry + allowed-diff, not exact HEAD)
+git rev-parse HEAD            # must be a DESCENDANT of dfc418f226e7705b4304ae30c9b720fc12ede210
+git merge-base --is-ancestor dfc418f226e7705b4304ae30c9b720fc12ede210 HEAD && echo "ancestry OK"
+git diff --name-only dfc418f226e7705b4304ae30c9b720fc12ede210..HEAD | cat
+                              # must be limited to: src/severian/benchmarks/,
+                              # scripts/run_batch_compare.py, scripts/run_benchmark.py,
+                              # tests/benchmarks/, tests/contract/, docs/
 git status --short            # expected: empty (clean)
-git log --oneline -12 | cat   # expected: dfc418f, 2b2127a, e341705, 75b61fc,
-                              #   f3552b5, 4191392, b2ca43a, 26f3c09, 83ecc00,
-                              #   bb5c460, 3ccf788, 6a30fae
 
-# 2. Test gate — expected: 255 passed, 36 skipped, 0 failed
+# 2. Test gate — expected: 267 passed, 36 skipped, 0 failed
 uv run pytest -q 2>&1 | tail -3
 
 # 3. Type gate — expected: "Success: no issues found in 46 source files"
@@ -167,8 +179,13 @@ plus `require_external_providers=1`.
   Inspect `src/severian/infrastructure/granite_embedding.py` and
   `src/severian/infrastructure/vector.py` (EmbeddingProvider protocol).
 - CLAIM: On the LOCOMO corpus, Granite finds the paraphrase-distant target
-  (q6 → c27 at rank 2, fused ~0.016) where hash returns []. Evidence:
-  `docs/benchmarks/evidence/2026-08-03-locomo-granite/traces.json`.
+  (q6 → c27) where hash returns []. **Provenance (C-04 — do not conflate):**
+  the HISTORICAL full-lane trace
+  (`docs/benchmarks/evidence/2026-08-03-locomo-granite/traces.json`)
+  records q6 → `[]` for both Granite lanes; a CURRENT bounded spot-check
+  (producing SHA 876f616) returned `[c27, c12, c24]` with c27 at rank 1.
+  These are DIFFERENT evidence statements. The full-lane negative result
+  (Granite recall 0.808/0.885 vs hash 0.923) is unchanged.
   Optional reproduce (model download ~500MB, CPU; time-box 10 min):
   ```bash
   uv run python -c "

@@ -1,0 +1,1342 @@
+{
+  "baseline-lexical": {
+    "provider_id": "baseline-lexical",
+    "queries": [
+      {
+        "citations": [
+          "d01",
+          "d02",
+          "d05",
+          "d10",
+          "d11",
+          "d14",
+          "d15",
+          "d17",
+          "d20",
+          "d26"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.04246097523719072,
+        "query_id": "q1",
+        "returned_ids": [
+          "d01",
+          "d02",
+          "d05",
+          "d10",
+          "d11",
+          "d14",
+          "d15",
+          "d17",
+          "d20",
+          "d26"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.02141005825251341,
+        "query_id": "q2",
+        "returned_ids": [
+          "d02"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d19",
+          "d27",
+          "d02",
+          "d06",
+          "d07",
+          "d08"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.0353899085894227,
+        "query_id": "q3",
+        "returned_ids": [
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d19",
+          "d27",
+          "d02",
+          "d06",
+          "d07",
+          "d08"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d04",
+          "d03",
+          "d27",
+          "d14",
+          "d15",
+          "d19",
+          "d08",
+          "d12",
+          "d26",
+          "d06"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03452098462730646,
+        "query_id": "q4",
+        "returned_ids": [
+          "d04",
+          "d03",
+          "d27",
+          "d14",
+          "d15",
+          "d19",
+          "d08",
+          "d12",
+          "d26",
+          "d06"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d11",
+          "d12",
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d19",
+          "d27",
+          "d06",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03312004264444113,
+        "query_id": "q5",
+        "returned_ids": [
+          "d11",
+          "d12",
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d19",
+          "d27",
+          "d06",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d14",
+          "d15",
+          "d19",
+          "d03",
+          "d04",
+          "d27",
+          "d06",
+          "d07",
+          "d08",
+          "d10"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03151001874357462,
+        "query_id": "q6",
+        "returned_ids": [
+          "d14",
+          "d15",
+          "d19",
+          "d03",
+          "d04",
+          "d27",
+          "d06",
+          "d07",
+          "d08",
+          "d10"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d05",
+          "d16",
+          "d08",
+          "d09",
+          "d20"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.028221053071320057,
+        "query_id": "q7",
+        "returned_ids": [
+          "d05",
+          "d16",
+          "d08",
+          "d09",
+          "d20"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d03",
+          "d15",
+          "d04",
+          "d11",
+          "d14",
+          "d18",
+          "d19",
+          "d27",
+          "d06",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03374996595084667,
+        "query_id": "q8",
+        "returned_ids": [
+          "d03",
+          "d15",
+          "d04",
+          "d11",
+          "d14",
+          "d18",
+          "d19",
+          "d27",
+          "d06",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d10",
+          "d09",
+          "d01",
+          "d05",
+          "d20",
+          "d26"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.027520000003278255,
+        "query_id": "q9",
+        "returned_ids": [
+          "d10",
+          "d09",
+          "d01",
+          "d05",
+          "d20",
+          "d26"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d08",
+          "d14",
+          "d15",
+          "d27",
+          "d03",
+          "d04",
+          "d07",
+          "d11",
+          "d19",
+          "d01"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03520003519952297,
+        "query_id": "q10",
+        "returned_ids": [
+          "d08",
+          "d14",
+          "d15",
+          "d27",
+          "d03",
+          "d04",
+          "d07",
+          "d11",
+          "d19",
+          "d01"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d26",
+          "d04",
+          "d03",
+          "d27",
+          "d08",
+          "d14",
+          "d15",
+          "d19",
+          "d06",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.03271002788096666,
+        "query_id": "q11",
+        "returned_ids": [
+          "d26",
+          "d04",
+          "d03",
+          "d27",
+          "d08",
+          "d14",
+          "d15",
+          "d19",
+          "d06",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d27",
+          "d11",
+          "d19",
+          "d01",
+          "d02",
+          "d06"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.033890013583004475,
+        "query_id": "q12",
+        "returned_ids": [
+          "d03",
+          "d04",
+          "d14",
+          "d15",
+          "d27",
+          "d11",
+          "d19",
+          "d01",
+          "d02",
+          "d06"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d27",
+          "d04",
+          "d03",
+          "d14",
+          "d15",
+          "d19",
+          "d08",
+          "d06",
+          "d07",
+          "d10"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.26031199377030134,
+        "query_id": "q13",
+        "returned_ids": [
+          "d27",
+          "d04",
+          "d03",
+          "d14",
+          "d15",
+          "d19",
+          "d08",
+          "d06",
+          "d07",
+          "d10"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d22",
+          "d21"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.017060083337128162,
+        "query_id": "q14",
+        "returned_ids": [
+          "d22",
+          "d21"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25",
+          "d24",
+          "d21",
+          "d23"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.012121046893298626,
+        "query_id": "q15",
+        "returned_ids": [
+          "d25",
+          "d24",
+          "d21",
+          "d23"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d24",
+          "d25",
+          "d23"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 0.010640011169016361,
+        "query_id": "q16",
+        "returned_ids": [
+          "d24",
+          "d25",
+          "d23"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      }
+    ]
+  },
+  "chroma": {
+    "provider_id": "chroma",
+    "queries": [
+      {
+        "citations": [
+          "d01",
+          "d02",
+          "d03",
+          "d27",
+          "d09",
+          "d26",
+          "d04",
+          "d13",
+          "d14",
+          "d15"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 224.5148930232972,
+        "query_id": "q1",
+        "returned_ids": [
+          "d01",
+          "d02",
+          "d03",
+          "d27",
+          "d09",
+          "d26",
+          "d04",
+          "d13",
+          "d14",
+          "d15"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02",
+          "d01",
+          "d03",
+          "d15",
+          "d26",
+          "d11",
+          "d14",
+          "d04",
+          "d27",
+          "d17"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 238.60946099739522,
+        "query_id": "q2",
+        "returned_ids": [
+          "d02",
+          "d01",
+          "d03",
+          "d15",
+          "d26",
+          "d11",
+          "d14",
+          "d04",
+          "d27",
+          "d17"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02",
+          "d03",
+          "d15",
+          "d01",
+          "d14",
+          "d26",
+          "d11",
+          "d04",
+          "d10",
+          "d27"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 198.65564501378685,
+        "query_id": "q3",
+        "returned_ids": [
+          "d02",
+          "d03",
+          "d15",
+          "d01",
+          "d14",
+          "d26",
+          "d11",
+          "d04",
+          "d10",
+          "d27"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d04",
+          "d03",
+          "d26",
+          "d14",
+          "d27",
+          "d13",
+          "d01",
+          "d15",
+          "d19",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 184.9238589638844,
+        "query_id": "q4",
+        "returned_ids": [
+          "d04",
+          "d03",
+          "d26",
+          "d14",
+          "d27",
+          "d13",
+          "d01",
+          "d15",
+          "d19",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d11",
+          "d12",
+          "d19",
+          "d27",
+          "d20",
+          "d08",
+          "d13",
+          "d17",
+          "d06",
+          "d15"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 189.47193399071693,
+        "query_id": "q5",
+        "returned_ids": [
+          "d11",
+          "d12",
+          "d19",
+          "d27",
+          "d20",
+          "d08",
+          "d13",
+          "d17",
+          "d06",
+          "d15"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d14",
+          "d15",
+          "d19",
+          "d06",
+          "d13",
+          "d11",
+          "d20",
+          "d08",
+          "d27",
+          "d12"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 227.83675894606858,
+        "query_id": "q6",
+        "returned_ids": [
+          "d14",
+          "d15",
+          "d19",
+          "d06",
+          "d13",
+          "d11",
+          "d20",
+          "d08",
+          "d27",
+          "d12"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d05",
+          "d16",
+          "d07",
+          "d19",
+          "d06",
+          "d08",
+          "d04",
+          "d17",
+          "d20",
+          "d26"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 250.75593392830342,
+        "query_id": "q7",
+        "returned_ids": [
+          "d05",
+          "d16",
+          "d07",
+          "d19",
+          "d06",
+          "d08",
+          "d04",
+          "d17",
+          "d20",
+          "d26"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d17",
+          "d16",
+          "d11",
+          "d09",
+          "d12",
+          "d13",
+          "d05",
+          "d19",
+          "d15",
+          "d08"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 191.24850805383176,
+        "query_id": "q8",
+        "returned_ids": [
+          "d17",
+          "d16",
+          "d11",
+          "d09",
+          "d12",
+          "d13",
+          "d05",
+          "d19",
+          "d15",
+          "d08"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d10",
+          "d09",
+          "d16",
+          "d17",
+          "d11",
+          "d20",
+          "d03",
+          "d06",
+          "d19",
+          "d15"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 194.60771302692592,
+        "query_id": "q9",
+        "returned_ids": [
+          "d10",
+          "d09",
+          "d16",
+          "d17",
+          "d11",
+          "d20",
+          "d03",
+          "d06",
+          "d19",
+          "d15"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d08",
+          "d07",
+          "d06",
+          "d27",
+          "d18",
+          "d19",
+          "d04",
+          "d13",
+          "d17",
+          "d20"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 218.99746090639383,
+        "query_id": "q10",
+        "returned_ids": [
+          "d08",
+          "d07",
+          "d06",
+          "d27",
+          "d18",
+          "d19",
+          "d04",
+          "d13",
+          "d17",
+          "d20"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d26",
+          "d13",
+          "d14",
+          "d04",
+          "d20",
+          "d15",
+          "d03",
+          "d08",
+          "d01",
+          "d06"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 210.56848589796573,
+        "query_id": "q11",
+        "returned_ids": [
+          "d26",
+          "d13",
+          "d14",
+          "d04",
+          "d20",
+          "d15",
+          "d03",
+          "d08",
+          "d01",
+          "d06"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02",
+          "d14",
+          "d16",
+          "d03",
+          "d04",
+          "d15",
+          "d05",
+          "d27",
+          "d26",
+          "d13"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 235.90871994383633,
+        "query_id": "q12",
+        "returned_ids": [
+          "d02",
+          "d14",
+          "d16",
+          "d03",
+          "d04",
+          "d15",
+          "d05",
+          "d27",
+          "d26",
+          "d13"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d27",
+          "d04",
+          "d06",
+          "d11",
+          "d14",
+          "d03",
+          "d01",
+          "d19",
+          "d13",
+          "d08"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 219.72959500271827,
+        "query_id": "q13",
+        "returned_ids": [
+          "d27",
+          "d04",
+          "d06",
+          "d11",
+          "d14",
+          "d03",
+          "d01",
+          "d19",
+          "d13",
+          "d08"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d22",
+          "d21",
+          "d23",
+          "d24",
+          "d25"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 216.83960303198546,
+        "query_id": "q14",
+        "returned_ids": [
+          "d22",
+          "d21",
+          "d23",
+          "d24",
+          "d25"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25",
+          "d24",
+          "d21",
+          "d23",
+          "d22"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 217.98560197930783,
+        "query_id": "q15",
+        "returned_ids": [
+          "d25",
+          "d24",
+          "d21",
+          "d23",
+          "d22"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25",
+          "d24",
+          "d21",
+          "d23",
+          "d22"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 244.8948179371655,
+        "query_id": "q16",
+        "returned_ids": [
+          "d25",
+          "d24",
+          "d21",
+          "d23",
+          "d22"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      }
+    ]
+  },
+  "severian-postgres": {
+    "provider_id": "severian-postgres",
+    "queries": [
+      {
+        "citations": [
+          "d01"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 363.93417802173644,
+        "query_id": "q1",
+        "returned_ids": [
+          "d01"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02",
+          "d04",
+          "d12"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 109.57403294742107,
+        "query_id": "q2",
+        "returned_ids": [
+          "d02",
+          "d04",
+          "d12"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 108.6952950572595,
+        "query_id": "q3",
+        "returned_ids": [
+          "d02"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d04",
+          "d03",
+          "d08",
+          "d12",
+          "d26",
+          "d27",
+          "d13",
+          "d17",
+          "d02"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 106.22821701690555,
+        "query_id": "q4",
+        "returned_ids": [
+          "d04",
+          "d03",
+          "d08",
+          "d12",
+          "d26",
+          "d27",
+          "d13",
+          "d17",
+          "d02"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d11",
+          "d12",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 98.46318699419498,
+        "query_id": "q5",
+        "returned_ids": [
+          "d11",
+          "d12",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d15",
+          "d19"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 103.60376699827611,
+        "query_id": "q6",
+        "returned_ids": [
+          "d15",
+          "d19"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d16",
+          "d05"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 101.3708389364183,
+        "query_id": "q7",
+        "returned_ids": [
+          "d16",
+          "d05"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d17",
+          "d09"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 114.73297199700028,
+        "query_id": "q8",
+        "returned_ids": [
+          "d17",
+          "d09"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d10",
+          "d09"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 124.5715479599312,
+        "query_id": "q9",
+        "returned_ids": [
+          "d10",
+          "d09"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d08",
+          "d07",
+          "d13"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 137.21530500333756,
+        "query_id": "q10",
+        "returned_ids": [
+          "d08",
+          "d07",
+          "d13"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d26",
+          "d04",
+          "d13",
+          "d19"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 107.379095046781,
+        "query_id": "q11",
+        "returned_ids": [
+          "d26",
+          "d04",
+          "d13",
+          "d19"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [],
+        "cost_usd": 0.0,
+        "elapsed_ms": 101.63835098501295,
+        "query_id": "q12",
+        "returned_ids": [],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d27",
+          "d15"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 102.02038404531777,
+        "query_id": "q13",
+        "returned_ids": [
+          "d27",
+          "d15"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d22",
+          "d21"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 77.74385705124587,
+        "query_id": "q14",
+        "returned_ids": [
+          "d22",
+          "d21"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.47850289940834,
+        "query_id": "q15",
+        "returned_ids": [
+          "d25"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.5318239107728,
+        "query_id": "q16",
+        "returned_ids": [
+          "d25"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      }
+    ]
+  },
+  "severian-sqlite": {
+    "provider_id": "severian-sqlite",
+    "queries": [
+      {
+        "citations": [
+          "d01"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 272.848338005133,
+        "query_id": "q1",
+        "returned_ids": [
+          "d01"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02",
+          "d04",
+          "d12"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 28.30771799199283,
+        "query_id": "q2",
+        "returned_ids": [
+          "d02",
+          "d04",
+          "d12"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d02"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 27.024477953091264,
+        "query_id": "q3",
+        "returned_ids": [
+          "d02"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d04",
+          "d03",
+          "d08",
+          "d12",
+          "d26",
+          "d27",
+          "d13",
+          "d17",
+          "d02"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.296411990188062,
+        "query_id": "q4",
+        "returned_ids": [
+          "d04",
+          "d03",
+          "d08",
+          "d12",
+          "d26",
+          "d27",
+          "d13",
+          "d17",
+          "d02"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d11",
+          "d12",
+          "d07"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.98517800308764,
+        "query_id": "q5",
+        "returned_ids": [
+          "d11",
+          "d12",
+          "d07"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d15",
+          "d19"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.269222027622163,
+        "query_id": "q6",
+        "returned_ids": [
+          "d15",
+          "d19"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d16",
+          "d05"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.12078096717596,
+        "query_id": "q7",
+        "returned_ids": [
+          "d16",
+          "d05"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d17",
+          "d09"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.553843985311687,
+        "query_id": "q8",
+        "returned_ids": [
+          "d17",
+          "d09"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d10",
+          "d09"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 25.962709914892912,
+        "query_id": "q9",
+        "returned_ids": [
+          "d10",
+          "d09"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d08",
+          "d07",
+          "d13"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 26.03785996325314,
+        "query_id": "q10",
+        "returned_ids": [
+          "d08",
+          "d07",
+          "d13"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d26",
+          "d13",
+          "d04",
+          "d19"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 25.981180020608008,
+        "query_id": "q11",
+        "returned_ids": [
+          "d26",
+          "d13",
+          "d04",
+          "d19"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [],
+        "cost_usd": 0.0,
+        "elapsed_ms": 25.74895799625665,
+        "query_id": "q12",
+        "returned_ids": [],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d27",
+          "d15"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 25.916739949025214,
+        "query_id": "q13",
+        "returned_ids": [
+          "d27",
+          "d15"
+        ],
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "citations": [
+          "d22",
+          "d21"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 58.928452897816896,
+        "query_id": "q14",
+        "returned_ids": [
+          "d22",
+          "d21"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 6.865423056297004,
+        "query_id": "q15",
+        "returned_ids": [
+          "d25"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      },
+      {
+        "citations": [
+          "d25"
+        ],
+        "cost_usd": 0.0,
+        "elapsed_ms": 6.350178038701415,
+        "query_id": "q16",
+        "returned_ids": [
+          "d25"
+        ],
+        "scope": "t2/p2/c2/a2/s2"
+      }
+    ]
+  }
+}

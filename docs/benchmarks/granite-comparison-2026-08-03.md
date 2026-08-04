@@ -26,6 +26,18 @@
    secrets stored now?" vs "secret store uses scrypt hashing"). This corpus
    under-samples that class — the B-1 analysis flagged it as the A-1 target,
    and a single-probe corpus cannot show the win.
+
+   **Provenance (C-04 distinction — do not conflate):**
+   - Historical full-lane evidence (`evidence/2026-08-03-locomo-granite/`):
+     q6 returned `[]` for both Granite lanes — the full-lane negative result
+     (Granite recall 0.808/0.885 vs hash 0.923) is unchanged and internally
+     consistent.
+   - Current bounded spot-check (producing SHA 876f616): Granite returned
+     `[c27, c12, c24]` for q6, c27 at rank 1. This is a DIFFERENT evidence
+     statement from the full-lane trace. The spot-check shows the semantic
+     gap IS closable; it does not change the full-lane negative result.
+   - The full Granite lane was not re-run in the correction lane (out of
+     scope per packet C-04).
 3. **Semantic ≠ universally better**: Chroma (semantic) also shows the
    tradeoff (recall 0.962 but stale 0.100, cit_prec 0.469). Embedding choice
    is corpus-dependent, not monotonic.

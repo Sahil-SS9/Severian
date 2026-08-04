@@ -305,33 +305,45 @@ All register items are resolved or honestly blocked:
 
 | Item | Status | Evidence |
 |---|---|---|
-| A-1 Granite R2 embeddings | DONE | EmbeddingProvider protocol + GraniteR2Embedding (6a30fae), pgvector dim parameterization (3ccf788), live benchmark (26f3c09) — Granite closes q6 (c27 rank 2) |
+| A-1 Granite R2 embeddings | DONE | EmbeddingProvider protocol + GraniteR2Embedding (6a30fae), pgvector dim parameterization (3ccf788), live benchmark (26f3c09) — Granite closes q6 (c27 rank 1 in bounded spot-check) |
 | A-2 versioning/rollback | DONE | rollback_memory both backends (bb5c460), idempotent projection rebuild (f3552b5) |
 | A-3 real-data probes | SPEC WRITTEN — blocked on corpus approval | real-data-probe-spec-2026-08-03.md |
-| A-4 Chroma batch compare | DONE | evidence/2026-08-03-batch-compare/ (9566937) |
-| B-1 LOCOMO-tier | DONE (gate honestly FAILs) | definitive re-run: recall 0.923, temporal 1.000, stale 0.000 |
+| A-4 Chroma batch compare | DONE (corrected) | run_batch_compare.py C-02/C-03 corrected: speedup_v2 9.07 (batch 39.0 / per-doc 4.3 docs/s), severian 236.3 docs/s, reps 3, git SHA + corpus hash recorded |
+| B-1 LOCOMO-tier | DONE (gate honestly FAILs) | definitive re-run: recall 0.923, temporal 1.000, stale 0.000, MRR 0.8846 (deterministic after C-08) |
 | B-2 episodic summarization | DONE | EpisodeService + worker kind + CLI episode command (f02e268, b2ca43a) |
 | B-3 conversation-recall claim gate | SATISFIED | measured numbers exist; claims bounded by honest taxonomy |
-| C-1 competitor claims table | DONE | docs/benchmarks/competitor-claims.md (507c491) |
+| C-1 competitor claims table | DONE | docs/benchmarks/competitor-claims.md (507c491, updated 2026-08-04) |
 | E-1..E-5 | DONE | ordering fix, path policy, domain constraints, stale smoke removal, evidence provenance (507c491, 73bef60) |
 | F-1..F-6 | DONE | eval-process fixes (fdae4da) |
 | G-1 merge audit→main | DONE | 6f32354 (--no-ff) |
 | G-2 publish | VERIFIED | wheel installs in fresh venv, CLI works with rollback/episode |
 | G-3 CI doc | VERIFIED | .github/workflows/ci.yml present |
 | G-4 kanban hold | HELD | per locked decision |
+| Correction C-01..C-08 (auditor lane) | DONE | branch fix/auditor-corrections-2026-08-04 — Chroma isolation, batch speedup, reproducibility, ranking determinism |
 
-**Final gate on main `2b2127a`:** 255 passed / 36 skipped, mypy --strict clean
-(46 files), ruff clean, both manifests validate, working tree clean.
+**Correction-lane gate (branch fix/auditor-corrections-2026-08-04, HEAD
+876f616):** 267 passed / 36 skipped, mypy --strict clean (46 files), ruff
+clean, both manifests validate.
 
-**Remaining honest limitations (not debt):**
-1. A-3 real-data lane not run — requires corpus approval (Sahil's logs or
-   licence-cleared dataset).
-2. B-1 gate fails honestly: recall 0.923 < 0.95, cit_prec 0.656, unsup 0.188.
-   No lane passes (Chroma also fails on stale/cit_prec). Severian's measured
-   strengths: stale 0.000, temporal 1.000.
-3. Cold-derive scale curve (9.9s@1k → 6458s@100k) is a measured design
-   consequence; worker + idempotent rebuild mitigate; no competitive parity
-   claim made.
+**Remaining honest limitations (not debt) — the six required items:**
+1. **A-3 blocked**: real-data lane spec written but not run; requires
+   corpus approval (Sahil's logs or licence-cleared dataset). No fabricated
+   real-data result.
+2. **B-1/LOCOMO gate failure**: recall 0.923 < 0.95, cit_prec 0.656,
+   unsup 0.188. No lane passes (Chroma also fails on stale/cit_prec).
+   Severian's measured strengths: stale 0.000, temporal 1.000.
+3. **Manifest-v1 citation-precision failure**: recall 1.000, stale 0.000,
+   leakage 0.000, unsupported 0.000 for both Severian lanes, but the
+   release gate does NOT pass because citation precision is 0.9375 against
+   the configured threshold of 1.0. The gate output is the product finding.
+4. **Cold-derive scale curve**: 9.9s@1k → 6458s@100k is a measured design
+   consequence; worker + idempotent rebuild mitigate; no competitive
+   parity claim made.
+5. **Vendor-claim policy**: cited vendor results (competitor-claims.md)
+   are vendor-reported, never claimed as internal reproductions.
+6. **No-secrets verification**: grep of src/tests/scripts/docs for
+   sk-*/api_key=/password=/Bearer found no credentials; scan scope is the
+   repository tree (bounded, not a system-wide audit).
 
 ---
 

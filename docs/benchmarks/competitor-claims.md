@@ -29,25 +29,28 @@ uses a different corpus/conditions — no false equivalence).
 
 | Vendor | Claim (source, date) | Dimension | Our measured number | Verdict |
 |---|---|---|---|---|
-| **Mem0** | LOCOMO results in ECAI 2025 paper; token-efficient memory algorithm (mem0.ai / arXiv, 2026-08-02) | Agent-loop conversation recall (LOCOMO) | **Not yet measured** — B-1 LOCOMO-tier not run | UNVERIFIABLE (dimension unmeasured; must run B-1 before any claim) |
-| **Hindsight** | Passively captures chat history; agent-loop recall (vendor docs, 2026-08-02) | Conversation capture + recall | No episodic path (B-2 pending); retrieval is deterministic, scope-bound | BEHIND on conversation recall until B-1/B-2; AHEAD on determinism/scope (measured) |
-| **Honcho** | Agent memory framework, conversation grounding (vendor docs, 2026-08-02) | Conversation grounding | Same as above | UNVERIFIABLE (dimension unmeasured) |
-| **SuperMemory** | Bookmark/chat memory for LLM apps (vendor docs, 2026-08-02) | Chat memory retrieval | Same as above | UNVERIFIABLE (dimension unmeasured) |
-| **Mempalace** | Hosted memory API (vendor docs, 2026-08-02) | Hosted API, scale | Local-first; no hosted API (G-2 publish pending) | BEHIND on hosting; AHEAD on local-first/CVE-free (measured) |
+| **Mem0** | LOCOMO results in ECAI 2025 paper; token-efficient memory algorithm (mem0.ai / arXiv, 2026-08-02) | Agent-loop conversation recall (LOCOMO) | LOCOMO-tier measured: recall 0.923, MRR 0.885, temporal 1.000, stale 0.000 (evidence/2026-08-04) | UNVERIFIABLE parity (vendor numbers are reported, not reproduced; our lane is independently measured) |
+| **Hindsight** | Passively captures chat history; agent-loop recall (vendor docs, 2026-08-02) | Conversation capture + recall | Episodic path measured (B-2 episode command); LOCOMO recall 0.923 | BEHIND on conversation recall (0.923 < vendor's unmeasured LOCOMO); AHEAD on determinism/scope (measured) |
+| **Honcho** | Agent memory framework, conversation grounding (vendor docs, 2026-08-02) | Conversation grounding | Same as above | UNVERIFIABLE (vendor number not reproduced) |
+| **SuperMemory** | Bookmark/chat memory for LLM apps (vendor docs, 2026-08-02) | Chat memory retrieval | Same as above | UNVERIFIABLE (vendor number not reproduced) |
+| **Mempalace** | Hosted memory API (vendor docs, 2026-08-02) | Hosted API, scale | Local-first; no hosted API (G-2 publish verified) | BEHIND on hosting; AHEAD on local-first/CVE-free (measured) |
 | **Mnemosyne** | Hermes native memory provider (hermes docs, 2026-08-02) — recorded for completeness, not a competitor | Hermes provider | Severian is a standalone platform, not a Hermes provider | UNVERIFIABLE (different category) |
-| **ChromaDB** | Vector store, semantic embeddings (vendor docs, 2026-08-02) | Semantic retrieval | No semantic embeddings (A-1 pending); BM25+hash deterministic | BEHIND on semantic recall until A-1; AHEAD on correction/abstention/scope/determinism (measured) |
+| **ChromaDB** | Vector store, semantic embeddings (vendor docs, 2026-08-02) | Semantic retrieval | Semantic embeddings measured (A-1 Granite): closes paraphrase gap (q6 c27 rank 1) but recall 0.808/0.885 < hash 0.923 on lexical corpus; BM25+hash default | BEHIND on semantic recall for paraphrase-distant data; AHEAD on correction/abstention/scope/determinism (measured) |
 
 ## 3. Verdict summary
 
 - **Where Severian is AHEAD (measured, independent):** correction/supersession
-  (0.000 stale vs 0.179), abstention (0.000 unsupported vs 0.062), scope
-  isolation (0.000), ranking precision (1.000), determinism/local-first,
+  (0.000 stale vs Chroma 0.144), abstention (0.000 unsupported vs 0.062-0.188),
+  scope isolation (0.000 leakage vs Chroma 0.000 after C-01 — no contamination),
+  ranking precision (MRR 1.000 on answerable), determinism/local-first,
   CVE-free network-safe core.
-- **Where Severian is BEHIND (honest):** conversation recall (no B-1 number,
-  no B-2 episodic path), semantic retrieval (no embeddings until A-1), hosted
-  API (nothing published until G-2).
-- **UNVERIFIABLE (do not claim):** any LOCOMO/agent-loop conversation number
-  until B-1 runs on our own harness; any semantic-retrieval parity until A-1.
+- **Where Severian is BEHIND (honest):** conversation recall on the harder
+  LOCOMO corpus (0.923 < 0.95 gate; no vendor parity claimed), semantic
+  retrieval on paraphrase-distant data (Granite opt-in, not default), hosted
+  API (local-first only).
+- **UNVERIFIABLE (do not claim):** vendor LOCOMO/agent-loop numbers (Mem0,
+  Hindsight, Honcho, SuperMemory) are reported, not reproduced; our lanes are
+  independently measured and never mixed with vendor-reported figures.
 
 ## 4. Update rules
 
