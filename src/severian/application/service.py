@@ -202,6 +202,7 @@ class MemoryService:
         gateway: DerivationGateway | None = None,
         policy: Mapping[str, Any] | None = None,
         min_vector_score: float | None = None,
+        min_fused_score: float | None = None,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -221,6 +222,7 @@ class MemoryService:
             query,
             limit=limit,
             min_vector_score=min_vector_score,
+            min_fused_score=min_fused_score,
         )
         return [SearchHitView.from_result(item) for item in results]
 

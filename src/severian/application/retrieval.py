@@ -30,6 +30,7 @@ class RetrievalService:
         *,
         limit: int = 20,
         min_vector_score: float | None = None,
+        min_fused_score: float | None = None,
     ) -> list[RetrievalResult]:
         stripped = query.strip()
         # Recall-all path: the admin graph (and CLI `list`-style flows)
@@ -91,6 +92,13 @@ class RetrievalService:
                 )
             )
         ranked.sort(key=lambda item: (-item.fused_score, item.memory.id))
+        # Abstention floor: a query whose best fused score is below the
+        # floor returns NOTHING — the honest "no good match" answer. This
+        # is what stops lexical token-overlap (e.g. "annual revenue"
+        # matching a doc that mentions revenue once) from fabricating
+        # answers to unanswerable probes (LOCOMO q9/q11 class).
+        if min_fused_score is not None:
+            ranked = [item for item in ranked if item.fused_score >= min_fused_score]
         return ranked[:limit]
 
 

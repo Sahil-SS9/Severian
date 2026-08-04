@@ -150,3 +150,36 @@ def test_cross_scope_isolation_in_benchmark_corpus(bench: tuple[SeverianAdapter,
     # d21 lives in t2; t1 must never surface it.
     assert "d21" not in ranked
     assert ranked and ranked[0] == "d26"
+
+
+def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
+    """LOCOMO q11 class: pure hash-noise probes must abstain.
+
+    "What is the company's annual revenue?" has no lexical match in the
+    corpus, but hash embeddings collide with unrelated docs producing
+    spurious vector hits. The fused-score floor rejects them (fused
+    ~0.016 < 0.02) — the honest empty result. Genuine queries (lexical
+    match present) are unaffected.
+    """
+    adapter = SeverianAdapter(provider_id="test", backend="sqlite", min_fused_score=0.02)
+    manifest = json.loads(Path("docs/benchmarks/manifest-locomo-tier-v1.json").read_text())
+    for doc in manifest["corpus"]["documents"]:
+        adapter.ingest(str(doc["id"]), str(doc["content"]), scope=str(doc["scope"]))
+
+    # Unanswerable noise probe -> abstain.
+    resp = adapter.query(
+        "What is the company's annual revenue?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="negative",
+    )
+    assert resp.items == [], f"noise probe must abstain, got {resp.items[:3]}"
+
+    # Genuine probe still retrieves its target first.
+    resp2 = adapter.query(
+        "What will Ada implement next week?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="fact",
+    )
+    assert resp2.items and resp2.items[0]["document_id"] == "c01"
