@@ -16,7 +16,7 @@
           "c23"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.09103002957999706,
+        "elapsed_ms": 0.11540006380528212,
         "query_id": "q1",
         "returned_ids": [
           "c01",
@@ -46,7 +46,7 @@
           "c28"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.07588003063574433,
+        "elapsed_ms": 0.07827091030776501,
         "query_id": "q2",
         "returned_ids": [
           "c05",
@@ -76,7 +76,7 @@
           "c07"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.0765710137784481,
+        "elapsed_ms": 0.06675999611616135,
         "query_id": "q3",
         "returned_ids": [
           "c20",
@@ -106,7 +106,7 @@
           "c16"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.08069997420534492,
+        "elapsed_ms": 0.05993002559989691,
         "query_id": "q4",
         "returned_ids": [
           "c23",
@@ -136,7 +136,7 @@
           "c01"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.11121103307232261,
+        "elapsed_ms": 0.055560958571732044,
         "query_id": "q5",
         "returned_ids": [
           "c16",
@@ -158,7 +158,7 @@
           "c30"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.06590998964384198,
+        "elapsed_ms": 0.04518008790910244,
         "query_id": "q6",
         "returned_ids": [
           "c29",
@@ -180,7 +180,7 @@
           "c09"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.05830102600157261,
+        "elapsed_ms": 0.06294006016105413,
         "query_id": "q7",
         "returned_ids": [
           "c02",
@@ -210,7 +210,7 @@
           "c01"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.04360999446362257,
+        "elapsed_ms": 0.056320917792618275,
         "query_id": "q8",
         "returned_ids": [
           "c02",
@@ -240,7 +240,7 @@
           "c03"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.09348103776574135,
+        "elapsed_ms": 0.06488990038633347,
         "query_id": "q9",
         "returned_ids": [
           "c17",
@@ -270,7 +270,7 @@
           "c03"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.053130032029002905,
+        "elapsed_ms": 0.04842993803322315,
         "query_id": "q10",
         "returned_ids": [
           "c05",
@@ -300,7 +300,7 @@
           "c03"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.06632000440731645,
+        "elapsed_ms": 0.058940029703080654,
         "query_id": "q11",
         "returned_ids": [
           "c05",
@@ -330,7 +330,7 @@
           "c03"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.05863001570105553,
+        "elapsed_ms": 0.05346094258129597,
         "query_id": "q12",
         "returned_ids": [
           "c11",
@@ -351,7 +351,7 @@
           "c12"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.04762999014928937,
+        "elapsed_ms": 0.04815997090190649,
         "query_id": "q13",
         "returned_ids": [
           "c12"
@@ -372,7 +372,7 @@
           "c06"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.07834000280126929,
+        "elapsed_ms": 0.07812993135303259,
         "query_id": "q14",
         "returned_ids": [
           "c05",
@@ -402,7 +402,7 @@
           "c28"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.08357100887224078,
+        "elapsed_ms": 0.06450992077589035,
         "query_id": "q15",
         "returned_ids": [
           "c01",
@@ -432,7 +432,7 @@
           "c09"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 0.041490013245493174,
+        "elapsed_ms": 0.04992994945496321,
         "query_id": "q16",
         "returned_ids": [
           "c28",
@@ -467,7 +467,7 @@
           "c26"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 260.0292600109242,
+        "elapsed_ms": 221.63787600584328,
         "query_id": "q1",
         "returned_ids": [
           "c01",
@@ -497,7 +497,7 @@
           "c06"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 239.487400976941,
+        "elapsed_ms": 212.88375102449208,
         "query_id": "q2",
         "returned_ids": [
           "c05",
@@ -527,7 +527,7 @@
           "d06"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 235.85778498090804,
+        "elapsed_ms": 197.32387701515108,
         "query_id": "q3",
         "returned_ids": [
           "c20",
@@ -557,7 +557,7 @@
           "c29"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 286.17181396111846,
+        "elapsed_ms": 192.2136569628492,
         "query_id": "q4",
         "returned_ids": [
           "c23",
@@ -587,7 +587,7 @@
           "d11"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 266.0543459933251,
+        "elapsed_ms": 194.48954507242888,
         "query_id": "q5",
         "returned_ids": [
           "c16",
@@ -617,7 +617,7 @@
           "d16"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 245.572377985809,
+        "elapsed_ms": 215.50268202554435,
         "query_id": "q6",
         "returned_ids": [
           "d11",
@@ -647,7 +647,7 @@
           "d11"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 246.87682295916602,
+        "elapsed_ms": 213.86362600605935,
         "query_id": "q7",
         "returned_ids": [
           "c02",
@@ -677,7 +677,7 @@
           "d11"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 264.84473200980574,
+        "elapsed_ms": 187.16171605046839,
         "query_id": "q8",
         "returned_ids": [
           "c10",
@@ -707,7 +707,7 @@
           "c21"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 265.6137860030867,
+        "elapsed_ms": 192.90629005990922,
         "query_id": "q9",
         "returned_ids": [
           "d26",
@@ -737,7 +737,7 @@
           "c05"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 225.77962197829038,
+        "elapsed_ms": 202.98150996677577,
         "query_id": "q10",
         "returned_ids": [
           "d01",
@@ -767,7 +767,7 @@
           "c16"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 242.51383496448398,
+        "elapsed_ms": 225.732953986153,
         "query_id": "q11",
         "returned_ids": [
           "d01",
@@ -797,7 +797,7 @@
           "c08"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 263.0667560151778,
+        "elapsed_ms": 210.06963995750993,
         "query_id": "q12",
         "returned_ids": [
           "d26",
@@ -827,7 +827,7 @@
           "c23"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 229.06092699849978,
+        "elapsed_ms": 192.4528090748936,
         "query_id": "q13",
         "returned_ids": [
           "c12",
@@ -857,7 +857,7 @@
           "c08"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 215.8031899598427,
+        "elapsed_ms": 190.40715997107327,
         "query_id": "q14",
         "returned_ids": [
           "c13",
@@ -887,7 +887,7 @@
           "c29"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 231.95796000072733,
+        "elapsed_ms": 188.29389102756977,
         "query_id": "q15",
         "returned_ids": [
           "c02",
@@ -917,7 +917,7 @@
           "c02"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 249.70817798748612,
+        "elapsed_ms": 225.80662497784942,
         "query_id": "q16",
         "returned_ids": [
           "c28",
@@ -941,54 +941,54 @@
       {
         "citations": [
           "c01",
-          "c11",
-          "c08",
           "c29",
+          "c08",
+          "c11",
           "c14",
-          "c23",
           "c03",
-          "c17",
-          "c05"
+          "c23",
+          "c05",
+          "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 496.5947430464439,
+        "elapsed_ms": 442.2310119261965,
         "query_id": "q1",
         "returned_ids": [
           "c01",
-          "c11",
-          "c08",
           "c29",
+          "c08",
+          "c11",
           "c14",
-          "c23",
           "c03",
-          "c17",
-          "c05"
+          "c23",
+          "c05",
+          "c17"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
           "c05",
-          "c08",
           "c06",
-          "c23",
+          "c08",
           "c03",
+          "c23",
           "c01",
-          "c04",
-          "c22"
+          "c22",
+          "c04"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 344.02715699980035,
+        "elapsed_ms": 130.40224905125797,
         "query_id": "q2",
         "returned_ids": [
           "c05",
-          "c08",
           "c06",
-          "c23",
+          "c08",
           "c03",
+          "c23",
           "c01",
-          "c04",
-          "c22"
+          "c22",
+          "c04"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
@@ -997,7 +997,7 @@
           "c21"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 367.98606102820486,
+        "elapsed_ms": 177.71772108972073,
         "query_id": "q3",
         "returned_ids": [
           "c21"
@@ -1016,7 +1016,7 @@
           "c24"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 358.7545820046216,
+        "elapsed_ms": 140.23612800519913,
         "query_id": "q4",
         "returned_ids": [
           "c23",
@@ -1036,7 +1036,7 @@
           "c27"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 345.26915301103145,
+        "elapsed_ms": 130.64272003248334,
         "query_id": "q5",
         "returned_ids": [
           "c16",
@@ -1047,62 +1047,62 @@
       {
         "citations": [],
         "cost_usd": 0.0,
-        "elapsed_ms": 409.6407520119101,
+        "elapsed_ms": 129.46037505753338,
         "query_id": "q6",
         "returned_ids": [],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
-          "c02",
-          "c26",
-          "c08",
           "c01",
-          "c23",
-          "c09",
+          "c05",
+          "c20",
+          "c02",
+          "c08",
           "c03",
-          "c06",
-          "c04",
-          "c15"
+          "c22",
+          "c15",
+          "c23",
+          "c26"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 342.6926939864643,
+        "elapsed_ms": 134.34471504297107,
         "query_id": "q7",
         "returned_ids": [
-          "c02",
-          "c26",
-          "c08",
           "c01",
-          "c23",
-          "c09",
+          "c05",
+          "c20",
+          "c02",
+          "c08",
           "c03",
-          "c06",
-          "c04",
-          "c15"
+          "c22",
+          "c15",
+          "c23",
+          "c26"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
-          "c10",
+          "c20",
           "c02",
+          "c10",
+          "c15",
           "c26",
           "c09",
-          "c06",
-          "c15",
-          "c20"
+          "c06"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 392.59686903096735,
+        "elapsed_ms": 137.52824801485986,
         "query_id": "q8",
         "returned_ids": [
-          "c10",
+          "c20",
           "c02",
+          "c10",
+          "c15",
           "c26",
           "c09",
-          "c06",
-          "c15",
-          "c20"
+          "c06"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
@@ -1112,7 +1112,7 @@
           "c11"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 337.9269950091839,
+        "elapsed_ms": 143.29676202032715,
         "query_id": "q9",
         "returned_ids": [
           "c17",
@@ -1123,7 +1123,7 @@
       {
         "citations": [],
         "cost_usd": 0.0,
-        "elapsed_ms": 333.97504704771563,
+        "elapsed_ms": 186.3241660175845,
         "query_id": "q10",
         "returned_ids": [],
         "scope": "t1/p1/c1/a1/s1"
@@ -1133,7 +1133,7 @@
           "c28"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 350.07765801856294,
+        "elapsed_ms": 133.22962098754942,
         "query_id": "q11",
         "returned_ids": [
           "c28"
@@ -1146,7 +1146,7 @@
           "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 342.0141530223191,
+        "elapsed_ms": 126.32015196140856,
         "query_id": "q12",
         "returned_ids": [
           "c11",
@@ -1160,7 +1160,7 @@
           "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 302.0773420576006,
+        "elapsed_ms": 130.4314900189638,
         "query_id": "q13",
         "returned_ids": [
           "c12",
@@ -1172,21 +1172,21 @@
         "citations": [
           "c13",
           "c14",
+          "c24",
           "c30",
           "c12",
-          "c24",
           "c21",
           "c27"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 376.9814139814116,
+        "elapsed_ms": 133.1129800528288,
         "query_id": "q14",
         "returned_ids": [
           "c13",
           "c14",
+          "c24",
           "c30",
           "c12",
-          "c24",
           "c21",
           "c27"
         ],
@@ -1200,11 +1200,11 @@
           "c10",
           "c08",
           "c05",
-          "c04",
-          "c22"
+          "c22",
+          "c04"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 354.45831797551364,
+        "elapsed_ms": 133.8521729921922,
         "query_id": "q15",
         "returned_ids": [
           "c03",
@@ -1213,8 +1213,8 @@
           "c10",
           "c08",
           "c05",
-          "c04",
-          "c22"
+          "c22",
+          "c04"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
@@ -1225,7 +1225,7 @@
           "c08"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 329.7495619626716,
+        "elapsed_ms": 133.11314000748098,
         "query_id": "q16",
         "returned_ids": [
           "c28",
@@ -1243,52 +1243,52 @@
         "citations": [
           "c01",
           "c11",
-          "c29",
-          "c08",
           "c03",
+          "c08",
+          "c29",
           "c14",
           "c23",
-          "c17",
-          "c05"
+          "c05",
+          "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 356.20917403139174,
+        "elapsed_ms": 335.85028001107275,
         "query_id": "q1",
         "returned_ids": [
           "c01",
           "c11",
-          "c29",
-          "c08",
           "c03",
+          "c08",
+          "c29",
           "c14",
           "c23",
-          "c17",
-          "c05"
+          "c05",
+          "c17"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
           "c05",
-          "c08",
           "c06",
           "c03",
+          "c08",
           "c23",
-          "c22",
           "c01",
+          "c22",
           "c04"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 236.73122300533578,
+        "elapsed_ms": 34.68426002655178,
         "query_id": "q2",
         "returned_ids": [
           "c05",
-          "c08",
           "c06",
           "c03",
+          "c08",
           "c23",
-          "c22",
           "c01",
+          "c22",
           "c04"
         ],
         "scope": "t1/p1/c1/a1/s1"
@@ -1298,7 +1298,7 @@
           "c21"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 262.9913259879686,
+        "elapsed_ms": 32.92987297754735,
         "query_id": "q3",
         "returned_ids": [
           "c21"
@@ -1317,7 +1317,7 @@
           "c24"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 238.06868901010603,
+        "elapsed_ms": 33.45970599912107,
         "query_id": "q4",
         "returned_ids": [
           "c23",
@@ -1337,7 +1337,7 @@
           "c27"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 241.23347300337628,
+        "elapsed_ms": 33.465236076153815,
         "query_id": "q5",
         "returned_ids": [
           "c16",
@@ -1348,61 +1348,61 @@
       {
         "citations": [],
         "cost_usd": 0.0,
-        "elapsed_ms": 229.3685619952157,
+        "elapsed_ms": 33.813936985097826,
         "query_id": "q6",
         "returned_ids": [],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
-          "c15",
-          "c22",
-          "c02",
-          "c09",
           "c03",
+          "c05",
           "c01",
+          "c20",
+          "c15",
           "c06",
+          "c09",
+          "c04",
           "c25",
-          "c24",
-          "c08"
+          "c02"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 232.06149402540177,
+        "elapsed_ms": 34.347319044172764,
         "query_id": "q7",
         "returned_ids": [
-          "c15",
-          "c22",
-          "c02",
-          "c09",
           "c03",
+          "c05",
           "c01",
+          "c20",
+          "c15",
           "c06",
+          "c09",
+          "c04",
           "c25",
-          "c24",
-          "c08"
+          "c02"
         ],
         "scope": "t1/p1/c1/a1/s1"
       },
       {
         "citations": [
           "c10",
-          "c15",
-          "c02",
-          "c09",
-          "c06",
           "c20",
+          "c15",
+          "c06",
+          "c09",
+          "c02",
           "c26"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 244.68291900120676,
+        "elapsed_ms": 40.76968494337052,
         "query_id": "q8",
         "returned_ids": [
           "c10",
-          "c15",
-          "c02",
-          "c09",
-          "c06",
           "c20",
+          "c15",
+          "c06",
+          "c09",
+          "c02",
           "c26"
         ],
         "scope": "t1/p1/c1/a1/s1"
@@ -1413,7 +1413,7 @@
           "c11"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 223.8385800155811,
+        "elapsed_ms": 33.29017502255738,
         "query_id": "q9",
         "returned_ids": [
           "c17",
@@ -1424,7 +1424,7 @@
       {
         "citations": [],
         "cost_usd": 0.0,
-        "elapsed_ms": 195.1840160181746,
+        "elapsed_ms": 35.747083951719105,
         "query_id": "q10",
         "returned_ids": [],
         "scope": "t1/p1/c1/a1/s1"
@@ -1434,7 +1434,7 @@
           "c28"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 198.26027896488085,
+        "elapsed_ms": 33.5633959621191,
         "query_id": "q11",
         "returned_ids": [
           "c28"
@@ -1447,7 +1447,7 @@
           "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 194.7700150194578,
+        "elapsed_ms": 40.02679302357137,
         "query_id": "q12",
         "returned_ids": [
           "c11",
@@ -1461,7 +1461,7 @@
           "c17"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 192.88844795664772,
+        "elapsed_ms": 46.48004798218608,
         "query_id": "q13",
         "returned_ids": [
           "c12",
@@ -1473,20 +1473,20 @@
         "citations": [
           "c13",
           "c14",
-          "c12",
           "c30",
+          "c12",
           "c24",
           "c21",
           "c27"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 182.37286200746894,
+        "elapsed_ms": 45.47949496190995,
         "query_id": "q14",
         "returned_ids": [
           "c13",
           "c14",
-          "c12",
           "c30",
+          "c12",
           "c24",
           "c21",
           "c27"
@@ -1505,7 +1505,7 @@
           "c04"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 176.95727897807956,
+        "elapsed_ms": 38.00291393417865,
         "query_id": "q15",
         "returned_ids": [
           "c03",
@@ -1526,7 +1526,7 @@
           "c08"
         ],
         "cost_usd": 0.0,
-        "elapsed_ms": 185.27706497116014,
+        "elapsed_ms": 35.21473298314959,
         "query_id": "q16",
         "returned_ids": [
           "c28",

@@ -30,8 +30,8 @@
     }
   },
   "commit": {
-    "branch": "audit/brutal-critique-v0.1.0",
-    "sha": "2173c635b24ed0b673a437e9598c91cd7c929ea0"
+    "branch": "main",
+    "sha": "75b61fc74196a9edac003d36e1abf382256fd0be"
   },
   "environment": {
     "chroma_venv": "/tmp/bench-compare-venv",
@@ -44,6 +44,6 @@
     "path": "/home/kensei/repos/Severian/docs/benchmarks/manifest-locomo-tier-v1.json",
     "sha256": "a2d2b422eb9ba0000279466a88abc467caee1f325aca6d068f3c689e402f2c6e"
   },
-  "run_started_at": "2026-08-03T22:23:29.068475+00:00",
+  "run_started_at": "2026-08-04T00:57:21.120985+00:00",
   "vendor_reported": []
 }

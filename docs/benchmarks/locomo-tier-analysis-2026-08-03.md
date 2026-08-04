@@ -9,15 +9,24 @@ requires — no fabricated parity.
 
 ## Results (gate: recall>=0.95, cit_prec>=1.0, stale==0, unsup==0)
 
+**Definitive re-run 2026-08-04 (floor=None, current main e341705):**
+
 | Provider | recall@10 | MRR | nDCG@10 | cit_prec | stale | unsup | temporal |
 |---|---|---|---|---|---|---|---|
-| severian-sqlite | 0.923 | 0.814 | 0.799 | 0.656 | 0.000 | 0.188 | 1.000 |
-| severian-postgres | 0.923 | 0.865 | 0.806 | 0.719 | 0.000 | 0.188 | 1.000 |
+| severian-sqlite | 0.923 | 0.792 | 0.779 | 0.656 | 0.000 | 0.188 | 1.000 |
+| severian-postgres | 0.923 | 0.801 | 0.786 | 0.656 | 0.000 | 0.188 | 1.000 |
 | chroma | 0.962 | 0.744 | 0.777 | 0.469 | 0.100 | 0.188 | 1.000 |
 | baseline-lexical | 0.846 | 0.756 | 0.755 | 0.469 | 0.098 | 0.188 | 1.000 |
 
 **Gate:** severian lanes FAIL (recall 0.923 < 0.95, citation_precision, unsupported).
 Chroma FAILS too (stale 0.100, cit_prec 0.469). No lane passes.
+
+> **Correction note (q7 root cause):** a transient mid-session run reported
+> sqlite recall 0.846. Diagnosis proved the drop was the experimental 0.02
+> fused-score abstention floor rejecting c02 ("old search index was
+> PostgreSQL-based", fused ~0.016 < 0.02). The floor was reverted to opt-in
+> (default None); recall is 0.923 again. No code defect — the floor was a
+> policy experiment, now documented as an opt-in tool.
 
 ## Harness fixes applied (committed with this analysis)
 
@@ -36,9 +45,9 @@ Chroma FAILS too (stale 0.100, cit_prec 0.469). No lane passes.
 
 | Query | Kind | Expected | Returned | Cause |
 |---|---|---|---|---|
-| q6 | correction | c27 | [] | Paraphrase-distant ("secrets stored now" vs "secret store uses scrypt") — **semantic gap (A-1)** |
+| q6 | correction | c27 | [] | Paraphrase-distant ("secrets stored now" vs "secret store uses scrypt") — **semantic gap (A-1); Granite closes it (c27 rank 2)** |
 | q9 | adversarial | (none) | [c17, c11] | c17 "undisclosed" is an in-scope decoy; harness counts any return as unsupported. **Corpus-design issue** |
-| q11 | negative | (none) | [c28] | BM25 overlap noise ("API docs in runbook" vs "annual revenue"). **BM25 false positive (A-1 hybrid fixes)** |
+| q11 | negative | (none) | [c28] | Hash-collision noise ("API docs in runbook" vs "annual revenue"). **Addressable via opt-in fused floor (min_fused_score)** |
 
 ## What this tells us
 
