@@ -9,6 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
+from severian.domain.errors import ConflictError
 from severian.domain.models import Collection, Memory, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
@@ -392,7 +393,7 @@ def test_rollback_memory_rejects_already_active_revision(repo):
             confidence=0.8,
         )
     )
-    with pytest.raises(Exception):
+    with pytest.raises(ConflictError):
         repo.rollback_memory(scope(), original.id)
 
 

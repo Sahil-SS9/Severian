@@ -136,16 +136,16 @@ yet scheduled).
 |---|---|---|---|
 | A-1 | **No semantic embeddings** — hash+BM25 only | results.md §6; roadmap T2 | **DONE (2026-08-03):** EmbeddingProvider protocol + GraniteR2Embedding (107M multilingual, Apache-2.0, 384-dim, CPU, lazy load + hash fallback) + build_bundle embedding param + pgvector dim parameterization (6a30fae, 3ccf788, 83ecc00). Verified live: model loads, encodes deterministically. Granite benchmark run in progress. |
 | A-2 | **Super-linear cold derivation** — 9.9 s@1k → 6,458 s@100k (sqlite) | results.md §4; scale evidence | Design consequence of correctness-first derive-on-read. Production worker (derive=False) mitigates. **Partial DONE (2026-08-03):** ChronoMem-style rollback_memory (bb5c460) — versioning/rollback machinery; cold-derive mitigation is the roadmap's remaining A-2 work (worker already mitigates; ChronoMem layer landed). |
-| A-3 | **Synthetic 27-doc quality corpus** — not real-world | results.md §8 | It is a gate, not universal truth. Real-data probes documented as a future lane, not run. |
+| A-3 | **Synthetic 27-doc quality corpus** — not real-world | results.md §8 | **SPEC WRITTEN (2026-08-03):** `real-data-probe-spec-2026-08-03.md` — corpus options ranked, lane design, metrics, blocker (approval to use Sahil's logs or licence-cleared dataset). Lane NOT run until corpus approved — honest limitation, not fabricated completion. |
 | A-4 | **No Chroma batch-ingest comparison** | results.md §8; roadmap #5 | **DONE (2026-08-03):** `ingest_batch` protocol + Chroma vectorized override (9566937). Measured: chroma per-doc 2.1, batch 22.8, severian 184.4 docs/s — severian still ~8x faster than chroma's best path. Evidence: `evidence/2026-08-03-batch-compare/`. |
 
-### B. Conversation recollection (Sahil's requirement (d) — B-1 measured, B-2 designed/PENDING)
+### B. Conversation recollection (Sahil's requirement (d) — B-1 measured, B-2 DONE, B-3 gate)
 
 | ID | Issue | Notes |
 |---|---|---|
 | B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.865. Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-03-locomo-tier/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3). |
 | B-2 | No episodic summarization path | **DONE (2026-08-03):** EpisodeService consolidates session observations into Memory(kind="episode") with deterministic budgeted summary + optional gateway summarize with rule-based fallback; worker 'episode' job kind; 6 tests (f02e268). |
-| B-3 | No claim may be made about conversation recall until B-1/B-2 exist | Per honest-numbers policy. |
+| B-3 | No claim may be made about conversation recall until B-1/B-2 exist | Per honest-numbers policy. **Now satisfied:** B-1 measured (0.923 hash / 0.808–0.885 granite), B-2 implemented. Claims still bounded by honest-numbers taxonomy. |
 
 ### C. Vendor-claim comparison (Sahil's requirement (b) — table built, policy locked)
 
