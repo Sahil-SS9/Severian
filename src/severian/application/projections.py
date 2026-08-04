@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -54,6 +55,7 @@ class ProjectionCoordinator:
         self.repository = repository
         self.lexical = lexical
         self.vector = vector
+        self._last_digest: dict[str, str] = {}
 
     def index_memory(self, memory: Memory) -> None:
         self.lexical.upsert(memory)
@@ -64,8 +66,23 @@ class ProjectionCoordinator:
         self.vector.delete(memory_id)
 
     def rebuild(self, scope: Scope) -> None:
+        # Idempotent skip: if the canonical store is unchanged since the
+        # last rebuild, the projections are already consistent — full
+        # rebuild would be pure waste (the cold-derive super-linear
+        # curve's second-order cost: repeated rebuilds per query).
+        # Digest comparison is cheap (one list + hash) vs. full
+        # clear+reinsert of every memory.
+        try:
+            current = _content_digest(self.repository.list_memories(scope))
+        except Exception:
+            current = None  # conservative: rebuild on any digest error
+        scope_key = json.dumps(scope.model_dump(), sort_keys=True)
+        if current is not None and current == self._last_digest.get(scope_key, None):
+            return
         self.lexical.rebuild(self.repository, scope)
         self.vector.rebuild(self.repository, scope)
+        if current is not None:
+            self._last_digest[scope_key] = current
 
     def status(self, scope: Scope) -> ProjectionStatus:
         canonical = self.repository.list_memories(scope)

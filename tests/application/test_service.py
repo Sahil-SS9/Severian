@@ -129,6 +129,35 @@ def test_search_with_derive_populates_indexes_through_projection(bundle):
     assert hits[0].source_observation_ids == [observation.observation_id]
 
 
+def test_rebuild_is_idempotent_when_canonical_unchanged(bundle):
+    # A-2 second-order fix: repeated rebuilds with unchanged canonical
+    # data must skip (no clear+reinsert churn). The digest cache makes
+    # the second rebuild a no-op; the projections stay consistent.
+    from severian.application.projections import ProjectionCoordinator
+
+    service = bundle["service"]
+    projection = ProjectionCoordinator(bundle["repo"], bundle["fts"], bundle["vector"])
+    service.ingest_observation(_scope(), content="Ada founded a company", source={})
+    service.search(_scope(), query="Ada founded", limit=5, derive=True, gateway=bundle["gateway"])
+
+    status_before = projection.status(_scope())
+    # Second rebuild: nothing changed, so it must be a no-op (same digests).
+    projection.rebuild(_scope())
+    status_after = projection.status(_scope())
+    assert status_after.in_sync
+    assert status_after.canonical_digest == status_before.canonical_digest
+    assert status_after.vector_digest == status_before.vector_digest
+    assert status_after.lexical_digest == status_before.lexical_digest
+
+    # New observation -> digest changes -> rebuild actually refreshes.
+    service.ingest_observation(_scope(), content="Grace wrote the first compiler", source={})
+    service.search(_scope(), query="Grace", limit=5, derive=True, gateway=bundle["gateway"])
+    projection.rebuild(_scope())
+    status_new = projection.status(_scope())
+    assert status_new.canonical_digest != status_before.canonical_digest
+    assert status_new.in_sync
+
+
 def test_get_observation_rejects_cross_scope_access(bundle):
     observation = bundle["service"].ingest_observation(_scope("t1", "p1"), content="secret", source={})
     with pytest.raises(NotFoundError):
