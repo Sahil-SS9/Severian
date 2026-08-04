@@ -91,7 +91,7 @@ class RetrievalService:
                     fused_score=fused,
                 )
             )
-        ranked.sort(key=lambda item: (-item.fused_score, item.memory.id))
+        ranked.sort(key=lambda item: (-item.fused_score, item.memory.content))
         # Abstention floor: a query whose best fused score is below the
         # floor returns NOTHING — the honest "no good match" answer. This
         # is what stops lexical token-overlap (e.g. "annual revenue"

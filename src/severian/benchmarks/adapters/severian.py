@@ -243,7 +243,7 @@ class SeverianAdapter:
                             "observation_id": observation.id,
                         }
                     )
-            items = history_items + items
+            items = sorted(history_items, key=lambda item: (-item["score"], item["document_id"])) + items
         # De-duplicate by document_id preserving order.
         seen: set[str] = set()
         deduped: list[dict[str, Any]] = []

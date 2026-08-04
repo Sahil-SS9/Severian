@@ -147,12 +147,16 @@ class LocalVectorIndex:
                  AND agent_id = ? AND session_id = ?""",
             tuple(scope.model_dump().values()),
         ).fetchall()
-        scored: list[VectorHit] = []
+        scored: list[tuple[VectorHit, list[float]]] = []
         for memory_id, encoded in rows:
             vector = json.loads(encoded)
             score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
-            scored.append(VectorHit(memory_id=memory_id, score=score))
-        return sorted(scored, key=lambda item: (-item.score, item.memory_id))[:limit]
+            scored.append((VectorHit(memory_id=memory_id, score=score), vector))
+        # Deterministic tiebreak: identical scores (identical hash vectors)
+        # resolve by the vector itself (stable across runs), never by the
+        # random memory UUID.
+        scored.sort(key=lambda pair: (-pair[0].score, tuple(pair[1])))
+        return [hit for hit, _vector in scored[:limit]]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)

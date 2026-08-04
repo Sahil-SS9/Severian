@@ -117,7 +117,7 @@ class FTS5Index:
                WHERE memory_fts MATCH ?
                  AND tenant_id = ? AND profile_id = ? AND collection_id = ?
                  AND agent_id = ? AND session_id = ?
-               ORDER BY rank LIMIT ?""",
+               ORDER BY rank, content, memory_id LIMIT ?""",
             (match, *scope.model_dump().values(), limit),
         ).fetchall()
         return [FTSHit(memory_id=row[0], score=float(-row[1]), snippet=row[2]) for row in rows]

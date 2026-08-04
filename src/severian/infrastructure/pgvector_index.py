@@ -164,7 +164,7 @@ class PGVectorIndex:
                 (1.0 - distance).label("score"),
             )
             .where(*(self._table.c[key] == value for key, value in scope.model_dump().items()))
-            .order_by(distance)
+            .order_by(distance, self._table.c.content, self._table.c.memory_id)
             .limit(limit)
         )
         with self.engine.connect() as connection:
