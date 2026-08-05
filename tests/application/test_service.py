@@ -181,6 +181,31 @@ def test_assemble_context_rejects_cross_scope_hits(bundle):
         bundle["service"].assemble_context(_scope("t1", "p2"), hits)
 
 
+def test_assemble_context_uses_canonical_memory_not_view(bundle):
+    """ARCH-04: context assembly reads the CANONICAL memory from the
+    repository, not a reconstructed proxy/view. A hit view carrying
+    stale content must NOT leak into the assembled context — the
+    repository is the single source of truth."""
+    sc = _scope()
+    bundle["service"].ingest_observation(sc, content="Ada founded a company", source={"uri": "a://1"})
+    hits = bundle["service"].search(sc, query="Ada", limit=5, derive=True, gateway=bundle["gateway"])
+
+    # Corrupt the view's content — the assembled context must still show
+    # the canonical content from the repository.
+    view = SearchHitView(
+        memory_id=hits[0].memory_id,
+        content="STALE CONTENT THAT MUST NOT APPEAR",
+        source_observation_ids=hits[0].source_observation_ids,
+        lexical_score=hits[0].lexical_score,
+        vector_score=hits[0].vector_score,
+        fused_score=hits[0].fused_score,
+        scope=sc,
+    )
+    context = bundle["service"].assemble_context(sc, [view], max_chars=2000)
+    assert "Ada founded a company" in context
+    assert "STALE CONTENT" not in context
+
+
 def test_service_health_reports_components(bundle):
     health = bundle["service"].health()
     assert health.ready is True

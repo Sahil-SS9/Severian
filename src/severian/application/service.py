@@ -350,24 +350,23 @@ class MemoryService:
         if any(hit.scope != scope for hit in hits):
             raise NotFoundError("context hit is outside the requested scope")
         assembler = self._context if max_chars is None else ContextAssembler(max_chars=max_chars)
-        # Re-derive RetrievalResult shape from view to avoid coupling
-        # adapters to internal dataclasses.
-        proxies = [
-            RetrievalResult(
-                memory=_MemoryProxy(  # type: ignore[arg-type]
-                    id=hit.memory_id,
-                    scope=hit.scope,
-                    content=hit.content,
-                    source_observation_ids=hit.source_observation_ids,
-                ),
-                source_observation_ids=hit.source_observation_ids,
-                lexical_score=hit.lexical_score,
-                vector_score=hit.vector_score,
-                fused_score=hit.fused_score,
+        # ARCH-04: assemble from the CANONICAL Memory (fetched by id), not
+        # from a reconstructed proxy — the proxy duplicated the Memory
+        # shape and could drift from the real model. The repository is the
+        # single source of truth for content.
+        results: list[RetrievalResult] = []
+        for hit in hits:
+            memory = self._repository.get_memory(scope, hit.memory_id)
+            results.append(
+                RetrievalResult(
+                    memory=memory,
+                    source_observation_ids=memory.source_observation_ids,
+                    lexical_score=hit.lexical_score,
+                    vector_score=hit.vector_score,
+                    fused_score=hit.fused_score,
+                )
             )
-            for hit in hits
-        ]
-        return assembler.assemble(proxies)
+        return assembler.assemble(results)
 
     def health(self) -> HealthReport:
         components: dict[str, str] = {}
@@ -393,16 +392,6 @@ class MemoryService:
         components["lexical"] = projection_components.get("lexical", "ok")
         components["vector"] = projection_components.get("vector", "ok")
         return HealthReport(ready=all(v == "ok" for v in components.values()), components=components)
-
-
-@dataclass
-class _MemoryProxy:
-    """Minimal Memory-shaped proxy used only for context assembly."""
-
-    id: str
-    scope: Scope
-    content: str
-    source_observation_ids: list[str]
 
 
 
