@@ -425,3 +425,74 @@ def test_source_revision_supersedes_derived_memories(repo):
     assert repo.list_memories(scope()) == []
     # Explicit history preserves the stale head.
     assert len(repo.list_memories_history(scope())) == 1
+
+
+class _FailingTargetedProjection:
+    """Projection wrapper whose targeted update methods always raise —
+    forcing the service's rebuild fallback path (DATA-03)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def remove_memory(self, memory_id: str) -> None:
+        raise RuntimeError("targeted remove_memory failed")
+
+    def index_memory(self, memory: Memory) -> None:
+        raise RuntimeError("targeted index_memory failed")
+
+
+def test_correction_converges_projection_via_rebuild_fallback(repo):
+    """DATA-03: if the targeted projection update fails during a
+    correction, the service must fall back to a full rebuild so the
+    correction is end-to-end durable — search surfaces the corrected
+    content, never the stale head."""
+    sc = scope()
+    # Build real projections.
+    fts = FTS5Index(Path("/tmp/severian-data03-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-data03-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    # Seed a derived memory and index it.
+    observation = IngestionService(repo).ingest(sc, "Ada founded a company", {}).observation
+    mem = repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    # Correct via the service with a failing targeted projection.
+    from severian.application.retrieval import ContextAssembler, RetrievalService
+    from severian.application.service import MemoryService
+
+    retrieval_svc = RetrievalService(repo, fts, vec)
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        retrieval_svc,
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+    service._projection = _FailingTargetedProjection(coordinator)  # type: ignore[assignment]  # force fallback
+    revision = service.correct_memory(
+        sc, mem.id, content="Ada Lovelace founded a company", model_id="local/model", prompt_version="v2"
+    )
+
+    # Canonical: the revision is the active head.
+    assert revision.content == "Ada Lovelace founded a company"
+    assert [m.id for m in repo.list_memories(sc)] == [revision.id]
+
+    # Projection converged via rebuild: search returns the corrected fact.
+    hits = retrieval_svc.search(sc, "Ada Lovelace founded", limit=10)
+    assert hits, "corrected memory must be searchable after rebuild fallback"
+    assert hits[0].memory.id == revision.id

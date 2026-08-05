@@ -136,9 +136,20 @@ class MemoryService:
             model_id=model_id,
             prompt_version=prompt_version,
         )
-        # Tombstone the old projection head; index the replacement.
-        self._projection.remove_memory(memory_id)
-        self._projection.index_memory(revision)
+        # DATA-03: the canonical revision is durable the moment revise_memory
+        # commits. The projection update is best-effort targeted, then
+        # reconciled: if the targeted tombstone/index fails for any reason,
+        # fall back to a full digest-reconciling rebuild of the scope so the
+        # correction is end-to-end durable (search never keeps surfacing the
+        # stale head).
+        try:
+            # Tombstone the old projection head; index the replacement.
+            self._projection.remove_memory(memory_id)
+            self._projection.index_memory(revision)
+        except Exception:
+            # Targeted update failed — rebuild the whole scope's projections
+            # from canonical so they converge with the committed revision.
+            self._projection.rebuild(scope)
         return revision
 
     def revise_observation(
