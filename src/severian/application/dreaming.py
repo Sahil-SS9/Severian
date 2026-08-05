@@ -204,6 +204,15 @@ class RetentionPolicyService:
                 archived = self._repository.get_memory(scope, memory_id)
                 marker_sources.extend(archived.source_observation_ids)
             marker_sources = sorted(set(marker_sources))
+            # Invariant: every archived memory has real source observation IDs
+            # (the canonical store validates sources on add_memory). The
+            # marker must reference only real observations — never fabricate
+            # IDs. The previous fallback (archived_ids[:1]) used memory IDs
+            # as observation IDs, which could create false provenance.
+            assert marker_sources, (
+                "retention archive marker requires real source observation IDs "
+                "from archived memories, but none were found"
+            )
             marker = self._repository.add_memory(
                 Memory(
                     scope=scope,
@@ -213,7 +222,7 @@ class RetentionPolicyService:
                         f"archived by policy {policy} at {self._now.isoformat()}. "
                         "All archived memories remain in history."
                     ),
-                    source_observation_ids=marker_sources or eval_result.archived_ids[:1],
+                    source_observation_ids=marker_sources,
                     model_id="severian-retention-v1",
                     prompt_version="deterministic-policy-v1",
                     confidence=1.0,
@@ -253,13 +262,11 @@ class ContradictionScanService:
         ]
 
     def _find(self, memories: list[Memory]) -> list[tuple[str, str, float]]:
-        out: list[tuple[str, str, float]] = []
-        for i, mem_a in enumerate(memories):
-            for mem_b in memories[i + 1 :]:
-                sim = jaccard(mem_a.content, mem_b.content)
-                if self._contradiction_jaccard <= sim < self._duplicate_jaccard:
-                    out.append((mem_a.id, mem_b.id, sim))
-        return out
+        return detect_contradictions(
+            memories,
+            contradiction_jaccard=self._contradiction_jaccard,
+            duplicate_jaccard=self._duplicate_jaccard,
+        )
 
 
 def _tokens(content: str) -> set[str]:
@@ -351,6 +358,36 @@ def jaccard(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+def detect_contradictions(
+    memories: list[Memory],
+    *,
+    contradiction_jaccard: float = _CONTRADICTION_JACCARD,
+    duplicate_jaccard: float = _DUPLICATE_JACCARD,
+) -> list[tuple[str, str, float]]:
+    """Find contradiction candidate pairs (shared surface, different content).
+
+    Single source of truth for contradiction detection: returns pairs
+    (memory_a_id, memory_b_id, overlap) whose Jaccard overlap is in the
+    contradiction band [contradiction_jaccard, duplicate_jaccard).
+
+    Uses MinHash-LSH as a pre-filter (P1d): exact Jaccard is only computed
+    for candidate pairs that share a signature band, turning the O(n^2)
+    all-pairs scan into O(n*k + candidates). Deterministic: the signature
+    uses a fixed seed and fixed salt.
+
+    Used by standalone contradiction scanning, curation, and consolidation
+    so there is exactly one LSH->Jaccard implementation.
+    """
+    out: list[tuple[str, str, float]] = []
+    for a_idx, b_idx in _lsh_candidates(memories):
+        mem_a = memories[a_idx]
+        mem_b = memories[b_idx]
+        sim = jaccard(mem_a.content, mem_b.content)
+        if contradiction_jaccard <= sim < duplicate_jaccard:
+            out.append((mem_a.id, mem_b.id, sim))
+    return out
+
+
 def _content_digest(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -426,14 +463,32 @@ class ConsolidationService:
         return report
 
     def _find_duplicate_groups(self, memories: list[Memory]) -> list[DuplicateGroup]:
-        """Group near-duplicates, newest (created_at, then id) survives."""
+        """Group near-duplicates, newest (created_at, then id) survives.
+
+        Uses MinHash-LSH as a candidate generator (same signatures as
+        contradiction detection), with exact Jaccard as the final merge
+        decision. Deterministic grouping/survivor semantics preserved:
+        ordered by (created_at, id), first match wins, later memory survives.
+        """
         groups: list[DuplicateGroup] = []
         used: set[str] = set()
         ordered = sorted(memories, key=lambda m: (m.created_at, m.id))
+        # Build LSH candidates on the ordered list (same order → same indices).
+        candidate_pairs = _lsh_candidates(ordered)
+        # Build adjacency: for each ordered index, which other ordered indices
+        # are LSH candidates? Sorted for deterministic iteration.
+        adjacency: dict[int, list[int]] = {}
+        for a_idx, b_idx in candidate_pairs:
+            adjacency.setdefault(a_idx, []).append(b_idx)
+            adjacency.setdefault(b_idx, []).append(a_idx)
         for i, mem_a in enumerate(ordered):
             if mem_a.id in used:
                 continue
-            for mem_b in ordered[i + 1 :]:
+            # Check only LSH candidate pairs for this memory, sorted for determinism.
+            for j in sorted(adjacency.get(i, [])):
+                if j <= i:
+                    continue
+                mem_b = ordered[j]
                 if mem_b.id in used:
                     continue
                 sim = jaccard(mem_a.content, mem_b.content)
@@ -456,19 +511,14 @@ class ConsolidationService:
         """Pairs with high overlap that are NOT near-duplicates (same surface,
         different content) — contradiction candidates for review.
 
-        Uses MinHash-LSH as a pre-filter (P1d): exact Jaccard is only
-        computed for candidate pairs that share a signature band,
-        turning the O(n^2) all-pairs scan into O(n*k + candidates).
-        Deterministic: the signature uses a fixed seed and fixed salt.
+        Delegates to the shared detect_contradictions helper (single
+        LSH->Jaccard implementation).
         """
-        out: list[tuple[str, str, float]] = []
-        for a_idx, b_idx in _lsh_candidates(memories):
-            mem_a = memories[a_idx]
-            mem_b = memories[b_idx]
-            sim = jaccard(mem_a.content, mem_b.content)
-            if self._contradiction_jaccard <= sim < self._duplicate_jaccard:
-                out.append((mem_a.id, mem_b.id, sim))
-        return out
+        return detect_contradictions(
+            memories,
+            contradiction_jaccard=self._contradiction_jaccard,
+            duplicate_jaccard=self._duplicate_jaccard,
+        )
 
 
 class CurationService:
@@ -522,9 +572,8 @@ class CurationService:
             )
             if salience < self._low_value_threshold:
                 report.low_value_ids.append(memory.id)
-        # Contradiction candidates from the consolidation pass (cheap reuse).
-        consolidator = ConsolidationService(self._repository)
-        for a, b, _overlap in consolidator._find_contradictions(memories):
+        # Contradiction candidates via the shared detector (single source of truth).
+        for a, b, _overlap in detect_contradictions(memories):
             report.contradiction_ids.append((a, b))
         # Write ONE review-marker memory per scope summarising the pass.
         if report.scored:

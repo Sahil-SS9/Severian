@@ -26,6 +26,7 @@ it composes the same application services the API uses.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +44,8 @@ from severian.application.projections import ProjectionCoordinator
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Job, Scope
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class WorkerSummary:
@@ -56,12 +59,18 @@ class WorkerSummary:
 
 
 class DerivationWorker:
-    """Processes pending derive jobs and keeps projections in sync."""
+    """Processes pending derive/episode/dream jobs and keeps projections in sync.
+
+    The derivation service may be None for dream-only operation (a worker
+    that only processes dream/episode jobs). A derive job arriving when
+    derivation is None raises a clear RuntimeError instead of a bare
+    AttributeError on NoneType.
+    """
 
     def __init__(
         self,
         repository: CanonicalRepository,
-        derivation: DerivationService,
+        derivation: DerivationService | None,
         projection: ProjectionCoordinator,
         episodes: EpisodeService | None = None,
         consolidation: ConsolidationService | None = None,
@@ -118,7 +127,7 @@ class DerivationWorker:
                 try:
                     self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=str(exc))
                 except Exception:
-                    pass
+                    logger.warning("failed to mark job %s as failed: %s", job.id, exc, exc_info=True)
                 failed += 1
         # Converge projections for every touched scope BEFORE any
         # completed job becomes durable.
@@ -139,6 +148,11 @@ class DerivationWorker:
         policy: Mapping[str, Any] | None,
     ) -> None:
         if job.kind == "derive":
+            if self._derivation is None:
+                raise RuntimeError(
+                    "derive job requires a derivation service, but worker has "
+                    "derivation=None (dream-only mode); cannot process derive jobs"
+                )
             observation_id = str(job.payload.get("observation_id", ""))
             if not observation_id:
                 raise ValueError("derive job missing observation_id")

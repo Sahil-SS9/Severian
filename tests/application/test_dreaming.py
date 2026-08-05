@@ -186,7 +186,7 @@ def test_worker_dream_job_kind_consolidate() -> None:
         _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=10))
         _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=1))
         repo.enqueue_job(scope, "dream", {"mode": "consolidate"})
-        worker = DerivationWorker(repository=repo, derivation=None, projection=proj)  # type: ignore[arg-type]
+        worker = DerivationWorker(repository=repo, derivation=None, projection=proj)
         summary = worker.drain(gateway=FakeGateway())
         assert summary.processed == 1
         active = repo.list_memories(scope)
@@ -201,7 +201,7 @@ def test_worker_dream_job_kind_curate() -> None:
         scope = _scope()
         _add_memory(repo, scope, "some memory content here", created_delta=timedelta(days=400))
         repo.enqueue_job(scope, "dream", {"mode": "curate"})
-        worker = DerivationWorker(repository=repo, derivation=None, projection=proj)  # type: ignore[arg-type]
+        worker = DerivationWorker(repository=repo, derivation=None, projection=proj)
         summary = worker.drain(gateway=FakeGateway())
         assert summary.processed == 1
         kinds = {m.kind for m in repo.list_memories(scope)}
