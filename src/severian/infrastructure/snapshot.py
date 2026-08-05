@@ -176,6 +176,21 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
     return payload
 
 
+def _record_scope(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Extract the 5-D scope of a snapshot record item.
+
+    Records carry the scope as top-level columns (tenant_id, profile_id,
+    collection_id, agent_id, session_id) alongside the payload.
+    """
+    return (
+        str(item.get("tenant_id", "")),
+        str(item.get("profile_id", "")),
+        str(item.get("collection_id", "")),
+        str(item.get("agent_id", "")),
+        str(item.get("session_id", "")),
+    )
+
+
 def validate_snapshot(incoming: list[dict[str, Any]]) -> None:
     """Semantically validate an entire snapshot before import.
 
@@ -205,8 +220,18 @@ def validate_snapshot(incoming: list[dict[str, Any]]) -> None:
                 source = by_id.get(str(source_id))
                 if source is None or str(source["record_type"]) != "observation":
                     raise ValueError(f"record {record_id}: source_observation_ids references a non-observation")
+                # DATA-01: memory → observation references must be same-scope.
+                if _record_scope(source) != _record_scope(item):
+                    raise ValueError(
+                        f"record {record_id}: source observation {source_id} is in a different scope"
+                    )
         if kind == "relation":
             for endpoint in (payload.get("subject_id"), payload.get("object_id")):
                 endpoint_record = by_id.get(str(endpoint))
                 if endpoint_record is None or str(endpoint_record["record_type"]) != "entity":
                     raise ValueError(f"record {record_id}: relation endpoint references a non-entity")
+                # DATA-01: relation → entity references must be same-scope.
+                if _record_scope(endpoint_record) != _record_scope(item):
+                    raise ValueError(
+                        f"record {record_id}: relation endpoint {endpoint} is in a different scope"
+                    )
