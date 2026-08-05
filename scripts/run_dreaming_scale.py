@@ -1,8 +1,9 @@
 """Scale lane for dreaming (consolidation) + curation (P1d).
 
 Measures ConsolidationService.consolidate and CurationService.curate on
-deterministic synthetic memories at 1k / 10k (and 50k for consolidation
-only, where the O(n^2) pairwise cost becomes the bottleneck).
+deterministic synthetic memories at 1k / 10k. (An earlier revision
+advertised a 50k bucket; it is not implemented — this runner covers
+1k and 10k only.)
 
 Honest numbers policy: same runner philosophy as the retrieval scale
 lane — seeded synthetic data, wall-time measured, no fabricated

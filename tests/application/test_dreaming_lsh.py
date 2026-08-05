@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 
 from severian.application.dreaming import (
@@ -13,8 +14,11 @@ from severian.domain.models import Memory, Scope
 
 
 def _memory(scope: Scope, content: str) -> Memory:
+    # Stable test IDs: Python's builtin hash() is process-randomised for
+    # strings (PYTHONHASHSEED), which would make test IDs differ across
+    # runs and break determinism assertions. sha256 is stable.
     return Memory(
-        id=f"m-{abs(hash(content))}",
+        id=f"m-{hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]}",
         scope=scope,
         kind="fact",
         content=content,
