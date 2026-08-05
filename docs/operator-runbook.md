@@ -219,6 +219,17 @@ Severian is designed **local-first**. The current posture:
   (SHA-256), scoped to a principal (tenant/profile), and revocable.
   Generate a key file with the auth store API or a small admin script.
   Without an auth file (loopback/dev mode), the API is open as before.
+- **Shared-memory ACL policy (OPS-04).** The access-control boundary is
+  the (tenant, profile) pair — the SECURITY-SENSITIVE dimensions. A
+  principal's key binds tenant + profile; requests claiming a different
+  tenant or profile are rejected 403. Within a tenant/profile,
+  collection/agent/session dimensions are SHARED by design: agents and
+  sessions of the same tenant/profile can read and write each other's
+  memory (collaborative-scope model). There is no per-agent or
+  per-session isolation between principals of the same tenant. Before
+  public exposure, provision one tenant per untrusted party; do NOT put
+  multiple untrusted parties in one tenant and rely on agent/session
+  isolation — it does not exist.
 - **No rate limiting.** Acceptable for local-first; add before any
   network exposure.
 - **No CORS middleware** (deliberate): browser clients must proxy
