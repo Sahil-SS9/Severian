@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from severian.application.derivation import DerivationService
+from severian.application.extraction import EntityExtractionService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
@@ -110,12 +111,13 @@ def _compose(
     backend: str,
 ) -> ServiceBundle:
     projection = ProjectionCoordinator(repository, lexical, vector)
+    extraction = EntityExtractionService(repository)
     service = BuildMemoryService(
         repository=repository,
         ingestion=IngestionService(repository),
         retrieval=RetrievalService(repository, lexical, vector),
         projection=projection,
-        derivation=DerivationService(repository),
+        derivation=DerivationService(repository, extraction=extraction),
         context=ContextAssembler(),
     )
     return ServiceBundle(

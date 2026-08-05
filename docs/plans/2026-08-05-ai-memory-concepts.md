@@ -33,7 +33,7 @@ cognitive-science literature) converge on these concepts. Each is marked
 | Concept | Severian | Notes |
 |---|---|---|
 | Observation ingestion | HAVE | canonical, hashed, sourced |
-| Fact/entity/relation extraction | HAVE (derive) / PARTIAL (no graph relations yet — Entity/Relation models exist but derive doesn't populate them) | |
+| Fact/entity/relation extraction | HAVE (2026-08-05) | derive populates Entity/Relation via deterministic EntityExtractionService (P1c) |
 | Session episode formation | HAVE (B-2) | |
 | Multi-modal input | HAVE (2026-08-05) | Attachment metadata (image/audio/video/file/transcript) on observations; reference+digest only |
 | Source provenance + confidence | HAVE | model_id, prompt_version, confidence |

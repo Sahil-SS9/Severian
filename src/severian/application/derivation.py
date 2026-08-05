@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from severian.application.extraction import EntityExtractionService
 from severian.application.ports import (
     CanonicalRepository,
 )
@@ -21,8 +22,17 @@ class CloudPolicyError(PermissionError):
 
 
 class DerivationService:
-    def __init__(self, repository: CanonicalRepository):
+    def __init__(
+        self,
+        repository: CanonicalRepository,
+        *,
+        extraction: EntityExtractionService | None = None,
+    ) -> None:
         self.repository = repository
+        # Optional deterministic graph extractor (P1c). When provided,
+        # every derive pass also upserts entities/relations so the
+        # graph store stays populated without manual seeding.
+        self._extraction = extraction
 
     def _effective_policy(self, scope: Scope, caller_policy: dict[str, object]) -> dict[str, object]:
         """Merge canonical collection policy with caller hints (deny-dominant).
@@ -77,6 +87,15 @@ class DerivationService:
             raise CloudPolicyError("cloud derivation is forbidden by collection policy")
 
         candidates = gateway.derive(observation.content, policy=effective)
+        # Deterministic graph extraction (P1c): every derived observation
+        # also populates the Entity/Relation store so the graph retrieval
+        # service has data without manual seeding. Extraction is
+        # rule-based and reproducible — no LLM, no randomness.
+        extraction_service = getattr(self, "_extraction", None)
+        if extraction_service is not None:
+            extraction_service.extract_and_upsert(
+                scope, observation_id, observation.content
+            )
         # Strict candidate validation BEFORE any write: a malformed
         # candidate aborts the whole batch — no partial publication
         # (P0-4). Provenance comes from the TRUSTED gateway adapter,
