@@ -105,6 +105,23 @@ class DerivationService:
         prompt_version = str(getattr(gateway, "prompt_version", "unknown"))
         validated: list[Memory] = []
         seen: set[tuple[str, str]] = set()
+        # Revision-observation guard (C-08): a revision observation
+        # (created by the correction path) carries the SAME content as
+        # the superseding observation's own memory. Deriving it creates
+        # a duplicate memory with identical content that ties on every
+        # stable ranking key and falls through to the random memory
+        # UUID — non-deterministic across fresh adapters. The
+        # superseding observation (active, non-revision) already
+        # produces this content's memory; skip the redundant revision
+        # derivation so exactly ONE memory exists per fact.
+        if observation.revision_of_id is not None:
+            revision_content_covered: set[str] = {
+                obs.content
+                for obs in self.repository.list_observations(scope)
+                if obs.superseded_by_id is None and obs.revision_of_id is None
+            }
+        else:
+            revision_content_covered = set()
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 raise ValueError(f"malformed derivation candidate: {candidate!r}")
@@ -112,6 +129,8 @@ class DerivationService:
             content = str(candidate.get("content", "")).strip()
             if not content:
                 raise ValueError("derivation candidate content must not be empty")
+            if observation.revision_of_id is not None and content in revision_content_covered:
+                continue
             identity = (kind, content)
             if identity in seen:
                 continue
