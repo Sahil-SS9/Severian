@@ -166,6 +166,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         gateway: DerivationGateway | None = None,
         *,
         max_context_chars: int = 8_000,
+        principal: Scope | None = None,
     ) -> None:
         # P1-4: the real Hermes loader instantiates providers with a
         # zero-arg constructor (``attr()``) or via ``register(ctx)``.
@@ -181,6 +182,12 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         self._scope: Scope | None = None
         self._session_id: str | None = None
         self._max_context_chars = max_context_chars
+        # SEC-01: construct-time principal binding. When set, the
+        # provider's scope is fixed to the principal's tenant/profile;
+        # initialize() and tool calls cannot switch them.
+        self._principal = principal
+        if principal is not None:
+            self._scope = principal
 
     # -- lifecycle --------------------------------------------------------
 
@@ -204,6 +211,9 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         the scope) unless also present in kwargs. If any dimension is
         missing or blank, the provider fails closed: no scope is
         stored and subsequent operations raise.
+
+        SEC-01: when a principal is bound at construction, the
+        tenant/profile MUST match it. A mismatch fails closed.
         """
         scope_kwargs = {
             "tenant_id": kwargs.get("tenant_id", ""),
@@ -221,7 +231,20 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             raise ScopeNotEstablishedError(
                 "cannot establish five-dimensional scope: all dimensions required and non-empty"
             ) from exc
-        self._scope = scope.to_domain()
+        new_scope = scope.to_domain()
+        # SEC-01: enforce principal binding.
+        if self._principal is not None:
+            if (
+                new_scope.tenant_id != self._principal.tenant_id
+                or new_scope.profile_id != self._principal.profile_id
+            ):
+                self._scope = None
+                self._session_id = None
+                raise ScopeNotEstablishedError(
+                    f"scope outside principal: tenant/profile must be "
+                    f"{self._principal.tenant_id}/{self._principal.profile_id}"
+                )
+        self._scope = new_scope
         self._session_id = session_id
 
     def shutdown(self) -> None:
@@ -544,6 +567,21 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             ).to_domain()
         except ValidationError:
             return {"error": "invalid scope"}
+        # SEC-01: when a principal is bound, only the security-sensitive
+        # dimensions (tenant/profile) must match the principal; the
+        # non-security dimensions (collection/agent/session) remain
+        # client-selectable. Without a principal, the candidate must
+        # exactly match the active scope (existing behaviour).
+        if self._principal is not None:
+            if (
+                candidate.tenant_id != self._principal.tenant_id
+                or candidate.profile_id != self._principal.profile_id
+            ):
+                return {"error": "scope outside principal"}
+            # Update the active scope to reflect the selected
+            # collection/agent/session from the tool args.
+            self._scope = candidate
+            return None
         if candidate != active_scope:
             return {"error": "scope mismatch"}
         return None
