@@ -332,6 +332,12 @@ def _lsh_candidates(memories: list[Memory]) -> list[tuple[int, int]]:
         # what distinguishes documents, so the signature uses only it.
         tokens = {tok for tok in _tokens(memory.content) if tok not in _STOPWORDS}
         if not tokens:
+            # Preserve exact-duplicate detection for content whose only
+            # tokens are stopwords. The filtered set is empty, so use the
+            # full token set as a deterministic fallback signature; exact
+            # Jaccard remains the final decision.
+            tokens = _tokens(memory.content)
+        if not tokens:
             continue
         signature = _minhash_signature(tokens)
         for band, value in enumerate(signature):

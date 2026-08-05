@@ -242,6 +242,26 @@ def test_worker_dream_only_without_derivation_succeeds() -> None:
 # --- 6. retention marker does not fabricate observation IDs -------------------
 
 
+def test_lsh_duplicate_grouping_keeps_stopword_only_duplicates() -> None:
+    """LSH must not drop duplicates whose meaningful-token set is empty.
+
+    Exact Jaccard still considers two stopword-only contents identical. The
+    candidate generator must preserve that behaviour after LSH was added.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, *_ = _bundle(tmp)
+        scope = _scope()
+        older = _add_memory(repo, scope, "the was at", created_delta=timedelta(days=10))
+        newer = _add_memory(repo, scope, "the was at", created_delta=timedelta(days=1))
+
+        report = ConsolidationService(repo).consolidate(scope)
+
+        assert len(report.duplicate_groups) == 1
+        group = report.duplicate_groups[0]
+        assert group.survivor_id == newer.id
+        assert group.superseded_ids == (older.id,)
+
+
 def test_retention_archive_marker_uses_real_observation_ids() -> None:
     """The retention archive marker must source its observation IDs from the
     archived memories' real provenance, never fabricate IDs.
