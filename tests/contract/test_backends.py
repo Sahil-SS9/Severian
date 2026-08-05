@@ -132,6 +132,15 @@ class _FakeRepository:
             raise NotFoundError("memory not found")
         return found
 
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        key = self._key(scope, memory_id)
+        found = self._memories.get(key)
+        if found is None:
+            raise NotFoundError("memory not found")
+        updated = found.model_copy(update={"usage_count": found.usage_count + 1})
+        self._memories[key] = updated
+        return updated
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [
             m

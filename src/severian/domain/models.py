@@ -98,6 +98,11 @@ class Memory(BaseModel):
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
+    # Usage tracking (Tier 2 salience): number of retrieval-time hits
+    # recorded for this memory. Feeds the salience blend in curation and
+    # the optional retrieval decay. Deterministic; incremented via
+    # ``record_memory_usage``.
+    usage_count: int = 0
 
 
 class Entity(BaseModel):

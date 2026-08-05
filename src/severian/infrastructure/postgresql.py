@@ -706,6 +706,21 @@ class PostgreSQLBackend:
         self._require_scope(scope)
         return self._get("memory", memory_id, Memory, scope=scope)
 
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        """Increment a memory's usage_count by one (retrieval hit)."""
+        self._require_scope(scope)
+        memory = self.get_memory(scope, memory_id)
+        if memory.superseded_by_id is not None:
+            return memory
+        updated = memory.model_copy(update={"usage_count": memory.usage_count + 1})
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == memory_id)
+                .values(payload=updated.model_dump(mode="json"))
+            )
+        return updated
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded (P0-5)."""
         self._require_scope(scope)

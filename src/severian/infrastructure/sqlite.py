@@ -553,6 +553,23 @@ class SQLiteRepository:
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         return self._get("memory", memory_id, Memory, scope=scope)
 
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        """Increment a memory's usage_count by one (retrieval hit)."""
+        self._require_scope(scope)
+        memory = self.get_memory(scope, memory_id)
+        if memory.superseded_by_id is not None:
+            # Usage on a superseded (stale) head is not recorded — it is
+            # no longer an active retrieval target.
+            return memory
+        updated = memory.model_copy(update={"usage_count": memory.usage_count + 1})
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == memory_id)
+                .values(payload=updated.model_dump(mode="json"))
+            )
+        return updated
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded.
 

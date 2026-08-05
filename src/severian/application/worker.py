@@ -31,7 +31,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
-from severian.application.dreaming import ConsolidationService, CurationService
+from severian.application.dreaming import (
+    ConsolidationService,
+    ContradictionScanService,
+    CurationService,
+    RetentionPolicyService,
+)
 from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
@@ -61,6 +66,8 @@ class DerivationWorker:
         episodes: EpisodeService | None = None,
         consolidation: ConsolidationService | None = None,
         curation: CurationService | None = None,
+        retention: RetentionPolicyService | None = None,
+        contradictions: ContradictionScanService | None = None,
     ) -> None:
         self._repository = repository
         self._derivation = derivation
@@ -68,6 +75,8 @@ class DerivationWorker:
         self._episodes = episodes if episodes is not None else EpisodeService(repository)
         self._consolidation = consolidation if consolidation is not None else ConsolidationService(repository)
         self._curation = curation if curation is not None else CurationService(repository)
+        self._retention = retention if retention is not None else RetentionPolicyService(repository)
+        self._contradictions = contradictions if contradictions is not None else ContradictionScanService(repository)
 
     def drain(
         self,
@@ -149,6 +158,14 @@ class DerivationWorker:
                 self._consolidation.consolidate(job.scope)
             elif mode == "curate":
                 self._curation.curate(job.scope)
+            elif mode == "retention":
+                policy = dict(job.payload.get("policy", {}) or {})
+                self._retention.evaluate(job.scope, policy)
+            elif mode == "retention-archive":
+                policy = dict(job.payload.get("policy", {}) or {})
+                self._retention.apply_archive(job.scope, policy)
+            elif mode == "contradictions":
+                self._contradictions.scan(job.scope)
             else:
                 raise ValueError(f"unsupported dream mode: {mode}")
             return

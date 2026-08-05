@@ -203,6 +203,9 @@ class MemoryService:
         policy: Mapping[str, Any] | None = None,
         min_vector_score: float | None = None,
         min_fused_score: float | None = None,
+        salience_weight: float = 0.0,
+        salience_halflife_h: float = 720.0,
+        track_usage: bool = False,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -223,7 +226,15 @@ class MemoryService:
             limit=limit,
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,
+            salience_weight=salience_weight,
+            salience_halflife_h=salience_halflife_h,
         )
+        # Tier 2 usage tracking: record a hit for each returned memory so
+        # curation salience reflects real retrieval usage. Opt-in (a
+        # benchmark read must not mutate state by default).
+        if track_usage:
+            for item in results:
+                self._repository.record_memory_usage(scope, item.memory.id)
         return [SearchHitView.from_result(item) for item in results]
 
     def assemble_context(

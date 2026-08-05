@@ -43,12 +43,12 @@ cognitive-science literature) converge on these concepts. Each is marked
 |---|---|---|
 | **Self-curation** | **HAVE (2026-08-05)** | Periodic review: salience scoring, low-value candidates, contradiction flags, review markers — never deletes |
 | **Dreaming / consolidation** | **HAVE (2026-08-05)** | Offline replay: deterministic Jaccard duplicate merge + contradiction flag + consolidated semantic memory. The hippocampal-replay analogue. |
-| Memory decay / forgetting curve | MISSING | Time-or-usage-weighted salience so stale-but-uncorrected facts fade from default recall. Must be non-destructive (canonical keeps everything). |
-| Salience / importance weighting | PARTIAL | CurationService scores salience (2026-08-05); no retrieval-time decay-adjusted ranking yet. |
+| Memory decay / forgetting curve | HAVE (2026-08-05) | Salience-weighted retrieval (opt-in decay via salience_weight + halflife); curation recency half-life. Non-destructive. |
+| Salience / importance weighting | HAVE (2026-08-05) | CurationService scores; RetrievalService applies opt-in decay-adjusted ranking; usage_count tracked. |
 | Contradiction detection | HAVE (2026-08-05) | Dreaming pass flags high-overlap/different-content pairs; report-only, no auto-resolution. |
 | Deduplication | HAVE (2026-08-05) | Derive dedupes by identity; dreaming merges near-duplicates (Jaccard >= 0.8) periodically. |
 | Memory budgeting / limits | PARTIAL | ContextAssembler caps chars; no memory-count or token budget per scope. |
-| Retention policy | MISSING | No TTL, tiering (hot/warm/cold), or archival rules. |
+| Retention policy | HAVE (2026-08-05) | max_age_days/min_usage/kinds policy; evaluate (report) + apply_archive (opt-in, non-destructive). |
 
 ### Retrieval & use
 | Concept | Severian | Notes |
@@ -88,11 +88,28 @@ cognitive-science literature) converge on these concepts. Each is marked
    non-destructive, contradiction no-mutation, scope-bound, curation
    proposes-not-deletes, worker consolidate, worker curate).
 
-**Tier 2 (next):** salience-weighted ranking (decay in retrieval),
-retention policy (TTL/tiering), contradiction scan service, usage-count
-tracking (the usage weight currently reads a not-yet-existing field).
+**Tier 2 (THIS BRANCH — built and tested):**
+1. **Usage-count tracking** — DONE. `Memory.usage_count` field +
+   `record_memory_usage` port (SQLite/PG/fake): increments on retrieval
+   hits (opt-in `track_usage=True` on `MemoryService.search`), skips
+   superseded heads.
+2. **Salience-weighted ranking** — DONE. `RetrievalService.search`
+   gains opt-in `salience_weight` + `salience_halflife_h`: boosts recent/
+   frequently-used memories deterministically (0.5*recency + 0.5*usage,
+   saturating at 100 hits). Default 0.0 = unchanged pure-relevance
+   behaviour (benchmark-safe).
+3. **Retention policy** — DONE. `RetentionPolicyService`: policy dict
+   (max_age_days / min_usage / kinds); `evaluate` reports candidates
+   non-destructively; `apply_archive` (opt-in) supersedes candidates with
+   a `retention_archive` marker (canonical store keeps everything, P0-1).
+4. **Contradiction scan service** — DONE. `ContradictionScanService`
+   standalone (extracted pattern from dreaming): report-only, never
+   mutates.
+5. **Worker dream modes** — DONE. `dream` job kind now supports
+   consolidate / curate / retention / retention-archive / contradictions.
+   Tests: `tests/application/test_tier2_memory.py` (12 tests).
 
-**Tier 3 (later):** graph retrieval over Entity/Relation, multi-modal
+**Tier 3 (next):** graph retrieval over Entity/Relation, multi-modal
 ingestion, shared-scope visibility rules.
 
 ## 4. Design constraints (locked by existing decisions)

@@ -84,6 +84,13 @@ class ScopedCanonicalPort(Protocol):
     def list_memories(self, scope: Scope) -> list[Memory]: ...
     def list_memories_history(self, scope: Scope) -> list[Memory]: ...
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]: ...
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        """Increment a memory's usage_count by one (retrieval hit).
+
+        Tier 2 salience: feeds the curation salience blend and the
+        optional retrieval decay. Deterministic and idempotent per call.
+        """
+        ...
 
     def rollback_memory(self, scope: Scope, revision_id: str) -> Memory:
         """Restore a historical revision as the active memory head.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import VectorProjection
@@ -31,6 +32,9 @@ class RetrievalService:
         limit: int = 20,
         min_vector_score: float | None = None,
         min_fused_score: float | None = None,
+        salience_weight: float = 0.0,
+        salience_halflife_h: float = 720.0,
+        now: datetime | None = None,
     ) -> list[RetrievalResult]:
         stripped = query.strip()
         # Recall-all path: the admin graph (and CLI `list`-style flows)
@@ -92,6 +96,23 @@ class RetrievalService:
                 )
             )
         ranked.sort(key=lambda item: (-item.fused_score, item.memory.content))
+        # Salience-weighted ranking (Tier 2, opt-in): when salience_weight
+        # > 0, boost memories that are recent and/or frequently used. The
+        # salience factor is deterministic (computed from created_at +
+        # usage_count, never from random state). Default 0.0 = unchanged
+        # pure-relevance behaviour (backwards compatible, benchmark-safe).
+        if salience_weight > 0.0:
+            now_value = now or datetime.now(UTC)
+            weighted: list[tuple[float, RetrievalResult]] = []
+            for item in ranked:
+                age_h = max((now_value - item.memory.created_at).total_seconds() / 3600.0, 0.0)
+                recency = 0.5 ** (age_h / salience_halflife_h)
+                usage = min(item.memory.usage_count / 100.0, 1.0)  # saturate at 100 hits
+                salience = 0.5 * recency + 0.5 * usage
+                adjusted = item.fused_score * (1.0 + salience_weight * salience)
+                weighted.append((adjusted, item))
+            weighted.sort(key=lambda pair: (-pair[0], pair[1].memory.content))
+            ranked = [item for _adjusted, item in weighted]
         # Abstention floor: a query whose best fused score is below the
         # floor returns NOTHING — the honest "no good match" answer. This
         # is what stops lexical token-overlap (e.g. "annual revenue"

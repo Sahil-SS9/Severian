@@ -116,6 +116,151 @@ class CurationReport:
         }
 
 
+@dataclass
+class RetentionEvaluation:
+    """Result of evaluating a scope against a retention policy."""
+
+    scope: Scope
+    archived_ids: list[str] = field(default_factory=list)
+    expired_ids: list[str] = field(default_factory=list)
+    kept_ids: list[str] = field(default_factory=list)
+    policy: dict[str, Any] = field(default_factory=dict)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope.model_dump(),
+            "archived_candidates": len(self.archived_ids),
+            "expired_candidates": len(self.expired_ids),
+            "kept": len(self.kept_ids),
+            "policy": self.policy,
+        }
+
+
+class RetentionPolicyService:
+    """Retention policy evaluation (Tier 2).
+
+    A policy is a dict:
+      {"max_age_days": N}             -> memories older than N days are
+                                          archive candidates
+      {"min_usage": M}                -> memories with usage_count < M AND
+                                          older than max_age_days are
+                                          archive candidates
+      {"kinds": ["episode", "fact"]}  -> restrict evaluation to these kinds
+
+    Non-destructive by default: ``evaluate`` only REPORTS candidates.
+    ``apply_archive`` (opt-in) marks candidates superseded with a
+    ``retention:archive`` replacement marker — the canonical store keeps
+    everything (P0-1); active reads drop archived heads.
+    """
+
+    def __init__(
+        self,
+        repository: CanonicalRepository,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        self._repository = repository
+        self._now = now or datetime.now(UTC)
+
+    def evaluate(self, scope: Scope, policy: dict[str, Any]) -> RetentionEvaluation:
+        max_age_days = float(policy.get("max_age_days", 0))
+        min_usage = int(policy.get("min_usage", 0))
+        kinds = set(policy.get("kinds", []))
+        eval_result = RetentionEvaluation(scope=scope, policy=policy)
+        for memory in self._repository.list_memories(scope):
+            if kinds and memory.kind not in kinds:
+                eval_result.kept_ids.append(memory.id)
+                continue
+            age_days = max((self._now - memory.created_at).total_seconds() / 86400.0, 0.0)
+            too_old = max_age_days > 0 and age_days >= max_age_days
+            low_usage = memory.usage_count < min_usage
+            if max_age_days <= 0:
+                # No age bound: nothing is an archive candidate on age.
+                eval_result.kept_ids.append(memory.id)
+                continue
+            if too_old and (min_usage <= 0 or low_usage):
+                eval_result.archived_ids.append(memory.id)
+            else:
+                eval_result.kept_ids.append(memory.id)
+        return eval_result
+
+    def apply_archive(
+        self, scope: Scope, policy: dict[str, Any], *, archive_note: str = "retention:archive"
+    ) -> RetentionEvaluation:
+        """OPT-IN: supersede archive candidates with a retention marker.
+
+        Non-destructive to the canonical store: the archived memories stay
+        in history; active reads and projection rebuilds drop them. The
+        marker memory records the policy that archived them.
+        """
+        eval_result = self.evaluate(scope, policy)
+        if eval_result.archived_ids:
+            # The marker's source_observation_ids must be REAL observations
+            # (add_memory validates sources): gather them from the archived
+            # memories' own provenance.
+            marker_sources: list[str] = []
+            for memory_id in eval_result.archived_ids:
+                archived = self._repository.get_memory(scope, memory_id)
+                marker_sources.extend(archived.source_observation_ids)
+            marker_sources = sorted(set(marker_sources))
+            marker = self._repository.add_memory(
+                Memory(
+                    scope=scope,
+                    kind="retention_archive",
+                    content=(
+                        f"Retention archive: {len(eval_result.archived_ids)} memories "
+                        f"archived by policy {policy} at {self._now.isoformat()}. "
+                        "All archived memories remain in history."
+                    ),
+                    source_observation_ids=marker_sources or eval_result.archived_ids[:1],
+                    model_id="severian-retention-v1",
+                    prompt_version="deterministic-policy-v1",
+                    confidence=1.0,
+                )
+            )
+            for memory_id in eval_result.archived_ids:
+                self._repository.supersede_memory(scope, memory_id, replacement_id=marker.id)
+            eval_result.expired_ids = list(eval_result.archived_ids)
+            eval_result.archived_ids = []
+        return eval_result
+
+
+class ContradictionScanService:
+    """Standalone contradiction scan (Tier 2).
+
+    Extracted from the dreaming pass so it can run independently (e.g. a
+    periodic `dream` job with mode=contradictions). Deterministic,
+    report-only — never resolves or mutates.
+    """
+
+    def __init__(
+        self,
+        repository: CanonicalRepository,
+        *,
+        contradiction_jaccard: float = _CONTRADICTION_JACCARD,
+        duplicate_jaccard: float = _DUPLICATE_JACCARD,
+    ) -> None:
+        self._repository = repository
+        self._contradiction_jaccard = contradiction_jaccard
+        self._duplicate_jaccard = duplicate_jaccard
+
+    def scan(self, scope: Scope) -> list[ContradictionCandidate]:
+        memories = self._repository.list_memories(scope)
+        return [
+            ContradictionCandidate(a, b, overlap)
+            for a, b, overlap in self._find(memories)
+        ]
+
+    def _find(self, memories: list[Memory]) -> list[tuple[str, str, float]]:
+        out: list[tuple[str, str, float]] = []
+        for i, mem_a in enumerate(memories):
+            for mem_b in memories[i + 1 :]:
+                sim = jaccard(mem_a.content, mem_b.content)
+                if self._contradiction_jaccard <= sim < self._duplicate_jaccard:
+                    out.append((mem_a.id, mem_b.id, sim))
+        return out
+
+
 def _tokens(content: str) -> set[str]:
     return {tok.casefold() for tok in _TOKEN_RE.findall(content)}
 
@@ -274,13 +419,11 @@ class CurationService:
         for memory in memories:
             age_h = max((self._now - memory.created_at).total_seconds() / 3600.0, 0.0)
             recency = 0.5 ** (age_h / self._halflife)
-            usage = getattr(memory, "usage_count", 0.0)
-            # usage_count not on Memory; use confidence + recency blend, and
-            # any read-tracking would come from projections/outbox (future).
+            usage = min(memory.usage_count / 100.0, 1.0)  # saturate at 100 hits
             salience = (
                 self._cw * memory.confidence
                 + self._rw * recency
-                + self._uw * min(usage, 1.0)
+                + self._uw * usage
             )
             report.scored.append(
                 {
