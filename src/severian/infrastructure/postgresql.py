@@ -402,10 +402,22 @@ class PostgreSQLBackend:
             raise NotFoundError("collection not found")
         return Collection.model_validate(row)
 
+    def collection_exists(self, collection_id: str) -> bool:
+        """True if a collection with this id exists for ANY tenant."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(records.c.id).where(
+                    records.c.record_type == "collection",
+                    records.c.id == collection_id,
+                )
+            ).scalar_one_or_none()
+        return row is not None
+
     # -- observations ------------------------------------------------------
 
     def add_observation(self, observation: Observation) -> Observation:
         self._require_scope(observation.scope)
+        self._require_collection(observation.scope)
         digest = hashlib.sha256(observation.content.encode()).hexdigest()
         # P0-1: preserve immutable raw evidence. Direct constructions that
         # omit raw fields are backfilled so the stored record always has a
@@ -598,6 +610,7 @@ class PostgreSQLBackend:
     # -- memories ----------------------------------------------------------
 
     def add_memory(self, memory: Memory) -> Memory:
+        self._require_collection(memory.scope)
         for source_id in memory.source_observation_ids:
             try:
                 source = self.get_observation(memory.scope, source_id)
@@ -947,6 +960,7 @@ class PostgreSQLBackend:
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         self._require_scope(scope)
+        self._require_collection(scope)
         identity_key = self._identity(kind, name.casefold())
         query = select(records.c.payload).where(
             records.c.record_type == "entity",
@@ -981,6 +995,7 @@ class PostgreSQLBackend:
         valid_to: datetime | None = None,
     ) -> Relation:
         self._require_scope(scope)
+        self._require_collection(scope)
         for endpoint_id in (subject_id, object_id):
             try:
                 self._get("entity", endpoint_id, Entity, scope=scope)
@@ -1057,6 +1072,7 @@ class PostgreSQLBackend:
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         self._require_scope(scope)
+        self._require_collection(scope)
         identity_key = self._identity(kind, payload)
         query = select(records.c.payload).where(
             records.c.record_type == "job",
@@ -1366,6 +1382,30 @@ class PostgreSQLBackend:
         if not scope.session_id.strip():
             raise ValueError("scope dimension session_id must not be blank")
         return scope
+
+    def _require_collection(self, scope: Scope) -> None:
+        """DATA-05: a scope must not reference a collection owned by another tenant.
+
+        Ownership semantics: if a collection with the scope's collection_id
+        EXISTS, it must be owned by the scope's tenant. A missing collection
+        is permitted (the product supports unprovisioned, collection-less
+        operation; the service layer auto-provisions on ingest). A scope
+        for tenant t1 referencing a collection owned by t2 is rejected —
+        that is the ownership boundary this check enforces.
+        """
+        self._require_scope(scope)
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(records.c.tenant_id).where(
+                    records.c.record_type == "collection",
+                    records.c.id == scope.collection_id,
+                )
+            ).scalar_one_or_none()
+        if row is not None and row != scope.tenant_id:
+            raise NotFoundError(
+                f"collection {scope.collection_id!r} is owned by tenant {row!r}, "
+                f"not {scope.tenant_id!r}"
+            )
 
 
 __all__ = [

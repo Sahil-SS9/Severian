@@ -71,11 +71,16 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path):
 
 
 def _unique_scope(**overrides: str) -> Scope:
-    """Scope unique per test run so parametrized runs don't collide in shared Postgres."""
+    """Scope unique per test run so parametrized runs don't collide in shared Postgres.
+
+    The collection id is also unique per test (DATA-05: collection ids are
+    globally unique; a shared 'c1' would collide with the module fixture's
+    'c1' owned by tenant 't1' once collection ownership is enforced).
+    """
     base = {
         "tenant_id": f"t-{uuid.uuid4().hex[:8]}",
         "profile_id": "p1",
-        "collection_id": "c1",
+        "collection_id": f"c-{uuid.uuid4().hex[:8]}",
         "agent_id": "a1",
         "session_id": "s1",
     }

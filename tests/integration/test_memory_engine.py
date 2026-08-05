@@ -229,8 +229,11 @@ def test_ingestion_same_source_same_raw_evidence_dedupes(repo):
 def test_cloud_derivation_cannot_be_enabled_by_caller_policy(repo):
     # P0-2 repro: stored policy denies cloud; caller passing
     # ``cloud_allowed: True`` must NOT flip the decision.
-    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+    # The policy-bearing collection must be provisioned BEFORE the ingest
+    # (DATA-05 auto-provisioning would otherwise create a default-policy
+    # collection and the explicit policy create would collide).
     repo.create_collection(Collection(id="c", tenant_id="t", name="Primary", policy={"cloud_allowed": False}))
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
     cloud = FakeGateway(model_id="cloud/model", is_cloud=True)
 
     with pytest.raises(CloudPolicyError):

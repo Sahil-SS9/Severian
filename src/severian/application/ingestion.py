@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.application.ports import CanonicalRepository
-from severian.domain.models import Attachment, Job, Observation, Scope
+from severian.domain.errors import NotFoundError
+from severian.domain.models import Attachment, Collection, Job, Observation, Scope
 
 # Source-identity keys probed (in order) when building the idempotency
 # identity for an observation. The identity must be STABLE across
@@ -66,6 +67,12 @@ class IngestionService:
         # canonical write and its derive-job enqueue are ONE transaction
         # (P0-4): a crash cannot leave an observation that never
         # derives, or a job that references nothing.
+        # DATA-05: ensure the scope's collection exists for this tenant
+        # before writing. This defines the collection-ownership semantics:
+        # a collection is auto-provisioned (idempotent) for the tenant on
+        # first write, and a scope referencing an EXISTING collection owned
+        # by a different tenant is rejected by the backend's ownership check.
+        self._ensure_collection(scope)
         raw = content
         normalized = normalize_content(content)
         observation, job = self.repository.add_observation_and_enqueue(
@@ -79,3 +86,25 @@ class IngestionService:
             )
         )
         return IngestionResult(observation=observation, job=job)
+
+    def _ensure_collection(self, scope: Scope) -> None:
+        """Idempotently create the scope's collection for its tenant.
+
+        If a collection with the scope's collection_id ALREADY EXISTS (for
+        any tenant), do not attempt creation — collection ids are globally
+        unique; a duplicate insert would violate the PK. The backend's
+        ownership check then raises if the existing collection belongs to a
+        different tenant.
+        """
+        try:
+            self.repository.get_collection(scope.tenant_id, scope.collection_id)
+            return  # owned by this tenant — already provisioned
+        except NotFoundError:
+            pass
+        # Does the id exist under ANY tenant? If so it belongs to someone
+        # else — the write path will reject it. Do not try to create.
+        if self.repository.collection_exists(scope.collection_id):
+            return
+        self.repository.create_collection(
+            Collection(id=scope.collection_id, tenant_id=scope.tenant_id, name="auto")
+        )

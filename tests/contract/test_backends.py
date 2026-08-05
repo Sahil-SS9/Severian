@@ -92,6 +92,9 @@ class _FakeRepository:
     def get_collection(self, tenant_id: str, collection_id: str) -> Collection:
         raise NotFoundError("collection not found")
 
+    def collection_exists(self, collection_id: str) -> bool:
+        return False
+
     def add_observation(self, observation: Observation) -> Observation:
         self._observations[self._key(observation.scope, observation.id)] = observation
         return observation
@@ -341,6 +344,24 @@ def test_sqlite_backend_enforces_collection_scope(tmp_path: Path) -> None:
     repo.close()
 
 
+def test_sqlite_write_rejects_cross_tenant_collection(tmp_path: Path) -> None:
+    """DATA-05: a write whose scope references a collection owned by a
+    DIFFERENT tenant must fail closed.
+
+    The collection exists but belongs to t2; a scope claiming t1 with that
+    collection id must not be accepted.
+    """
+    repo = SQLiteRepository(tmp_path / "severian.db")
+    repo.initialize()
+    repo.create_collection(Collection(id="c1", tenant_id="t2", name="Primary"))
+
+    # Scope claims tenant t1 but references t2's collection.
+    wrong_scope = Scope(tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1")
+    with pytest.raises(NotFoundError, match="collection"):
+        repo.add_observation(Observation(scope=wrong_scope, content="Ada founded a company"))
+    repo.close()
+
+
 def test_sqlite_batch_memory_lookup_is_scope_aware(tmp_path: Path) -> None:
     """DATA-06: batch memory insert must not be satisfied by a memory with
     the same identity in a DIFFERENT scope.
@@ -402,7 +423,6 @@ def test_postgresql_backend_rejects_blank_scope_before_storage() -> None:
         PostgreSQLBackend(dsn="")
     with pytest.raises(ValueError):
         PostgreSQLBackend(dsn="   ")
-
 
 @pytest.mark.parametrize(
     "dimension",
