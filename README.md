@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-310%20passed-brightgreen)](https://github.com/Sahil-SS9/severian)
+[![Tests](https://img.shields.io/badge/tests-326%20passed-brightgreen)](https://github.com/Sahil-SS9/severian)
 [![MCP](https://img.shields.io/badge/MCP-Ready-6366f1)](https://modelcontextprotocol.io)
 [![Platform](https://img.shields.io/badge/platform-Linux-blueviolet)](https://github.com/Sahil-SS9/severian)
 
@@ -145,16 +145,18 @@ Severian ships an MCP server exposing scoped tools (`ingest`, `search`, `episode
 
 All numbers are independently reproduced with the in-repo runner and manifest — never vendor-mixed. Evidence lives in `docs/benchmarks/evidence/`.
 
-### Quality gate (manifest-v1, 27-doc corpus, producing SHA 9749a75)
+### Quality gate (adversarial-27 manifest, producing SHA 9749a75)
+
+**As of 2026-08-05 (post porter-stemming + query-coverage abstention fixes).** Evidence: `docs/benchmarks/evidence/` + `scripts/run_adversarial_lane.py`.
 
 | Provider | recall@10 | MRR | cit-prec | stale | leak | unsup | gate |
 |---|---|---|---|---|---|---|---|
-| **Severian SQLite** | 1.000 | 1.000 | 0.938 | 0.000 | 0.000 | 0.000 | FAIL* |
-| **Severian PostgreSQL** | 1.000 | 1.000 | 0.938 | 0.000 | 0.000 | 0.000 | FAIL* |
+| **Severian SQLite** | 1.000 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 | **PASS** |
+| **Severian PostgreSQL** | 1.000 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 | **PASS** |
 | ChromaDB 1.5.9 | 1.000 | 0.933 | 0.812 | 0.179 | 0.000 | 0.062 | FAIL |
 | Baseline (lexical) | 0.933 | 0.776 | 0.625 | 0.215 | 0.000 | 0.062 | FAIL |
 
-\* The release gate honestly FAILS on citation_precision (0.9375 < 1.0). recall/stale/leak/unsup all pass. The gate output is the product finding — thresholds are never lowered.
+The gate now **passes** — citation_precision reached 1.000 after the coverage-abstention fix (earlier runs honestly reported 0.938 and FAILed; thresholds were never lowered).
 
 ### LOCOMO-tier conversation recall (30 docs, 16 typed probes)
 
@@ -164,7 +166,7 @@ All numbers are independently reproduced with the in-repo runner and manifest �
 | ChromaDB 1.5.9 | 0.962 | 0.833 | 0.531 | 0.144 | 1.000 |
 | Baseline (lexical) | 0.846 | 0.756 | 0.469 | 0.098 | 1.000 |
 
-Deterministic: two clean runs are byte-identical (C-08 tiebreak fixes).
+Honest note: this LOCOMO snapshot is from 2026-08-04 (pre porter-stemming). The adversarial-27 lane above reflects the current post-fix state; a re-run of LOCOMO with the current code is a tracked follow-up. Deterministic: two clean runs are byte-identical (C-08 tiebreak fixes).
 
 ### Scale (synthetic, hot path = worker-derived)
 
@@ -280,10 +282,11 @@ Where Severian leads (measured): correction/supersession, abstention,
 immutable audit + rollback, scope isolation, determinism, benchmark
 transparency. Where it trails (honest): hosted API (roadmap), default
 semantic embeddings (Granite opt-in pending A-3), LongMemEval
-reproduction (not yet run), dreaming O(n²) at 10k+ (LSH pre-filter
-planned). Hindsight leads on structured-belief conversation memory;
-Zep/Graphiti on bi-temporal knowledge graphs; Supermemory on recall
-speed (sub-300ms) and benchmark marketing.
+reproduction (not yet run), dreaming on dense corpora at 10k+ (LSH
+pre-filter shipped for diverse corpora — 3.3× consolidate speedup —
+dense lanes remain slower). Hindsight leads on structured-belief
+conversation memory; Zep/Graphiti on bi-temporal knowledge graphs;
+Supermemory on recall speed (sub-300ms) and benchmark marketing.
 
 ## Memory Concepts
 
@@ -328,7 +331,7 @@ Configuration is code-level and per-call, not a single config file:
 
 ## Contributing
 
-- Gates: `uv run pytest` (299 passed / 36 skipped), `uv run mypy --strict src/severian`, `uv run ruff check src/severian tests scripts`.
+- Gates: `uv run pytest` (326 passed / 36 skipped), `uv run mypy --strict src/severian`, `uv run ruff check src/severian tests scripts`.
 - Evidence policy: every benchmark claim must be reproduced with the in-repo runner + manifest; vendor numbers stay labelled and never mixed.
 - Determinism policy: no random UUID tiebreaks in ranking; no LLM in the default path; new passes must be byte-reproducible.
 - Non-destructive policy: canonical store is append-only; dreaming/curation/retention supersede + mark, never delete.

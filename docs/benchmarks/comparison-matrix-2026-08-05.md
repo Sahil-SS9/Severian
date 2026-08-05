@@ -116,7 +116,7 @@ Notes on the field (sources, 2026-08-05):
 | Semantic embeddings default | Hash is default for determinism; Granite opt-in | A-3 adversarial evidence shows recall gain; decision tracked |
 | Hosted API / managed service | Local-first only | G-2 publish verified, roadmap |
 | Batch ingest at extreme scale | Chroma lane ~4 docs/s, we do 248/s at 1k; at 100k cold derive is super-linear (6,458s SQLite) — worker model mitigates | Scale workstream |
-| Dreaming O(n²) at 10k+ | Consolidate 437s + curate 235s at 10k (measured) | LSH pre-filter candidate generation (P1d-opt), evidence-first |
+| Dreaming O(n²) at 10k+ | Consolidate 437s + curate 235s at 10k (measured) → **LSH pre-filter SHIPPED**: 131s + 183s (3.3× / 1.28×), candidate ratio 0.18, curve flattened 22.6× per 10× data (was 70×) | Dense-corpus lanes still O(n²)-ish; worker model recommended for interactive scale |
 | LongMemEval reproduction | We have NOT run LongMemEval on Severian | Would be the honest next benchmark — the 5 dimensions map directly to our measured capabilities |
 
 ## 5. Bottom line
