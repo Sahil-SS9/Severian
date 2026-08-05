@@ -109,7 +109,25 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
             try:
                 from severian.benchmarks.adapters.chroma import ChromaAdapter
 
-                adapters[pid] = ChromaAdapter(provider_id=pid)
+                # The canary build and the real build are SEPARATE adapter
+                # invocations; each must own a unique namespace (C-01 claim
+                # marker is single-use per workdir root). A build tag keeps
+                # them distinct even with the same --run-id.
+                build_tag = getattr(args, "_build_tag", "canary")
+                base_namespace = getattr(args, "run_id", None)
+                adapters[pid] = ChromaAdapter(
+                    provider_id=pid,
+                    workdir=(
+                        str(args.chroma_workdir)
+                        if args.chroma_workdir
+                        else None
+                    ),
+                    run_namespace=(
+                        f"{base_namespace}-{build_tag}"
+                        if base_namespace
+                        else None
+                    ),
+                )
             except ImportError as exc:
                 venv_hint = ""
                 if args.chroma_venv:
@@ -149,6 +167,12 @@ def main() -> None:
     parser.add_argument("--chroma-venv", type=Path)
     parser.add_argument("--pg-dsn", type=str)
     parser.add_argument("--embedding", choices=["hash", "granite"], default="hash")
+    parser.add_argument("--run-id", type=str, default=None,
+                        help="unique run namespace for this benchmark invocation "
+                             "(C-01: prevents Chroma collection collisions between runs)")
+    parser.add_argument("--chroma-workdir", type=Path, default=None,
+                        help="explicit Chroma persistence root (benchmark-owned). "
+                             "Default: a fresh unique temp root per adapter.")
     args = parser.parse_args()
 
     # If a chroma venv is supplied, make its site-packages importable so
@@ -185,6 +209,9 @@ def main() -> None:
     canary(adapters)
 
     # Rebuild adapters (canary consumed/closed them) for the real run.
+    # The real build gets a distinct build tag so its Chroma namespace
+    # claim does not collide with the canary's (C-01 single-use marker).
+    args._build_tag = "run"
     adapters = build_adapters(manifest, args)
     runner = BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=True)
     print("\nrunning benchmark...")

@@ -181,9 +181,83 @@ def test_assemble_context_rejects_cross_scope_hits(bundle):
         bundle["service"].assemble_context(_scope("t1", "p2"), hits)
 
 
+def test_assemble_context_uses_canonical_memory_not_view(bundle):
+    """ARCH-04: context assembly reads the CANONICAL memory from the
+    repository, not a reconstructed proxy/view. A hit view carrying
+    stale content must NOT leak into the assembled context — the
+    repository is the single source of truth."""
+    sc = _scope()
+    bundle["service"].ingest_observation(sc, content="Ada founded a company", source={"uri": "a://1"})
+    hits = bundle["service"].search(sc, query="Ada", limit=5, derive=True, gateway=bundle["gateway"])
+
+    # Corrupt the view's content — the assembled context must still show
+    # the canonical content from the repository.
+    view = SearchHitView(
+        memory_id=hits[0].memory_id,
+        content="STALE CONTENT THAT MUST NOT APPEAR",
+        source_observation_ids=hits[0].source_observation_ids,
+        lexical_score=hits[0].lexical_score,
+        vector_score=hits[0].vector_score,
+        fused_score=hits[0].fused_score,
+        scope=sc,
+    )
+    context = bundle["service"].assemble_context(sc, [view], max_chars=2000)
+    assert "Ada founded a company" in context
+    assert "STALE CONTENT" not in context
+
+
 def test_service_health_reports_components(bundle):
     health = bundle["service"].health()
     assert health.ready is True
     assert health.components["repository"] == "ok"
     assert health.components["lexical"] == "ok"
     assert health.components["vector"] == "ok"
+
+
+def test_synchronous_derive_is_bounded(bundle):
+    """OPS-03: derive=True must be bounded — with N observations and a
+    small derive_max_observations, only that many memories are derived
+    per call (oldest first); the rest require the durable worker."""
+    sc = _scope()
+    # Ingest 5 observations (each enqueues a derive job).
+    for i in range(5):
+        bundle["service"].ingest_observation(sc, content=f"fact number {i}", source={"uri": f"n://{i}"})
+
+    # One synchronous derive pass bounded to 2 observations.
+    hits = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits) == 2  # only the first 2 observations derived -> 2 memories
+
+    # A second bounded pass derives the NEXT 2 fresh observations
+    # (already-derived ones are skipped and don't count) -> 4 total.
+    hits2 = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits2) == 4
+
+    # A final pass derives the last observation -> all 5.
+    hits3 = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits3) == 5
+
+
+def test_projection_status_is_authoritative_contract(bundle):
+    """ARCH-02: ProjectionCoordinator.status is the ONE authoritative
+    projection contract — after a derive+rebuild through the service,
+    the coordinator's digest-based status is in sync and matches what
+    search returns (no second, drifting projection contract)."""
+    sc = _scope()
+    bundle["service"].ingest_observation(sc, content="Ada founded a company", source={"uri": "a://1"})
+    bundle["service"].search(sc, query="Ada", limit=5, derive=True, gateway=bundle["gateway"])
+
+    coordinator = ProjectionCoordinator(bundle["repo"], bundle["fts"], bundle["vector"])
+    status = coordinator.status(sc)
+    assert status.in_sync is True
+    assert status.canonical_memories == status.lexical_entries == status.vector_entries
+    assert status.canonical_memories >= 1
+
+    # Search reads the SAME contract: hits match the canonical count.
+    hits = bundle["service"].search(sc, query="*", limit=200)
+    assert len(hits) == status.canonical_memories

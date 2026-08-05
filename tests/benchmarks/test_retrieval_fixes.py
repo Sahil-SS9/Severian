@@ -152,6 +152,50 @@ def test_cross_scope_isolation_in_benchmark_corpus(bench: tuple[SeverianAdapter,
     assert ranked and ranked[0] == "d26"
 
 
+def test_present_oriented_temporal_query_ranks_active_head_first(
+    bench: tuple[SeverianAdapter, Scope, Scope],
+) -> None:
+    """q5 regression: '...stored ... today?' must surface the CURRENT
+    fact (d12, scrypt) before the superseded old fact (d11, plain text).
+
+    Before the fix the temporal fallback prepended the history match,
+    so the stale document outranked the active head.
+    """
+    adapter, _, _ = bench
+    response = adapter.query(
+        "How are secrets stored by the password manager today?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="temporal",
+    )
+    returned = [str(item.get("document_id", "")) for item in response.items]
+    assert returned[0] == "d12", f"expected d12 first, got {returned[:4]}"
+    # The stale fact may appear below (history tie-break), never above.
+    if "d11" in returned:
+        assert returned.index("d11") > returned.index("d12")
+
+
+def test_past_oriented_temporal_query_prefers_history(
+    bench: tuple[SeverianAdapter, Scope, Scope],
+) -> None:
+    """A query explicitly asking about the OLD state keeps the history
+    path: the historical fact may rank at the top because the active
+    head does not match the past framing."""
+    adapter, _, _ = bench
+    response = adapter.query(
+        "How were secrets stored by the old password manager?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="temporal",
+    )
+    returned = [str(item.get("document_id", "")) for item in response.items]
+    # Both d11 (old) and d12 (current) are plausible; the past framing
+    # must surface d11 at or before d12.
+    assert "d11" in returned
+    if "d12" in returned:
+        assert returned.index("d11") <= returned.index("d12")
+
+
 def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
     """The fused-score abstention floor rejects pure hash-noise hits.
 
@@ -188,6 +232,12 @@ def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
 
     # Default (no floor): raw capability — the noise probe returns hits
     # (hash collision), which is the measured, honest limitation.
+    # NOTE (2026-08-05, P1b stemming): the porter-stemmed hash embedding
+    # separates genuine matches from noise. The raw hash-collision
+    # scores for this probe are now ~0.015, BELOW the default
+    # min_vector_score=0.15 — so the default adapter correctly returns
+    # nothing for the noise probe. The raw capability is still honest
+    # and measurable: disable the vector floor to see the collisions.
     adapter_default = SeverianAdapter(provider_id="test2", backend="sqlite")
     manifest = json.loads(Path("docs/benchmarks/manifest-locomo-tier-v1.json").read_text())
     for doc in manifest["corpus"]["documents"]:
@@ -198,4 +248,23 @@ def test_abstention_floor_returns_nothing_for_unanswerable() -> None:
         scope="t1/p1/c1/a1/s1",
         query_kind="negative",
     )
-    assert resp3.items != [], "default lane must report raw hash capability (no hidden floor)"
+    # Default adapter abstains because stemming pushed noise collisions
+    # below the default vector floor (improved behavior, not a hidden
+    # floor — the raw collisions are measurable with the floor off).
+    assert resp3.items == [], "porter stemming separates noise: default lane abstains"
+    adapter_default_nofloor = SeverianAdapter(
+        provider_id="test3", backend="sqlite", min_vector_score=None
+    )
+    for doc in manifest["corpus"]["documents"]:
+        adapter_default_nofloor.ingest(str(doc["id"]), str(doc["content"]), scope=str(doc["scope"]))
+    resp4 = adapter_default_nofloor.query(
+        "What is the company's annual revenue?",
+        limit=10,
+        scope="t1/p1/c1/a1/s1",
+        query_kind="negative",
+    )
+    # Raw hash capability still measurable: collisions exist at ~0.015.
+    assert resp4.items != [], "raw hash capability is still measurable with the floor off"
+    assert all(
+        item["score"] < 0.05 for item in resp4.items
+    ), "noise collisions are weak (below any sane threshold)"

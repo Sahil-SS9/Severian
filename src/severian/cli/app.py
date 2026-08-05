@@ -98,6 +98,16 @@ def _emit(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True, default=str))
 
 
+def _system_scope() -> Scope:
+    """Reserved all-sentinel scope for store-wide administrative actions.
+
+    Export/import/backup are store-wide operations with no tenant context;
+    their audit trail lives under this sentinel scope (SEC-02: admin
+    operations must be auditable).
+    """
+    return Scope(tenant_id="_system", profile_id="_", collection_id="_", agent_id="_", session_id="_")
+
+
 @cli.command("ingest")
 def ingest(
     database: Path = typer.Option(..., "--database", help="SQLite canonical store path."),
@@ -223,14 +233,16 @@ def work(
     """
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
-        from severian.application.derivation import DerivationService
-        from severian.application.projections import ProjectionCoordinator
         from severian.application.worker import DerivationWorker
 
+        # ARCH-05: use the canonical derivation + projection from the
+        # composition root. Previously this reconstructed DerivationService
+        # WITHOUT the graph extractor, so CLI-derived memories diverged
+        # from service-derived ones.
         worker = DerivationWorker(
             bundle.repository,
-            DerivationService(bundle.repository),
-            ProjectionCoordinator(bundle.repository, bundle.lexical, bundle.vector),
+            bundle.derivation,
+            bundle.projection,
         )
         summary = worker.drain(
             worker_id=worker_id,
@@ -246,6 +258,42 @@ def work(
         )
     finally:
         bundle.close()
+
+
+@cli.command("dead-letter")
+def dead_letter(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    requeue: str = typer.Option("", "--requeue", help="Job ID to requeue (recover) back to pending."),
+) -> None:
+    """Inspect dead-lettered jobs, or requeue one for recovery (OPS-07).
+
+    With no --requeue, lists all dead-lettered jobs as JSON. With
+    --requeue <job-id>, resets that job to pending with a fresh attempt
+    budget so the next ``work`` pass retries it.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    if requeue:
+        job = bundle.repository.requeue_job(requeue)
+        _emit({"action": "requeue", "job_id": job.id, "status": job.status})
+        return
+    dead = bundle.repository.list_dead_letter_jobs()
+    _emit(
+        {
+            "dead_letter_count": len(dead),
+            "jobs": [
+                {
+                    "id": j.id,
+                    "kind": j.kind,
+                    "scope": j.scope.model_dump(),
+                    "attempts": j.attempts,
+                    "last_error": j.last_error,
+                }
+                for j in dead
+            ],
+        }
+    )
 
 
 @cli.command("export")
@@ -274,7 +322,17 @@ def export(
         safe_output.parent.mkdir(parents=True, exist_ok=True)
         temporary = safe_output.parent / f".{safe_output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         temporary.write_text(payload, encoding="utf-8")
+        # SEC-03: the temp snapshot contains the full multi-scope store —
+        # never leave it world-readable (default umask 0644).
+        os.chmod(temporary, 0o600)
         os.replace(temporary, safe_output)
+        # SEC-02: record the admin action in the audit trail.
+        try:
+            bundle.repository.append_audit(
+                _system_scope(), "store.export", str(safe_output), {"bytes": len(payload.encode("utf-8"))}
+            )
+        except Exception:
+            pass  # audit failure must not fail the export itself
         _emit({"format": "severian-v1", "output": str(safe_output), "bytes": len(payload.encode("utf-8"))})
     finally:
         bundle.close()
@@ -313,6 +371,7 @@ def import_(
         payload = safe_input.read_text(encoding="utf-8")
         bundle.repository.import_json(payload)
         touched_scopes: list[Scope] = []
+        rebuild_error: str | None = None
         if rebuild:
             from severian.application.projections import ProjectionCoordinator
 
@@ -342,16 +401,43 @@ def import_(
                     agent_id=agent,
                     session_id=session,
                 )
-                coordinator.rebuild(scope)
-                touched_scopes.append(scope)
+                try:
+                    coordinator.rebuild(scope)
+                    touched_scopes.append(scope)
+                except Exception as exc:  # noqa: BLE001 — report, do not mask
+                    # DATA-02: the canonical import is committed and atomic,
+                    # but projections are now stale for this scope. Surface
+                    # the partial state explicitly so the operator can
+                    # re-run `severian import --rebuild`.
+                    rebuild_error = f"{scope.model_dump()}: {exc}"
+        # SEC-02: record the admin action in the audit trail.
+        try:
+            bundle.repository.append_audit(
+                _system_scope(),
+                "store.import",
+                str(safe_input),
+                {"rebuilt_scopes": len(touched_scopes)},
+            )
+        except Exception:
+            pass  # audit failure must not fail the import itself
         _emit(
             {
                 "format": "severian-v1",
                 "input": str(safe_input),
                 "status": "imported",
                 "rebuilt_scopes": [scope.model_dump() for scope in touched_scopes],
+                "rebuild_error": rebuild_error,
             }
         )
+        if rebuild_error is not None:
+            # DATA-02: the canonical import succeeded atomically, but at
+            # least one scope's projections could not be rebuilt. Make the
+            # partial state loud — the operator must re-run with --rebuild.
+            typer.echo(
+                f"WARNING: canonical store imported, but projections are stale "
+                f"for scope(s): {rebuild_error}; re-run `severian import --rebuild`",
+                err=True,
+            )
     except ValueError as exc:
         raise typer.BadParameter(f"cannot import snapshot: {exc}") from exc
     finally:

@@ -18,12 +18,11 @@ from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.ingestion import IngestionResult, IngestionService
-from severian.application.ports import CanonicalRepository
+from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Memory, Observation, Scope
-from severian.infrastructure.fts import FTS5Index
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,7 @@ class MemoryService:
         derivation: DerivationService,
         context: ContextAssembler,
         *,
-        lexical: FTS5Index | None = None,
+        lexical: LexicalIndex | None = None,
     ) -> None:
         self._repository = repository
         self._ingestion = ingestion
@@ -136,9 +135,20 @@ class MemoryService:
             model_id=model_id,
             prompt_version=prompt_version,
         )
-        # Tombstone the old projection head; index the replacement.
-        self._projection.remove_memory(memory_id)
-        self._projection.index_memory(revision)
+        # DATA-03: the canonical revision is durable the moment revise_memory
+        # commits. The projection update is best-effort targeted, then
+        # reconciled: if the targeted tombstone/index fails for any reason,
+        # fall back to a full digest-reconciling rebuild of the scope so the
+        # correction is end-to-end durable (search never keeps surfacing the
+        # stale head).
+        try:
+            # Tombstone the old projection head; index the replacement.
+            self._projection.remove_memory(memory_id)
+            self._projection.index_memory(revision)
+        except Exception:
+            # Targeted update failed — rebuild the whole scope's projections
+            # from canonical so they converge with the committed revision.
+            self._projection.rebuild(scope)
         return revision
 
     def revise_observation(
@@ -161,6 +171,81 @@ class MemoryService:
             # a stale fact before the next drain.
             self._projection.rebuild(scope)
         return revision
+
+    # -- erasure lifecycle (OPS-02) -------------------------------------
+
+    def erase_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        reason: str = "erased",
+    ) -> Memory:
+        """Erase a memory from active reads and search (OPS-02).
+
+        Deletion is tombstone-based, never a hard delete: the memory is
+        superseded by a synthetic ``:erased`` tombstone so default reads
+        and projections stop returning it, while the immutable history
+        retains the record (and the tombstone) for audit. Re-derivation
+        of the same fact via a fresh observation produces a NEW memory —
+        erasure does not poison future ingestion.
+        """
+        original = self._repository.get_memory(scope, memory_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("memory is already superseded")
+        # Tombstone record: a revision of the original whose OWN
+        # superseded_by_id is the reserved sentinel ``:erased`` — so the
+        # tombstone is excluded from active reads (superseded_by_id is
+        # non-NULL) while remaining in history for audit. The original is
+        # then superseded BY the tombstone, closing the chain.
+        tombstone = Memory(
+            scope=scope,
+            kind=original.kind,
+            content=f"[{reason}]",
+            source_observation_ids=original.source_observation_ids,
+            model_id=original.model_id,
+            prompt_version=f"{original.prompt_version}:erased",
+            confidence=0.0,
+            revision_of_id=original.id,
+            superseded_by_id=":erased",
+        )
+        inserted = self._repository.add_memory(tombstone)
+        erased = self._repository.supersede_memory(scope, memory_id, inserted.id)
+        try:
+            self._projection.remove_memory(memory_id)
+        except Exception:
+            self._projection.rebuild(scope)
+        return erased
+
+    def erase_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        *,
+        reason: str = "erased",
+    ) -> Observation:
+        """Erase a source observation and everything derived from it (OPS-02).
+
+        The observation is superseded (tombstoned) and all active
+        memories derived from it are erased via the same tombstone path —
+        the erasure propagates through the derivation lineage so search
+        stops returning facts whose only source was erased. History is
+        preserved for audit.
+        """
+        original = self._repository.get_observation(scope, observation_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("observation is already superseded")
+        # Tombstone the observation via the revision machinery (marks the
+        # old head superseded with a synthetic ``[erased]`` revision).
+        self._repository.revise_observation(scope, observation_id, f"[{reason}]")
+        for memory in self._repository.list_memories(scope):
+            if (
+                memory.superseded_by_id is None
+                and observation_id in memory.source_observation_ids
+            ):
+                self.erase_memory(scope, memory.id, reason=reason)
+        self._projection.rebuild(scope)
+        return self._repository.get_observation(scope, observation_id)
 
     # -- reads ----------------------------------------------------------
 
@@ -203,6 +288,11 @@ class MemoryService:
         policy: Mapping[str, Any] | None = None,
         min_vector_score: float | None = None,
         min_fused_score: float | None = None,
+        min_coverage: float | None = None,
+        salience_weight: float = 0.0,
+        salience_halflife_h: float = 720.0,
+        track_usage: bool = False,
+        derive_max_observations: int = 50,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -210,12 +300,27 @@ class MemoryService:
             # Ensure observations are derived into memories, then reindex
             # before retrieval. The service is the only place that owns
             # the ordering: derive -> project -> retrieve.
+            # OPS-03: synchronous derive is BOUNDED — at most
+            # ``derive_max_observations`` NEW memories are derived per
+            # call (oldest first), so a caller cannot accidentally
+            # trigger an unbounded O(n) synchronous derivation + rebuild
+            # on a large scope. Already-derived observations (idempotent
+            # dedupe) do NOT count against the bound — only fresh work
+            # does. Anything beyond the bound must go through the durable
+            # worker (enqueue + drain).
+            derived = 0
             for observation in self._repository.list_observations(scope):
                 if observation.superseded_by_id is not None:
                     continue
+                if derived >= derive_max_observations:
+                    break
+                before = len(self._repository.list_memories(scope))
                 self._derivation.derive_observation(
                     scope, observation.id, gateway, policy=dict(policy or {})  # type: ignore[arg-type]
                 )
+                after = len(self._repository.list_memories(scope))
+                if after > before:  # fresh work only counts against the bound
+                    derived += 1
             self._projection.rebuild(scope)
         results = self._retrieval.search(
             scope,
@@ -223,7 +328,16 @@ class MemoryService:
             limit=limit,
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,
+            min_coverage=min_coverage,
+            salience_weight=salience_weight,
+            salience_halflife_h=salience_halflife_h,
         )
+        # Tier 2 usage tracking: record a hit for each returned memory so
+        # curation salience reflects real retrieval usage. Opt-in (a
+        # benchmark read must not mutate state by default).
+        if track_usage:
+            for item in results:
+                self._repository.record_memory_usage(scope, item.memory.id)
         return [SearchHitView.from_result(item) for item in results]
 
     def assemble_context(
@@ -236,24 +350,23 @@ class MemoryService:
         if any(hit.scope != scope for hit in hits):
             raise NotFoundError("context hit is outside the requested scope")
         assembler = self._context if max_chars is None else ContextAssembler(max_chars=max_chars)
-        # Re-derive RetrievalResult shape from view to avoid coupling
-        # adapters to internal dataclasses.
-        proxies = [
-            RetrievalResult(
-                memory=_MemoryProxy(  # type: ignore[arg-type]
-                    id=hit.memory_id,
-                    scope=hit.scope,
-                    content=hit.content,
-                    source_observation_ids=hit.source_observation_ids,
-                ),
-                source_observation_ids=hit.source_observation_ids,
-                lexical_score=hit.lexical_score,
-                vector_score=hit.vector_score,
-                fused_score=hit.fused_score,
+        # ARCH-04: assemble from the CANONICAL Memory (fetched by id), not
+        # from a reconstructed proxy — the proxy duplicated the Memory
+        # shape and could drift from the real model. The repository is the
+        # single source of truth for content.
+        results: list[RetrievalResult] = []
+        for hit in hits:
+            memory = self._repository.get_memory(scope, hit.memory_id)
+            results.append(
+                RetrievalResult(
+                    memory=memory,
+                    source_observation_ids=memory.source_observation_ids,
+                    lexical_score=hit.lexical_score,
+                    vector_score=hit.vector_score,
+                    fused_score=hit.fused_score,
+                )
             )
-            for hit in hits
-        ]
-        return assembler.assemble(proxies)
+        return assembler.assemble(results)
 
     def health(self) -> HealthReport:
         components: dict[str, str] = {}
@@ -279,16 +392,6 @@ class MemoryService:
         components["lexical"] = projection_components.get("lexical", "ok")
         components["vector"] = projection_components.get("vector", "ok")
         return HealthReport(ready=all(v == "ok" for v in components.values()), components=components)
-
-
-@dataclass
-class _MemoryProxy:
-    """Minimal Memory-shaped proxy used only for context assembly."""
-
-    id: str
-    scope: Scope
-    content: str
-    source_observation_ids: list[str]
 
 
 

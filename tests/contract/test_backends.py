@@ -26,6 +26,7 @@ from severian.backends import (
     ProjectionIndex,
     check_scope,
 )
+from severian.domain.errors import ConflictError
 from severian.domain.models import (
     AuditEvent,
     Collection,
@@ -91,6 +92,9 @@ class _FakeRepository:
     def get_collection(self, tenant_id: str, collection_id: str) -> Collection:
         raise NotFoundError("collection not found")
 
+    def collection_exists(self, collection_id: str) -> bool:
+        return False
+
     def add_observation(self, observation: Observation) -> Observation:
         self._observations[self._key(observation.scope, observation.id)] = observation
         return observation
@@ -130,6 +134,15 @@ class _FakeRepository:
         if found is None:
             raise NotFoundError("memory not found")
         return found
+
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        key = self._key(scope, memory_id)
+        found = self._memories.get(key)
+        if found is None:
+            raise NotFoundError("memory not found")
+        updated = found.model_copy(update={"usage_count": found.usage_count + 1})
+        self._memories[key] = updated
+        return updated
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [
@@ -196,6 +209,12 @@ class _FakeRepository:
     def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
         return 0
 
+    def list_dead_letter_jobs(self) -> list[Job]:
+        return []
+
+    def requeue_job(self, job_id: str) -> Job:
+        raise NotFoundError(f"dead-letter job {job_id!r} not found")
+
     def ack_outbox(self, event_id: str) -> None:
         raise NotFoundError("outbox event not found or already acked")
 
@@ -209,6 +228,25 @@ class _FakeRepository:
 
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
         return [self.add_memory(memory) for memory in memories]
+
+    def publish_derivation(
+        self,
+        scope: Scope,
+        *,
+        entities: list[tuple[str, str]],
+        relations: list[tuple[str, str, str]],
+        memories: list[Memory],
+    ) -> list[Memory]:
+        # In-memory analogue of the backend atomic publish (DATA-04).
+        # The fake's add_entity/add_relation are no-op shapes (no storage),
+        # so this mirrors the call pattern without graph resolution.
+        for kind, name in entities:
+            self.add_entity(scope, kind, name)
+        for subject, predicate, obj in relations:
+            subject_ent = self.add_entity(scope, "entity", subject)
+            object_ent = self.add_entity(scope, "entity", obj)
+            self.add_relation(scope, subject_ent.id, predicate, object_ent.id)
+        return self.add_memories_batch(memories)
 
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
         memory = self.get_memory(scope, memory_id)
@@ -226,11 +264,36 @@ class _FakeRepository:
                 superseded += 1
         return superseded
 
+    def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
+        for key in list(self._memories):
+            rid, *s = key
+            if tuple(s) != tuple(scope.model_dump().values()):
+                continue
+            memory = self._memories[key]
+            if memory.id == memory_id:
+                if memory.superseded_by_id is not None:
+                    raise ConflictError("memory is already superseded")
+                if memory_id == replacement_id:
+                    raise ConflictError("cannot supersede a memory by itself")
+                updated = memory.model_copy(update={"superseded_by_id": replacement_id})
+                self._memories[key] = updated
+                return updated
+        raise NotFoundError(f"memory {memory_id} not found")
+
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)
 
     def get_entity(self, scope: Scope, entity_id: str) -> Entity:
         raise NotFoundError("entity not found")
+
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        return []
+
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation:
+        raise NotFoundError("relation not found")
+
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        return []
 
     def add_relation(
         self,
@@ -306,13 +369,85 @@ def test_sqlite_backend_enforces_collection_scope(tmp_path: Path) -> None:
     repo.close()
 
 
+def test_sqlite_write_rejects_cross_tenant_collection(tmp_path: Path) -> None:
+    """DATA-05: a write whose scope references a collection owned by a
+    DIFFERENT tenant must fail closed.
+
+    The collection exists but belongs to t2; a scope claiming t1 with that
+    collection id must not be accepted.
+    """
+    repo = SQLiteRepository(tmp_path / "severian.db")
+    repo.initialize()
+    repo.create_collection(Collection(id="c1", tenant_id="t2", name="Primary"))
+
+    # Scope claims tenant t1 but references t2's collection.
+    wrong_scope = Scope(tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1")
+    with pytest.raises(NotFoundError, match="collection"):
+        repo.add_observation(Observation(scope=wrong_scope, content="Ada founded a company"))
+    repo.close()
+
+
+def test_sqlite_batch_memory_lookup_is_scope_aware(tmp_path: Path) -> None:
+    """DATA-06: batch memory insert must not be satisfied by a memory with
+    the same identity in a DIFFERENT scope.
+
+    A memory's identity (kind+content+source+model+prompt) is scope-less;
+    the batch lookup previously matched on identity alone, so a memory in
+    scope A could suppress (or return) the insert for the same content in
+    scope B. The single-insert path scopes correctly; batch must agree.
+    """
+    repo = SQLiteRepository(tmp_path / "severian.db")
+    repo.initialize()
+    # Collection IDs are globally unique (records.id is the PK); give each
+    # tenant its own collection id.
+    repo.create_collection(Collection(id="c-a", tenant_id="t1", name="Primary"))
+    repo.create_collection(Collection(id="c-b", tenant_id="t2", name="Primary"))
+
+    scope_a = Scope(tenant_id="t1", profile_id="p1", collection_id="c-a", agent_id="a1", session_id="s1")
+    scope_b = Scope(tenant_id="t2", profile_id="p1", collection_id="c-b", agent_id="a1", session_id="s1")
+
+    # Source observations must exist in each scope (memory references are
+    # validated same-scope). The observation id is content-derived and
+    # scope-specific, so capture each scope's real id.
+    obs_a = repo.add_observation(Observation(scope=scope_a, content="Ada founded a company"))
+    obs_b = repo.add_observation(Observation(scope=scope_b, content="Ada founded a company"))
+
+    def _mem(scope: Scope, memory_id: str, obs_id: str) -> Memory:
+        return Memory(
+            id=memory_id,
+            scope=scope,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[obs_id],
+            model_id="test",
+            prompt_version="v1",
+            confidence=1.0,
+        )
+
+    # Insert the same content+kind+source in scope A first.
+    inserted_a = repo.add_memory(_mem(scope_a, "mem-a", obs_a.id))
+    assert inserted_a.id == "mem-a"
+
+    # Batch-insert the IDENTICAL identity in scope B. It must NOT be
+    # suppressed by the scope-A memory — both must exist.
+    inserted_b = repo.add_memories_batch([_mem(scope_b, "mem-b", obs_b.id)])
+    assert len(inserted_b) == 1
+    assert inserted_b[0].id == "mem-b"
+
+    # Both scopes now return their own memory.
+    assert repo.get_memory(scope_a, "mem-a").id == "mem-a"
+    assert repo.get_memory(scope_b, "mem-b").id == "mem-b"
+    assert len(repo.list_memories(scope_a)) == 1
+    assert len(repo.list_memories(scope_b)) == 1
+    repo.close()
+
+
 def test_postgresql_backend_rejects_blank_scope_before_storage() -> None:
     # A live-DSN-less backend fails closed at construction.
     with pytest.raises(ValueError):
         PostgreSQLBackend(dsn="")
     with pytest.raises(ValueError):
         PostgreSQLBackend(dsn="   ")
-
 
 @pytest.mark.parametrize(
     "dimension",

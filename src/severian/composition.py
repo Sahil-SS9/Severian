@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from severian.application.derivation import DerivationService
+from severian.application.extraction import EntityExtractionService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
@@ -43,6 +44,7 @@ class ServiceBundle:
     vector: Any
     gateway: Any
     projection: Any
+    derivation: Any
     backend: str = "sqlite"
 
     def close(self) -> None:
@@ -110,12 +112,14 @@ def _compose(
     backend: str,
 ) -> ServiceBundle:
     projection = ProjectionCoordinator(repository, lexical, vector)
+    extraction = EntityExtractionService(repository)
+    derivation = DerivationService(repository, extraction=extraction)
     service = BuildMemoryService(
         repository=repository,
         ingestion=IngestionService(repository),
         retrieval=RetrievalService(repository, lexical, vector),
         projection=projection,
-        derivation=DerivationService(repository),
+        derivation=derivation,
         context=ContextAssembler(),
     )
     return ServiceBundle(
@@ -124,6 +128,7 @@ def _compose(
         lexical=lexical,
         vector=vector,
         projection=projection,
+        derivation=derivation,
         gateway=gateway or _HashingGateway(),
         backend=backend,
     )

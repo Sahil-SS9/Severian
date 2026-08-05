@@ -1,0 +1,35 @@
+{
+  "lane": "dreaming-curation-scale",
+  "date": "2026-08-05T20:07:58.573932+00:00",
+  "commit": {
+    "sha": "6d40e2b6463cf4f5f615956f634698b969ff9a32",
+    "branch": "feat/ai-memory-concepts"
+  },
+  "corpus": {
+    "mode": "dense",
+    "buckets": [
+      "1000"
+    ],
+    "generator": "deterministic synthetic (no RNG seed; content template + modulo near-duplicates)",
+    "near_duplicate_ratio": "~10%"
+  },
+  "results": {
+    "1000": {
+      "consolidation": {
+        "memories": 1000,
+        "seconds": 6.274,
+        "duplicate_groups": 50,
+        "merged": 50,
+        "contradictions": 404550,
+        "memories_per_sec": 159.4
+      },
+      "curation": {
+        "memories": 1000,
+        "seconds": 2.635,
+        "scored": 1000,
+        "memories_per_sec": 379.5
+      }
+    }
+  },
+  "honest_notes": "Synthetic seeded corpus; ~10% near-duplicates per bucket. corpus_mode=dense: every doc shares a common template, so MinHash-LSH buckets collapse toward all-pairs \u2014 the adversarial worst case for the pre-filter (no win over brute force). corpus_mode=diverse: per-topic vocabularies, so LSH prunes the O(n^2) scan (the realistic win). Curation ALSO calls ConsolidationService._find_contradictions, so curation inherits the same scaling behaviour as consolidation. The scoring loop itself is O(n); the contradiction scan dominates. Not a throughput claim; the cost curve is the finding."
+}

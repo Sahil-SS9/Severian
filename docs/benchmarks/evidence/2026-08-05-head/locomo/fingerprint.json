@@ -1,0 +1,42 @@
+{
+  "adapters": {
+    "baseline-lexical": {
+      "backend": "pure-python-bag-of-words",
+      "model": "tf-dot-product",
+      "notes": "baseline; no scope isolation beyond per-scope map",
+      "prompt_version": "n/a",
+      "provider_id": "baseline-lexical"
+    },
+    "chroma": {
+      "backend": "chroma-persistent-client",
+      "model": "chroma-default-embedding",
+      "prompt_version": "n/a",
+      "provider_id": "chroma",
+      "security_advisory": "CVE-2026-45829 (critical, unpatched) \u2014 local-only use"
+    },
+    "severian-sqlite": {
+      "backend": "sqlite",
+      "dsn_set": false,
+      "model": "severian/hash+fts",
+      "prompt_version": "prompt-v1",
+      "provider_id": "severian-sqlite"
+    }
+  },
+  "commit": {
+    "branch": "feat/ai-memory-concepts",
+    "sha": "efc009afa9ab8aabd75a812640ee8d1448a89379"
+  },
+  "environment": {
+    "chroma_venv": "/tmp/bench-compare-venv",
+    "pg_dsn_set": false,
+    "platform": "linux",
+    "python": "3.12.3"
+  },
+  "manifest": {
+    "id": "locomo-tier-conversation-v1-2026-08-03",
+    "path": "/tmp/manifest-locomo-nopg.json",
+    "sha256": "467bb44be5999c1fb7ea8b840e6a1722f0a986e5d26dc17266d9cf1c1798bc22"
+  },
+  "run_started_at": "2026-08-05T20:04:48.345133+00:00",
+  "vendor_reported": []
+}

@@ -1,5 +1,11 @@
 # Severian — Third-Party Objective Evaluation Prompt
 
+> **HISTORICAL / SUPERSEDED (2026-08-04).** This prompt was used for the
+> 2026-08-03 evaluation at `audit/brutal-critique-v0.1.0`. It predates the
+> auditor correction lane (C-01..C-10) and references the pre-merge branch.
+> Use `docs/benchmarks/chat-handoff-prompt-2026-08-04.md` for current
+> independent review of the correction lane. Preserved for provenance only.
+
 **Purpose:** Independent verification that Severian's benchmark claims are true,
 reproducible, and not inflated. This prompt is self-contained: hand it to a
 fresh agent session or a human auditor who has never seen the project.

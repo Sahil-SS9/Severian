@@ -1,0 +1,435 @@
+{
+  "schema_version": 1,
+  "manifest_id": "adversarial-v1-2026-08-05",
+  "name": "Adversarial-27 (A-3 option 3)",
+  "corpus": {
+    "id": "adversarial-27",
+    "version": "1.0",
+    "seed": 20260805,
+    "documents": [
+      {
+        "id": "a01",
+        "content": "Grace Hopper invented COBOL in 1959.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a02",
+        "content": "The current role of the project lead is research scientist.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a03",
+        "content": "The old role of the project lead was software engineer.",
+        "scope": "t1/p1/c1/a1/s1",
+        "is_stale": true,
+        "supersedes": []
+      },
+      {
+        "id": "a05",
+        "content": "The old password manager stored secrets in plain text.",
+        "scope": "t1/p1/c1/a1/s1",
+        "is_stale": true,
+        "supersedes": []
+      },
+      {
+        "id": "a04",
+        "content": "The current password manager stores secrets using scrypt hashing.",
+        "scope": "t1/p1/c1/a1/s1",
+        "supersedes": [
+          "a05"
+        ]
+      },
+      {
+        "id": "a06",
+        "content": "The deploy pipeline runs tests, lints, and builds on every push.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a07",
+        "content": "The database uses WAL mode for crash-safe concurrent writes.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a08",
+        "content": "Every incoming request is authenticated before it reaches the handler.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a09",
+        "content": "Requests are checked for valid credentials at the entry gate.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a10",
+        "content": "The service is deployed to the us-east-1 region.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a11",
+        "content": "The service is deployed to the eu-west-1 region.",
+        "scope": "t1/p1/c1/a1/s1",
+        "is_stale": true,
+        "supersedes": [
+          "a10"
+        ]
+      },
+      {
+        "id": "a12",
+        "content": "The service is deployed to the us-east-1 region (final decision).",
+        "scope": "t1/p1/c1/a1/s1",
+        "supersedes": [
+          "a11"
+        ]
+      },
+      {
+        "id": "a13",
+        "content": "The revenue target for Q3 is twelve million dollars.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a14",
+        "content": "The revenue target for Q4 is fifteen million dollars.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a15",
+        "content": "The headcount target for Q3 is twelve new engineers.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a16",
+        "content": "The private launch date of Project Chrysalis is 2026-09-01.",
+        "scope": "t2/p1/c1/a1/s1"
+      },
+      {
+        "id": "a17",
+        "content": "Project Chrysalis launch date is 2026-12-01.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a18",
+        "content": "The signing ceremony for the Acme contract happens on Friday.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a19",
+        "content": "The Acme contract was signed at the London office.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a20",
+        "content": "The hyperparameter sweep uses bayesian optimisation on the validation loss.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a21",
+        "content": "The quantisation scheme is fp8 with a 128-token group size.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a23",
+        "content": "The backup job runs nightly at two in the morning UTC.",
+        "scope": "t1/p1/c1/a1/s1",
+        "is_stale": true,
+        "supersedes": []
+      },
+      {
+        "id": "a22",
+        "content": "The backup job runs every night at 02:00 UTC.",
+        "scope": "t1/p1/c1/a1/s1",
+        "supersedes": [
+          "a23"
+        ]
+      },
+      {
+        "id": "a24",
+        "content": "The incident review covered the payment gateway outage.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a25",
+        "content": "The monitoring alert fired for the database replica lag.",
+        "scope": "t1/p1/c1/a1/s1"
+      },
+      {
+        "id": "a26",
+        "content": "The old API returned XML payloads.",
+        "scope": "t1/p1/c1/a1/s1",
+        "is_stale": true,
+        "supersedes": []
+      },
+      {
+        "id": "a27",
+        "content": "The current API returns JSON payloads.",
+        "scope": "t1/p1/c1/a1/s1",
+        "supersedes": [
+          "a26"
+        ]
+      }
+    ]
+  },
+  "queries": [
+    {
+      "id": "aq1",
+      "kind": "fact",
+      "query": "Who invented COBOL?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a01",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq2",
+      "kind": "fact",
+      "query": "deploy pipleline runs tests lints builds",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a06",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq3",
+      "kind": "paraphrase",
+      "query": "How is authentication enforced on inbound requests?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a08",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq4",
+      "kind": "correction",
+      "query": "Which region is the service deployed to?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a12",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq5",
+      "kind": "fact",
+      "query": "What is the revenue target for Q4?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a14",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq6",
+      "kind": "fact",
+      "query": "What is the headcount target for Q3?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a15",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq7",
+      "kind": "fact",
+      "query": "When is Project Chrysalis launching?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a17",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq8",
+      "kind": "multi_source",
+      "query": "What do we know about the Acme contract signing?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a18",
+          "weight": 1.0
+        },
+        {
+          "document_id": "a19",
+          "weight": 0.8
+        }
+      ]
+    },
+    {
+      "id": "aq9",
+      "kind": "fact",
+      "query": "What quantisation group size does the scheme use?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a21",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq10",
+      "kind": "fact",
+      "query": "When does the nightly backup run?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a22",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq11",
+      "kind": "negative",
+      "query": "What is the salary of the new CFO?",
+      "scope": "t1/p1/c1/a1/s1",
+      "answerable": false,
+      "expected_evidence": []
+    },
+    {
+      "id": "aq12",
+      "kind": "adversarial",
+      "query": "Revenue in Q4 \u2014 how much?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a14",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq13",
+      "kind": "temporal",
+      "query": "What format does the API return today?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a27",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq14",
+      "kind": "temporal",
+      "query": "What format did the old API return?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a26",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq15",
+      "kind": "temporal",
+      "query": "How are secrets stored by the password manager today?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a04",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "id": "aq16",
+      "kind": "temporal",
+      "query": "How were secrets stored by the old password manager?",
+      "scope": "t1/p1/c1/a1/s1",
+      "expected_evidence": [
+        {
+          "document_id": "a05",
+          "weight": 1.0
+        }
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "id": "severian-sqlite",
+      "kind": "severian",
+      "vendor": null,
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {
+        "id": "hash",
+        "prompt_version": "manifest-v1"
+      },
+      "config": {}
+    },
+    {
+      "id": "severian-postgres",
+      "kind": "severian",
+      "vendor": null,
+      "deployment": "local",
+      "backend": "postgresql",
+      "model": {
+        "id": "hash",
+        "prompt_version": "manifest-v1"
+      },
+      "config": {}
+    },
+    {
+      "id": "chroma",
+      "kind": "external",
+      "vendor": "chroma",
+      "deployment": "self-hosted",
+      "backend": null,
+      "model": {
+        "id": "chroma-default",
+        "prompt_version": "n/a"
+      },
+      "config": {}
+    },
+    {
+      "id": "baseline-lexical",
+      "kind": "external",
+      "vendor": "Baseline (bag-of-words)",
+      "deployment": "self-hosted",
+      "backend": null,
+      "model": {
+        "id": "bm25",
+        "prompt_version": "n/a"
+      },
+      "config": {}
+    }
+  ],
+  "metrics": [
+    "recall_at_10",
+    "mrr",
+    "ndcg_at_10",
+    "citation_precision",
+    "stale_fact_rate",
+    "temporal_accuracy",
+    "cross_scope_leakage",
+    "unsupported_answer_rate",
+    "latency_p95_ms",
+    "cost_per_query_usd"
+  ],
+  "release_gate": {
+    "min_recall_at_10": 0.95,
+    "min_citation_precision": 1.0,
+    "max_stale_fact_rate": 0.0,
+    "max_cross_scope_leakage": 0.0,
+    "max_unsupported_answer_rate": 0.0,
+    "require_external_providers": 1
+  }
+}

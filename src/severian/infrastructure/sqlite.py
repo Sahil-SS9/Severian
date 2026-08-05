@@ -215,6 +215,30 @@ class SQLiteRepository:
                 raise ValueError(f"scope dimension {dimension} must not be blank")
         return scope
 
+    def _require_collection(self, scope: Scope) -> None:
+        """DATA-05: a scope must not reference a collection owned by another tenant.
+
+        Ownership semantics: if a collection with the scope's collection_id
+        EXISTS, it must be owned by the scope's tenant. A missing collection
+        is permitted (the product supports unprovisioned, collection-less
+        operation; the service layer auto-provisions on ingest). A scope
+        for tenant t1 referencing a collection owned by t2 is rejected —
+        that is the ownership boundary this check enforces.
+        """
+        self._require_scope(scope)
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(records.c.tenant_id).where(
+                    records.c.record_type == "collection",
+                    records.c.id == scope.collection_id,
+                )
+            ).scalar_one_or_none()
+        if row is not None and row != scope.tenant_id:
+            raise NotFoundError(
+                f"collection {scope.collection_id!r} is owned by tenant {row!r}, "
+                f"not {scope.tenant_id!r}"
+            )
+
     def _get(self, kind: str, record_id: str, model: type[T], *, scope: Scope | None = None) -> T:
         predicates: list[Any] = [records.c.id == record_id, records.c.record_type == kind]
         if scope is not None:
@@ -243,8 +267,20 @@ class SQLiteRepository:
             raise NotFoundError("collection not found")
         return Collection.model_validate(row)
 
+    def collection_exists(self, collection_id: str) -> bool:
+        """True if a collection with this id exists for ANY tenant."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(records.c.id).where(
+                    records.c.record_type == "collection",
+                    records.c.id == collection_id,
+                )
+            ).scalar_one_or_none()
+        return row is not None
+
     def add_observation(self, observation: Observation) -> Observation:
         self._require_scope(observation.scope)
+        self._require_collection(observation.scope)
         digest = hashlib.sha256(observation.content.encode()).hexdigest()
         # P0-1: preserve immutable raw evidence. Direct constructions that
         # omit raw fields are backfilled so the stored record always has a
@@ -440,6 +476,7 @@ class SQLiteRepository:
         return revision
 
     def add_memory(self, memory: Memory) -> Memory:
+        self._require_collection(memory.scope)
         for source_id in memory.source_observation_ids:
             try:
                 source = self.get_observation(memory.scope, source_id)
@@ -516,7 +553,7 @@ class SQLiteRepository:
             for m in memories
         ]
         with self.engine.begin() as connection:
-            existing_by_identity: dict[str, Memory] = {}
+            existing_by_identity: dict[tuple[str, str], Memory] = {}
             rows = connection.execute(
                 select(records.c.payload).where(
                     records.c.record_type == "memory",
@@ -532,11 +569,156 @@ class SQLiteRepository:
                     memory.model_id,
                     memory.prompt_version,
                 )
-                existing_by_identity[key] = memory
+                # DATA-06: key by (scope, identity) — a memory with the
+                # same identity in ANOTHER scope must NOT satisfy this
+                # batch insert (the single-insert path already scopes;
+                # the batch path must agree). Without this, a cross-scope
+                # match would suppress a new insert or return the wrong
+                # memory.
+                scope_key = memory.scope.model_dump_json()
+                existing_by_identity[(scope_key, key)] = memory
             results: list[Memory] = []
             for memory, identity_key in zip(memories, identities, strict=True):
-                if identity_key in existing_by_identity:
-                    results.append(existing_by_identity[identity_key])
+                scope_key = memory.scope.model_dump_json()
+                if (scope_key, identity_key) in existing_by_identity:
+                    results.append(existing_by_identity[(scope_key, identity_key)])
+                    continue
+                connection.execute(
+                    records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))
+                )
+                if (events := self._event_models("memory", memory)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                results.append(memory)
+        return results
+
+    def publish_derivation(
+        self,
+        scope: Scope,
+        *,
+        entities: list[tuple[str, str]],
+        relations: list[tuple[str, str, str]],
+        memories: list[Memory],
+    ) -> list[Memory]:
+        """Atomically publish graph extraction + derived memories (DATA-04).
+
+        The graph entities/relations AND the candidate memories land in
+        ONE transaction: a failure anywhere aborts everything, so the
+        graph can never be orphaned from the memory it came from (or
+        vice versa). Entity/relation upserts are identity-deduped exactly
+        like ``add_entity``/``add_relation``; memory insert matches
+        ``add_memories_batch`` semantics.
+        """
+        self._require_scope(scope)
+        self._require_collection(scope)
+        if not memories and not entities and not relations:
+            return []
+        # Validate memory source references BEFORE the transaction (same
+        # as add_memories_batch) so a malformed candidate aborts early.
+        for memory in memories:
+            for source_id in memory.source_observation_ids:
+                source = self.get_observation(memory.scope, source_id)
+                if source.scope != memory.scope:
+                    raise ConflictError("source observation scope does not match memory scope")
+
+        memory_identities = [
+            self._identity(
+                m.kind,
+                m.content,
+                m.source_observation_ids,
+                m.model_id,
+                m.prompt_version,
+            )
+            for m in memories
+        ]
+        with self.engine.begin() as connection:
+            # -- entities (identity-deduped, same as add_entity) --
+            entity_ids: dict[str, str] = {}
+            for kind, name in entities:
+                identity_key = self._identity(kind, name.casefold())
+                row = connection.execute(
+                    select(records.c.payload).where(
+                        records.c.record_type == "entity",
+                        *self._scope_predicates(scope),
+                        records.c.identity_key == identity_key,
+                    )
+                ).scalar_one_or_none()
+                if row is not None:
+                    entity_ids[name.casefold()] = Entity.model_validate(row).id
+                    continue
+                entity = Entity(scope=scope, kind=kind, name=name)
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values("entity", entity, identity_key=identity_key)
+                    )
+                )
+                if (events := self._event_models("entity", entity)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                entity_ids[name.casefold()] = entity.id
+            # -- relations (only when both endpoints were upserted) --
+            for subject, predicate, obj in relations:
+                subject_id = entity_ids.get(subject.casefold())
+                object_id = entity_ids.get(obj.casefold())
+                if subject_id is None or object_id is None:
+                    continue
+                relation = Relation(
+                    scope=scope,
+                    subject_id=subject_id,
+                    predicate=predicate,
+                    object_id=object_id,
+                )
+                identity_key = self._identity("relation", relation.subject_id, relation.predicate, relation.object_id)
+                existing = connection.execute(
+                    select(records.c.payload).where(
+                        records.c.record_type == "relation",
+                        *self._scope_predicates(scope),
+                        records.c.identity_key == identity_key,
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    continue
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values("relation", relation, identity_key=identity_key)
+                    )
+                )
+                if (events := self._event_models("relation", relation)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+            # -- memories (same as add_memories_batch) --
+            existing_rows = connection.execute(
+                select(records.c.payload).where(
+                    records.c.record_type == "memory",
+                    records.c.identity_key.in_(memory_identities),
+                )
+            ).scalars().all()
+            existing_by_identity: dict[tuple[str, str], Memory] = {}
+            for value in existing_rows:
+                memory = Memory.model_validate(value)
+                key = self._identity(
+                    memory.kind,
+                    memory.content,
+                    memory.source_observation_ids,
+                    memory.model_id,
+                    memory.prompt_version,
+                )
+                scope_key = memory.scope.model_dump_json()
+                existing_by_identity[(scope_key, key)] = memory
+            results: list[Memory] = []
+            for memory, identity_key in zip(memories, memory_identities, strict=True):
+                scope_key = memory.scope.model_dump_json()
+                if (scope_key, identity_key) in existing_by_identity:
+                    results.append(existing_by_identity[(scope_key, identity_key)])
                     continue
                 connection.execute(
                     records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))
@@ -552,6 +734,40 @@ class SQLiteRepository:
 
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         return self._get("memory", memory_id, Memory, scope=scope)
+
+    def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
+        """Increment a memory's usage_count by one (retrieval hit).
+
+        Atomic increment (DATA-07): the update runs in one statement
+        against the CURRENT payload — it never rewrites a stale read-back
+        copy. A concurrent supersede can therefore not be lost to a
+        usage update that overwrote the whole payload with an old value.
+        """
+        self._require_scope(scope)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+                )
+                .values(
+                    payload=func.json_set(
+                        records.c.payload,
+                        "$.usage_count",
+                        func.json_extract(records.c.payload, "$.usage_count") + 1,
+                    )
+                )
+            )
+            if result.rowcount == 0:
+                # No active memory in this scope with this id: it is either
+                # superseded (usage on stale heads is not recorded) or does
+                # not exist. Return the (possibly superseded) record as-is
+                # for the caller, matching the pre-fix no-op contract.
+                return self.get_memory(scope, memory_id)
+        return self.get_memory(scope, memory_id)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded.
@@ -654,6 +870,31 @@ class SQLiteRepository:
                 )
                 superseded += 1
         return superseded
+
+    def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
+        """Mark one active memory as superseded by a replacement head.
+
+        Used by the dreaming/consolidation pass to retire duplicate heads
+        in favour of a survivor. Non-destructive: the memory remains in
+        history (P0-1); active reads and projection rebuilds drop it.
+        """
+        self._require_scope(scope)
+        memory = self.get_memory(scope, memory_id)
+        if memory.superseded_by_id is not None:
+            raise ConflictError("memory is already superseded")
+        if memory_id == replacement_id:
+            raise ConflictError("cannot supersede a memory by itself")
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == memory_id)
+                .values(
+                    payload=memory.model_copy(
+                        update={"superseded_by_id": replacement_id}
+                    ).model_dump(mode="json")
+                )
+            )
+        return self.get_memory(scope, memory_id)
 
     def revise_memory(
         self,
@@ -770,6 +1011,7 @@ class SQLiteRepository:
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         self._require_scope(scope)
+        self._require_collection(scope)
         identity_key = self._identity(kind, name.casefold())
         query = select(records.c.payload).where(
             records.c.record_type == "entity",
@@ -803,6 +1045,7 @@ class SQLiteRepository:
         valid_to: datetime | None = None,
     ) -> Relation:
         self._require_scope(scope)
+        self._require_collection(scope)
         for endpoint_id in (subject_id, object_id):
             try:
                 self._get("entity", endpoint_id, Entity, scope=scope)
@@ -841,8 +1084,44 @@ class SQLiteRepository:
                 raise ConflictError("relation identity conflict") from None
             return Relation.model_validate(existing)
 
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        """All entities in scope, ordered deterministically by (kind, name)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "entity", *self._scope_predicates(scope))
+            .order_by(
+                func.json_extract(records.c.payload, "$.kind"),
+                func.json_extract(records.c.payload, "$.name"),
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Entity.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation:
+        self._require_scope(scope)
+        return self._get("relation", relation_id, Relation, scope=scope)
+
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        """All relations in scope, ordered deterministically by (subject, predicate, object)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "relation", *self._scope_predicates(scope))
+            .order_by(
+                func.json_extract(records.c.payload, "$.subject_id"),
+                func.json_extract(records.c.payload, "$.predicate"),
+                func.json_extract(records.c.payload, "$.object_id"),
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Relation.model_validate(value) for value in connection.execute(query).scalars()]
+
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         self._require_scope(scope)
+        self._require_collection(scope)
         identity_key = self._identity(kind, payload)
         query = select(records.c.payload).where(
             records.c.record_type == "job",
@@ -1004,6 +1283,44 @@ class SQLiteRepository:
                     )
                 reaped += 1
         return reaped
+
+    def list_dead_letter_jobs(self) -> list[Job]:
+        """Inspect dead-lettered jobs (OPS-07)."""
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "job", records.c.status == "dead_letter")
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Job.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def requeue_job(self, job_id: str) -> Job:
+        """Recover a dead-lettered job: reset to pending with a fresh
+        attempt budget (OPS-07). The job is retried on the next drain."""
+        query = select(records.c.payload).where(
+            records.c.id == job_id, records.c.record_type == "job", records.c.status == "dead_letter"
+        )
+        with self.engine.connect() as connection:
+            value = connection.execute(query).scalar_one_or_none()
+        if value is None:
+            raise NotFoundError(f"dead-letter job {job_id!r} not found")
+        job = Job.model_validate(value)
+        requeued = job.model_copy(
+            update={
+                "status": "pending",
+                "attempts": 0,
+                "worker_id": None,
+                "lease_until": None,
+                "dead_letter": False,
+            }
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == job_id, records.c.record_type == "job", records.c.status == "dead_letter")
+                .values(status="pending", payload=requeued.model_dump(mode="json"))
+            )
+        return requeued
 
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event:
         self._require_scope(scope)

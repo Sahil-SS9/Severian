@@ -31,7 +31,41 @@
 
 ## Authentication and authorisation
 
-Phase 1 still requires local authentication. Loopback binding is not authentication. API keys are hashed at rest, scoped and revocable. Browser sessions use secure cookies and CSRF protection. Destructive operations require explicit confirmation and produce audit events.
+**Implemented (SEC-01, 2026-08-05):** API-key authentication and
+principal-bound scope are now implemented for the HTTP API.
+
+- **API keys hashed at rest** with SHA-256. The credential store is a
+  small SQLite database (``--auth-file`` / ``SEVERIAN_AUTH_FILE``). Keys
+  are never persisted in plaintext; verification uses constant-time
+  comparison. Keys are scoped to a principal :class:`Scope` and are
+  revocable.
+- **Fail-closed HTTP API.** When auth is enabled (a principal resolver is
+  configured), every data endpoint requires a valid
+  ``Authorization: Bearer <key>`` header. Missing or invalid tokens are
+  rejected with 401. Cross-tenant claims are rejected with 403 (via the
+  existing ``_bind_principal``). Health endpoints (``/healthz``,
+  ``/readyz``) are exempt.
+- **Non-loopback startup guard.** ``serve_dev.py`` refuses to start on a
+  non-loopback host (not ``127.0.0.1``/``localhost``/``::1``) unless
+  ``--auth-file`` is provided. This prevents accidental network exposure
+  without authentication.
+- **SDK credential support.** ``SeverianClient`` accepts ``api_key`` and
+  sends ``Authorization: Bearer`` on every request.
+- **MCP construct-time binding.** ``SeverianMCPServer`` optionally accepts
+  a principal :class:`Scope` at construction. When bound, tool args cannot
+  switch tenant/profile — the principal's security-sensitive dimensions
+  override them. (stdio MCP cannot do interactive auth; capability binding
+  means the server's scope is fixed at construction.)
+- **Hermes construct-time binding.** ``SeverianMemoryProvider`` optionally
+  accepts a principal :class:`Scope` at construction. When bound,
+  ``initialize()`` and tool calls cannot switch tenant/profile.
+
+**Still required (not yet implemented):**
+- browser sessions using secure cookies and CSRF protection;
+- destructive operations requiring explicit confirmation + audit events;
+- rate limiting (acceptable for local-first; add before network exposure).
+
+See `docs/operator-runbook.md` for the current deployment posture.
 
 ## Data lifecycle
 

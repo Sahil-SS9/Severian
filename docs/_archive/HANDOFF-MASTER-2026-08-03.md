@@ -1,7 +1,7 @@
 # SEVERIAN — MASTER HANDOFF PACKAGE (2026-08-03)
 
 > Author: KENSEI
-> Status: **READY TO BE AUDITED** — all register items A–G resolved or honestly blocked; full gate green on main (255 passed / 36 skipped, mypy --strict clean, ruff clean). Hand to a third-party agent for objective review.
+> Status: **CORRECTION LANE COMPLETE — AWAITING INDEPENDENT REVIEW.** All register items A–G resolved or honestly blocked; auditor corrections C-01..C-10 implemented on branch `fix/auditor-corrections-2026-08-04` (HEAD `9749a75`): 271 passed / 36 skipped, mypy --strict clean (46 files), ruff clean, `git diff --check` clean. Do not merge without review; the reviewer owns the READY verdict.
 > Read order: this document first, end to end. Then the referenced files in §7.
 > Purpose: a third-party agent must be able to continue seamlessly from the
 > current project state with zero institutional memory.
@@ -36,11 +36,14 @@ external supermemory.ai competitor.
 
 | Repo | Branch | HEAD | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `main` | `2b2127a` | CLEAN — production branch (audit merged via G-1) |
+| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane) | `9749a75` | CLEAN — auditor corrections C-01..C-10 implemented; awaiting independent review before merge |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | CLEAN |
 
 - `main` on Severian is the canonical production branch — audit branch merged
   `--no-ff` (G-1, commit `6f32354`); all A/B/C/E/G work landed on main.
+  The correction lane (`fix/auditor-corrections-2026-08-04`, HEAD `9749a75`)
+  branches from `b628a97` (post-handover-prompt) and must be reviewed before
+  merge back to main.
 - Release tag `v0.1.0` exists. Wheel + sdist in `dist/`
   (`severian-0.1.0-py3-none-any.whl`, `severian-0.1.0.tar.gz`); wheel verified
   in a fresh venv with the rollback/episode commands present.
@@ -59,11 +62,16 @@ external supermemory.ai competitor.
 
 ### Verified gate state (independent 3rd-party eval, 2026-08-03, at e6ead47)
 
-- `228 passed, 36 skipped, 3 warnings` — REPRODUCED by eval.
-- `mypy --strict` clean (48 files) — REPRODUCED.
+- `228 passed, 36 skipped, 3 warnings` — REPRODUCED by eval (HISTORICAL —
+  current correction-lane gate: 271 passed / 36 skipped at eb2b169).
+- `mypy --strict` clean (48 files) — REPRODUCED (HISTORICAL — current:
+  46 files clean at eb2b169).
 - `ruff check` clean — REPRODUCED.
-- Severian quality: both lanes pass all configured release gates; raw traces
-  independently recomputed with zero discrepancy — REPRODUCED.
+- Severian quality gate at e6ead47: the 2026-08-03 eval recorded both lanes
+  passing at that commit. **SUPERSEDED (C-05): the current manifest-v1 gate
+  HONESTLY FAILS** — recall 1.000, stale 0.000, leakage 0.000, unsupported
+  0.000 pass, but citation_precision 0.9375 < 1.0 fails. No active doc may
+  claim the release gate passes. See §8 limitations item 3.
 - 5-doc anomaly 0 → 5 → 5 pattern — REPRODUCED via genuine SDK run
   (SDK timings: 1.606611 / 73.768587 / 3.784587 ms; direct-service was 0.27 /
   57.6 / 1.8 ms — the SDK numbers are the valid evidence).
@@ -144,7 +152,7 @@ yet scheduled).
 
 | ID | Issue | Notes |
 |---|---|---|
-| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.865. Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-03-locomo-tier/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3). |
+| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.885 (deterministic after C-08). Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-04/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3, updated 9749a75). |
 | B-2 | No episodic summarization path | **DONE (2026-08-03):** EpisodeService consolidates session observations into Memory(kind="episode") with deterministic budgeted summary + optional gateway summarize with rule-based fallback; worker 'episode' job kind; 6 tests (f02e268). |
 | B-3 | No claim may be made about conversation recall until B-1/B-2 exist | Per honest-numbers policy. **Now satisfied:** B-1 measured (0.923 hash / 0.808–0.885 granite), B-2 implemented. Claims still bounded by honest-numbers taxonomy. |
 
@@ -240,25 +248,28 @@ Run in order; each must pass before proceeding:
 ```bash
 cd /home/kensei/repos/Severian
 git status --short          # expect: clean
-git branch --show-current   # expect: audit/brutal-critique-v0.1.0
-git log --oneline -1        # expect: fdae4da docs(bench): apply 3rd-party eval corrections; land superiority roadmap
+git branch --show-current   # expect: fix/auditor-corrections-2026-08-04 (correction lane)
+git rev-parse HEAD          # expect: 9749a75 (descendant of baseline dfc418f)
 
-uv run pytest -q            # expect: 228 passed, 36 skipped (3 warnings)
-uv run mypy --strict src/severian tests/benchmarks scripts/   # expect: Success
-uv run ruff check src/severian tests/benchmarks scripts/      # expect: All checks passed
+uv run pytest -q            # expect: 271 passed, 36 skipped (3 warnings)
+uv run mypy --strict src/severian   # expect: Success, 46 files
+uv run ruff check src/severian tests scripts      # expect: All checks passed
 
 # PG + pgvector reachable
-uv run python -c "from severian.infrastructure.postgresql import PostgreSQLBackend; from severian.infrastructure.pgvector_index import PGVectorIndex; r=PostgreSQLBackend(dsn='postgresql://severian:severian@127.0.0.1:54329/severian'); r.close(); i=PGVectorIndex(dsn='postgresql://severian:severian@127.0.0.1:54329/severian'); i.close(); print('PG OK')"
+uv run python -c "from severian.infrastructure.postgresql import PostgreSQLBackend; from severian.infrastructure.pgvector_index import PGVectorIndex; r=PostgreSQLBackend(dsn='postgresql://severian:***@127.0.0.1:54329/severian'); r.close(); i=PGVectorIndex(dsn='postgresql://severian:***@127.0.0.1:54329/severian'); i.close(); print('PG OK')"
 
-# Manifest validates
+# Manifests validate
 uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-v1.json
+uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-locomo-tier-v1.json
 
-# Quality benchmark (fast, manifest corpus) — must PASS gate
-uv run python scripts/run_benchmark.py --manifest docs/benchmarks/manifest-v1.json --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:severian@127.0.0.1:54329/severian" --out /tmp/verify-quality
+# Quality benchmark (fast, manifest corpus) — the gate HONESTLY FAILS on
+# citation_precision (0.9375 < 1.0); recall/stale/leak/unsup pass. This is
+# the product finding, not a green-light signal.
+uv run python scripts/run_benchmark.py --manifest docs/benchmarks/manifest-v1.json --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:***@127.0.0.1:54329/severian" --out /tmp/verify-quality
 
 # 5-doc anomaly repro through the SDK (0 → N → N pattern)
 # see docs/benchmarks/handover-third-party-eval-2026-08-03.md §protocol step 4
-
+```
 # Scale lane sanity (1k only, ~4 min)
 uv run python scripts/run_scale_benchmark.py --chroma-venv /tmp/bench-compare-venv --pg-dsn "postgresql://severian:severian@127.0.0.1:54329/severian" --min-bucket 1000 --max-bucket 1000 --out /tmp/verify-scale
 # expect: run_state complete, 4 lanes (sqlite, postgres, chroma, baseline)
@@ -273,8 +284,10 @@ npm audit --omit=dev        # expect: 0 vulnerabilities
 npm run lint && npm run build   # expect: pass
 ```
 
-After verification: report PASS/FAIL per line, then start on §3 backlog in the
-priority order agreed with Sahil (default: E-1 → E-3 → C-1 → B-1 → A-1).
+After verification: report PASS/FAIL per line. The correction lane is
+COMPLETE (C-01..C-10); do NOT re-execute the audit — submit findings for
+independent review. The correction branch must not be merged without that
+review.
 
 ---
 
@@ -286,7 +299,8 @@ priority order agreed with Sahil (default: E-1 → E-3 → C-1 → B-1 → A-1).
 | `docs/benchmarks/strategy.md` | Benchmark selection rationale (why not LOCOMO/BEAM as primary), methodology |
 | `docs/benchmarks/manifest-v1.json` | Deterministic comparison manifest (16 queries, 5 thresholds) |
 | `docs/benchmarks/evidence/2026-08-03/*.json` | Raw scale evidence (1k/10k + 100k) |
-| `docs/benchmarks/handover-third-party-eval-2026-08-03.md` | Self-contained 3rd-party eval prompt (corrected) |
+| `docs/benchmarks/chat-handoff-prompt-2026-08-04.md` | CURRENT share-ready 3rd-party audit prompt (correction lane) — use this |
+| `docs/benchmarks/handover-third-party-eval-2026-08-03.md` | HISTORICAL 3rd-party eval prompt (2026-08-03, pre-correction; superseded banner added) |
 | `docs/benchmarks/handover-superiority-2026-08-03.md` | Answers to Sahil a/b/d + research-interrogation prompt |
 | `docs/benchmarks/superiority-roadmap-2026-08-03.md` | Tier-by-tier gap analysis, ranked benchmarks/techniques, claim set |
 | `docs/handoff-brutal-critique-fixes.md` | Original P0–P2 audit findings + remediation sequence (all fixed; keep as provenance) |
@@ -305,33 +319,45 @@ All register items are resolved or honestly blocked:
 
 | Item | Status | Evidence |
 |---|---|---|
-| A-1 Granite R2 embeddings | DONE | EmbeddingProvider protocol + GraniteR2Embedding (6a30fae), pgvector dim parameterization (3ccf788), live benchmark (26f3c09) — Granite closes q6 (c27 rank 2) |
+| A-1 Granite R2 embeddings | DONE | EmbeddingProvider protocol + GraniteR2Embedding (6a30fae), pgvector dim parameterization (3ccf788), live benchmark (26f3c09) — Granite closes q6 (c27 rank 1 in bounded spot-check) |
 | A-2 versioning/rollback | DONE | rollback_memory both backends (bb5c460), idempotent projection rebuild (f3552b5) |
 | A-3 real-data probes | SPEC WRITTEN — blocked on corpus approval | real-data-probe-spec-2026-08-03.md |
-| A-4 Chroma batch compare | DONE | evidence/2026-08-03-batch-compare/ (9566937) |
-| B-1 LOCOMO-tier | DONE (gate honestly FAILs) | definitive re-run: recall 0.923, temporal 1.000, stale 0.000 |
+| A-4 Chroma batch compare | DONE (corrected) | run_batch_compare.py C-02/C-03 corrected: speedup_v2 9.07 (batch 39.0 / per-doc 4.3 docs/s), severian 236.3 docs/s, reps 3, git SHA + corpus hash recorded |
+| B-1 LOCOMO-tier | DONE (gate honestly FAILs) | definitive re-run: recall 0.923, temporal 1.000, stale 0.000, MRR 0.8846 (deterministic after C-08) |
 | B-2 episodic summarization | DONE | EpisodeService + worker kind + CLI episode command (f02e268, b2ca43a) |
 | B-3 conversation-recall claim gate | SATISFIED | measured numbers exist; claims bounded by honest taxonomy |
-| C-1 competitor claims table | DONE | docs/benchmarks/competitor-claims.md (507c491) |
+| C-1 competitor claims table | DONE | docs/benchmarks/competitor-claims.md (507c491, updated 2026-08-04) |
 | E-1..E-5 | DONE | ordering fix, path policy, domain constraints, stale smoke removal, evidence provenance (507c491, 73bef60) |
 | F-1..F-6 | DONE | eval-process fixes (fdae4da) |
 | G-1 merge audit→main | DONE | 6f32354 (--no-ff) |
 | G-2 publish | VERIFIED | wheel installs in fresh venv, CLI works with rollback/episode |
 | G-3 CI doc | VERIFIED | .github/workflows/ci.yml present |
 | G-4 kanban hold | HELD | per locked decision |
+| Correction C-01..C-10 (auditor lane) | DONE | branch fix/auditor-corrections-2026-08-04 — Chroma isolation (incl. safety hardening), batch speedup, reproducibility, ranking determinism, doc reconciliation |
 
-**Final gate on main `2b2127a`:** 255 passed / 36 skipped, mypy --strict clean
-(46 files), ruff clean, both manifests validate, working tree clean.
+**Correction-lane gate (branch fix/auditor-corrections-2026-08-04, HEAD
+9749a75):** 271 passed / 36 skipped, mypy --strict clean (46 files), ruff
+clean, both manifests validate, `git diff --check` clean.
 
-**Remaining honest limitations (not debt):**
-1. A-3 real-data lane not run — requires corpus approval (Sahil's logs or
-   licence-cleared dataset).
-2. B-1 gate fails honestly: recall 0.923 < 0.95, cit_prec 0.656, unsup 0.188.
-   No lane passes (Chroma also fails on stale/cit_prec). Severian's measured
-   strengths: stale 0.000, temporal 1.000.
-3. Cold-derive scale curve (9.9s@1k → 6458s@100k) is a measured design
-   consequence; worker + idempotent rebuild mitigate; no competitive parity
-   claim made.
+**Remaining honest limitations (not debt) — the six required items:**
+1. **A-3 blocked**: real-data lane spec written but not run; requires
+   corpus approval (Sahil's logs or licence-cleared dataset). No fabricated
+   real-data result.
+2. **B-1/LOCOMO gate failure**: recall 0.923 < 0.95, cit_prec 0.656,
+   unsup 0.188. No lane passes (Chroma also fails on stale/cit_prec).
+   Severian's measured strengths: stale 0.000, temporal 1.000.
+3. **Manifest-v1 citation-precision failure**: recall 1.000, stale 0.000,
+   leakage 0.000, unsupported 0.000 for both Severian lanes, but the
+   release gate does NOT pass because citation precision is 0.9375 against
+   the configured threshold of 1.0. The gate output is the product finding.
+4. **Cold-derive scale curve**: 9.9s@1k → 6458s@100k is a measured design
+   consequence; worker + idempotent rebuild mitigate; no competitive
+   parity claim made.
+5. **Vendor-claim policy**: cited vendor results (competitor-claims.md)
+   are vendor-reported, never claimed as internal reproductions.
+6. **No-secrets verification**: grep of src/tests/scripts/docs for
+   sk-*/api_key=/password=/Bearer found no credentials; scan scope is the
+   repository tree (bounded, not a system-wide audit).
 
 ---
 

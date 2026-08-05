@@ -368,6 +368,35 @@ def test_job_reap_requeues_expired_lease_and_dead_letters_exhausted(repo):
         repo.claim_job("w1")
 
 
+def test_dead_letter_inspection_and_requeue(repo):
+    """OPS-07: dead-lettered jobs are inspectable and recoverable —
+    list_dead_letter_jobs returns them and requeue_job resets to pending
+    with a fresh attempt budget so the next drain retries them."""
+    seed_collection(repo)
+    job = repo.enqueue_job(scope(), "derive", {"observation_id": "a"})
+
+    # Drive the job into dead-letter via repeated expired leases.
+    repo.claim_job("w1", lease_seconds=1)
+    for _ in range(6):
+        repo.reap_expired_jobs(now=datetime(2030, 2, 1, tzinfo=UTC), max_attempts=3)
+        try:
+            repo.claim_job("w1", lease_seconds=1)
+        except NotFoundError:
+            break
+
+    dead = repo.list_dead_letter_jobs()
+    assert [j.id for j in dead] == [job.id]
+
+    # Requeue: back to pending, fresh attempts, claimable again.
+    requeued = repo.requeue_job(job.id)
+    assert requeued.status == "pending"
+    assert requeued.attempts == 0
+    assert requeued.dead_letter is False
+    assert repo.list_dead_letter_jobs() == []
+    claimed = repo.claim_job("w2")
+    assert claimed.id == job.id
+
+
 def test_atomic_ingest_and_enqueue_is_idempotent(repo):
     seed_collection(repo)
     observation, job = repo.add_observation_and_enqueue(

@@ -28,7 +28,8 @@ class FakeTransport:
         self.calls: list[tuple[str, str, Any]] = []
 
     def request(
-        self, method: str, url: str, *, json: Any = None, params: Any = None
+        self, method: str, url: str, *, json: Any = None, params: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         self.calls.append((method, url, json))
         return _FakeResponse(200, {"observation_id": "x"})
@@ -42,7 +43,8 @@ class RecordingTransport:
         self.calls: list[tuple[str, str, Any, Any]] = []
 
     def request(
-        self, method: str, url: str, *, json: Any = None, params: Any = None
+        self, method: str, url: str, *, json: Any = None, params: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         self.calls.append((method, url, json, params))
         return self._response

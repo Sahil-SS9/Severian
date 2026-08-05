@@ -3,32 +3,32 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.hits import VectorHit  # re-export for backward compat (ARCH-03)
 from severian.domain.models import Memory, Scope
+from severian.domain.text import STOPWORDS, porter_stem
+
+_STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
 
 
-@dataclass(frozen=True)
-class VectorHit:
-    memory_id: str
-    score: float
+def _restrict_private(path: str | Path) -> None:
+    """Restrict a DB file and its WAL/SHM siblings to the owning user.
 
-
-_STOPWORDS: frozenset[str] = frozenset(
-    {
-        "a", "an", "and", "are", "as", "at", "be", "been", "by", "can",
-        "could", "did", "do", "does", "for", "from", "had", "has", "have",
-        "how", "in", "into", "is", "it", "its", "no", "not", "of", "on",
-        "or", "should", "that", "the", "their", "these", "they", "this",
-        "those", "to", "was", "we", "were", "what", "when", "where",
-        "which", "who", "whose", "will", "with", "would", "you",
-    }
-)
+    Mirrors the canonical store's hardening (sqlite.py initialize):
+    memory content is sensitive; FTS/vector projection files must not
+    be world-readable (default umask 0644).
+    """
+    for candidate in (str(path), str(path) + "-wal", str(path) + "-shm"):
+        try:
+            os.chmod(candidate, 0o600)
+        except FileNotFoundError:
+            pass
 
 
 class EmbeddingProvider(Protocol):
@@ -45,11 +45,17 @@ class EmbeddingProvider(Protocol):
 
 
 class HashEmbedding:
-    def __init__(self, dimension: int = 256, *, skip_stopwords: bool = True):
+    def __init__(self, dimension: int = 256, *, skip_stopwords: bool = True, stem: bool = True):
         if dimension < 8:
             raise ValueError("embedding dimension must be at least 8")
         self.dimension = dimension
         self.skip_stopwords = skip_stopwords
+        # Stemming aligns the hash tokenizer with the FTS5 porter
+        # tokenizer: "authentication"/"authenticated"/"authenticate" all
+        # hash identically, so vector and lexical projections agree on
+        # inflected queries (fixes the fused-rank gap on paraphrase
+        # probes). Deterministic; on by default.
+        self.stem = stem
 
     def encode(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
@@ -57,6 +63,8 @@ class HashEmbedding:
         for token in tokens:
             if self.skip_stopwords and token in _STOPWORDS:
                 continue
+            if self.stem:
+                token = porter_stem(token)
             digest = hashlib.sha256(token.encode()).digest()
             index = int.from_bytes(digest[:4], "big") % self.dimension
             sign = 1.0 if digest[4] & 1 else -1.0
@@ -73,6 +81,7 @@ class LocalVectorIndex:
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=30000")
+        _restrict_private(self.path)
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS memory_vectors (
                 memory_id TEXT PRIMARY KEY,
@@ -108,7 +117,7 @@ class LocalVectorIndex:
                 memory.scope.agent_id,
                 memory.scope.session_id,
                 memory.content,
-                json.dumps(vector, separators=(",", ":")),
+                json.dumps(vector),
             ),
         )
         self.connection.commit()
@@ -142,17 +151,22 @@ class LocalVectorIndex:
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]:
         query_vector = self.embedding.encode(query)
         rows = self.connection.execute(
-            """SELECT memory_id, vector FROM memory_vectors
-               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                 AND agent_id = ? AND session_id = ?""",
+            """SELECT memory_id, vector, content FROM memory_vectors
+              WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                AND agent_id = ? AND session_id = ?""",
             tuple(scope.model_dump().values()),
         ).fetchall()
-        scored: list[VectorHit] = []
-        for memory_id, encoded in rows:
+        scored: list[tuple[VectorHit, list[float], str]] = []
+        for memory_id, encoded, content in rows:
             vector = json.loads(encoded)
             score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
-            scored.append(VectorHit(memory_id=memory_id, score=score))
-        return sorted(scored, key=lambda item: (-item.score, item.memory_id))[:limit]
+            scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
+        # Deterministic tiebreak: identical scores (identical hash vectors)
+        # resolve by content — the stable key across runs — then by
+        # memory UUID as the final total-order safety net (never reached
+        # for distinct content post-dedupe).
+        scored.sort(key=lambda pair: (-pair[0].score, pair[2], pair[0].memory_id))
+        return [hit for hit, _vector, _content in scored[:limit]]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)

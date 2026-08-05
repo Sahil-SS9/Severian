@@ -285,10 +285,16 @@ class SeverianMCPServer:
         self,
         service: MemoryService,
         gateway: DerivationGateway | None = None,
+        principal: Scope | None = None,
     ) -> None:
         self._service = service
         self._gateway = gateway
         self._initialized = False
+        # SEC-01: construct-time principal binding. stdio MCP cannot
+        # do interactive auth; the server's scope is fixed at
+        # construction. Tool args cannot switch tenant/profile — the
+        # principal's security-sensitive dimensions override them.
+        self._principal = principal
 
     # -- public dispatch --------------------------------------------------
 
@@ -438,9 +444,36 @@ class SeverianMCPServer:
 
     # -- tool implementations --------------------------------------------
 
+    def _resolve_mcp_scope(self, args_scope: Scope) -> Scope:
+        """Enforce the construct-time principal on a tool-call scope.
+
+        SEC-01: when a principal is bound, the security-sensitive
+        dimensions (tenant_id, profile_id) MUST match the principal.
+        A mismatch is a scope error (capability boundary). The
+        non-security dimensions (collection_id, agent_id,
+        session_id) remain client-selectable.
+        """
+        if self._principal is None:
+            return args_scope
+        if (
+            args_scope.tenant_id != self._principal.tenant_id
+            or args_scope.profile_id != self._principal.profile_id
+        ):
+            raise _ScopeError(
+                "scope outside principal: tenant/profile must be "
+                f"{self._principal.tenant_id}/{self._principal.profile_id}"
+            )
+        return Scope(
+            tenant_id=self._principal.tenant_id,
+            profile_id=self._principal.profile_id,
+            collection_id=args_scope.collection_id,
+            agent_id=args_scope.agent_id,
+            session_id=args_scope.session_id,
+        )
+
     def _call_ingest(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
         args = IngestArgs.model_validate(arguments)
-        scope = args.scope()
+        scope = self._resolve_mcp_scope(args.scope())
         view = self._service.ingest_observation(scope, content=args.content, source=args.source)
         payload = {
             "observation_id": view.observation_id,
@@ -455,7 +488,7 @@ class SeverianMCPServer:
 
     def _call_search(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
         args = SearchArgs.model_validate(arguments)
-        scope = args.scope()
+        scope = self._resolve_mcp_scope(args.scope())
         if args.derive and self._gateway is None:
             return _result(
                 _text_content(_safe_json({"error": "derive requested but no gateway configured"}), is_error=True),
@@ -486,7 +519,7 @@ class SeverianMCPServer:
 
     def _call_get_observation(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
         args = GetObservationArgs.model_validate(arguments)
-        scope = args.scope()
+        scope = self._resolve_mcp_scope(args.scope())
         observation = self._service.get_observation(scope, args.observation_id)
         payload = {
             "observation_id": observation.id,

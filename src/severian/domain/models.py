@@ -56,6 +56,36 @@ class Collection(BaseModel):
     created_at: datetime = Field(default_factory=now)
 
 
+class Attachment(BaseModel):
+    """Structured metadata for a multi-modal attachment (Tier 3-2).
+
+    The canonical store holds only the reference + digest, never the
+    binary payload. ``kind`` is image|audio|video|file|transcript;
+    ``uri`` points at the original evidence (file path, URL, or object
+    key); ``media_type`` is the MIME type when known; ``digest`` is a
+    SHA-256 of the attachment bytes (deterministic, verifiable);
+    ``alt_text`` or ``transcript`` carries the text description that
+    feeds derivation/retrieval.
+    """
+
+    kind: str = Field(pattern=r"^(image|audio|video|file|transcript)$")
+    uri: str = Field(min_length=1)
+    media_type: str = ""
+    digest: str = ""
+    alt_text: str = ""
+    transcript: str = ""
+    size_bytes: int = 0
+
+    @field_validator("digest")
+    @classmethod
+    def _digest_is_sha256_or_empty(cls, value: str) -> str:
+        if value == "":
+            return value
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("digest must be a 64-char lowercase hex SHA-256 digest")
+        return value
+
+
 class Observation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
@@ -68,6 +98,14 @@ class Observation(BaseModel):
     raw_content: str = ""
     raw_hash: str = ""
     source: dict[str, Any] = Field(default_factory=dict)
+    # Multi-modal attachments (Tier 3-2): structured metadata for
+    # non-text evidence (image/audio/video/file). The attachment content
+    # itself is NOT stored in the canonical store — only its reference
+    # and a content digest, so the store stays text-first and
+    # deterministic. Derivation/retrieval operate on ``content`` (the
+    # text description or transcript), while ``attachments`` preserves
+    # the pointer to the original evidence.
+    attachments: list[Attachment] = Field(default_factory=list)
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
@@ -98,6 +136,11 @@ class Memory(BaseModel):
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
+    # Usage tracking (Tier 2 salience): number of retrieval-time hits
+    # recorded for this memory. Feeds the salience blend in curation and
+    # the optional retrieval decay. Deterministic; incremented via
+    # ``record_memory_usage``.
+    usage_count: int = 0
 
 
 class Entity(BaseModel):

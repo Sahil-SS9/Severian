@@ -9,6 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
+from severian.application.service import MemoryService
 from severian.domain.errors import ConflictError
 from severian.domain.models import Collection, Memory, Scope
 from severian.infrastructure.fts import FTS5Index
@@ -229,8 +230,11 @@ def test_ingestion_same_source_same_raw_evidence_dedupes(repo):
 def test_cloud_derivation_cannot_be_enabled_by_caller_policy(repo):
     # P0-2 repro: stored policy denies cloud; caller passing
     # ``cloud_allowed: True`` must NOT flip the decision.
-    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
+    # The policy-bearing collection must be provisioned BEFORE the ingest
+    # (DATA-05 auto-provisioning would otherwise create a default-policy
+    # collection and the explicit policy create would collide).
     repo.create_collection(Collection(id="c", tenant_id="t", name="Primary", policy={"cloud_allowed": False}))
+    observation = IngestionService(repo).ingest(scope(), "private", {}).observation
     cloud = FakeGateway(model_id="cloud/model", is_cloud=True)
 
     with pytest.raises(CloudPolicyError):
@@ -422,3 +426,168 @@ def test_source_revision_supersedes_derived_memories(repo):
     assert repo.list_memories(scope()) == []
     # Explicit history preserves the stale head.
     assert len(repo.list_memories_history(scope())) == 1
+
+
+class _FailingTargetedProjection:
+    """Projection wrapper whose targeted update methods always raise —
+    forcing the service's rebuild fallback path (DATA-03)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def remove_memory(self, memory_id: str) -> None:
+        raise RuntimeError("targeted remove_memory failed")
+
+    def index_memory(self, memory: Memory) -> None:
+        raise RuntimeError("targeted index_memory failed")
+
+
+def test_correction_converges_projection_via_rebuild_fallback(repo):
+    """DATA-03: if the targeted projection update fails during a
+    correction, the service must fall back to a full rebuild so the
+    correction is end-to-end durable — search surfaces the corrected
+    content, never the stale head."""
+    sc = scope()
+    # Build real projections.
+    fts = FTS5Index(Path("/tmp/severian-data03-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-data03-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    # Seed a derived memory and index it.
+    observation = IngestionService(repo).ingest(sc, "Ada founded a company", {}).observation
+    mem = repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    # Correct via the service with a failing targeted projection.
+    from severian.application.retrieval import ContextAssembler, RetrievalService
+    from severian.application.service import MemoryService
+
+    retrieval_svc = RetrievalService(repo, fts, vec)
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        retrieval_svc,
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+    service._projection = _FailingTargetedProjection(coordinator)  # type: ignore[assignment]  # force fallback
+    revision = service.correct_memory(
+        sc, mem.id, content="Ada Lovelace founded a company", model_id="local/model", prompt_version="v2"
+    )
+
+    # Canonical: the revision is the active head.
+    assert revision.content == "Ada Lovelace founded a company"
+    assert [m.id for m in repo.list_memories(sc)] == [revision.id]
+
+    # Projection converged via rebuild: search returns the corrected fact.
+    hits = retrieval_svc.search(sc, "Ada Lovelace founded", limit=10)
+    assert hits, "corrected memory must be searchable after rebuild fallback"
+    assert hits[0].memory.id == revision.id
+
+
+def test_erase_memory_tombstones_from_active_reads_and_search(repo):
+    """OPS-02: erase_memory removes a memory from active reads and search
+    (tombstone semantics) while history preserves the record for audit."""
+    sc = scope()
+    fts = FTS5Index(Path("/tmp/severian-ops02-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-ops02-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    observation = IngestionService(repo).ingest(sc, "Ada founded a company", {}).observation
+    mem = repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        RetrievalService(repo, fts, vec),
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+
+    erased = service.erase_memory(sc, mem.id, reason="user-requested")
+
+    # Active reads: the memory is gone.
+    assert repo.list_memories(sc) == []
+    # erased is the ORIGINAL marked superseded; its superseded_by_id
+    # points at the tombstone revision (a distinct record).
+    assert erased.id == mem.id
+    tombstone = repo.get_memory(sc, erased.superseded_by_id or "")
+    assert tombstone.id != mem.id
+    assert tombstone.content == "[user-requested]"
+    assert tombstone.revision_of_id == mem.id
+    # Search: the memory no longer surfaces.
+    hits = RetrievalService(repo, fts, vec).search(sc, "Ada founded", limit=10)
+    assert hits == []
+    # History: the record AND the tombstone are retained for audit.
+    history = repo.list_memories_history(sc)
+    assert {m.id for m in history} == {mem.id, tombstone.id}
+
+
+def test_erase_observation_propagates_to_derived_memories(repo):
+    """OPS-02: erase_observation tombstones the source AND erases every
+    active memory derived from it — search stops returning facts whose
+    only source was erased."""
+    sc = scope()
+    fts = FTS5Index(Path("/tmp/severian-ops02b-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-ops02b-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    result = IngestionService(repo).ingest(sc, "Grace invented COBOL", {})
+    observation = result.observation
+    repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Grace invented COBOL",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        RetrievalService(repo, fts, vec),
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+
+    service.erase_observation(sc, observation.id, reason="source-withdrawn")
+
+    # Observation tombstoned, derived memory erased, search empty.
+    assert repo.get_observation(sc, observation.id).superseded_by_id is not None
+    assert repo.list_memories(sc) == []
+    hits = RetrievalService(repo, fts, vec).search(sc, "Grace COBOL", limit=10)
+    assert hits == []
+    # History intact for audit.
+    assert len(repo.list_memories_history(sc)) == 2

@@ -56,6 +56,19 @@ The dev launcher also starts a derivation worker thread that drains
 pending derive jobs every 0.2s, so observations automatically promote
 to memories and become searchable.
 
+To expose on a network interface (non-loopback), you MUST provide an
+auth file with API keys:
+
+```bash
+uv run python scripts/serve_dev.py \
+  --host 0.0.0.0 --port 8000 \
+  --storage /srv/severian/data/severian.db \
+  --auth-file /srv/severian/data/auth.db
+```
+
+The launcher refuses to start on a non-loopback host without
+`--auth-file` (SEC-01 non-loopback guard).
+
 Health checks:
 
 ```bash
@@ -114,6 +127,12 @@ severian export \
 The snapshot is a checksummed `severian-v1` JSON document. It is
 backend-portable: export from SQLite, import into PostgreSQL and vice
 versa.
+
+> **Integrity, not authenticity:** the snapshot checksum verifies that
+> the file was not accidentally corrupted or tampered with after
+> creation. It does NOT prove who created it or that it came from a
+> trusted source. For trusted snapshots (authenticity + tamper-proofing)
+> encrypt/MAC the file at rest and keep the key outside the snapshot.
 
 Restore into a fresh store:
 
@@ -191,13 +210,26 @@ SEVERIAN_PG_DSN=postgresql://severian:<redacted>@127.0.0.1:5432/severian \
 
 Severian is designed **local-first**. The current posture:
 
-- **Loopback binding only.** The API is served on 127.0.0.1 by
-  `serve_dev.py`. Do not bind to 0.0.0.0 without an auth layer.
-- **No authentication on the HTTP API yet.** The threat model
-  (`docs/threat-model.md`) documents local auth as a Phase 1
-  requirement. "API keys hashed at rest, scoped and revocable" is an
-  aspirational claim, **not implemented**. Anyone with host access can
-  read the store.
+- **Loopback binding only by default.** The API is served on 127.0.0.1
+  by `serve_dev.py`. Binding to a non-loopback host requires
+  `--auth-file`; the launcher refuses to start otherwise (SEC-01 guard).
+- **API-key authentication (SEC-01, implemented).** When an auth file is
+  configured, the HTTP API is fail-closed: every data endpoint requires a
+  valid `Authorization: Bearer <key>` header. Keys are hashed at rest
+  (SHA-256), scoped to a principal (tenant/profile), and revocable.
+  Generate a key file with the auth store API or a small admin script.
+  Without an auth file (loopback/dev mode), the API is open as before.
+- **Shared-memory ACL policy (OPS-04).** The access-control boundary is
+  the (tenant, profile) pair — the SECURITY-SENSITIVE dimensions. A
+  principal's key binds tenant + profile; requests claiming a different
+  tenant or profile are rejected 403. Within a tenant/profile,
+  collection/agent/session dimensions are SHARED by design: agents and
+  sessions of the same tenant/profile can read and write each other's
+  memory (collaborative-scope model). There is no per-agent or
+  per-session isolation between principals of the same tenant. Before
+  public exposure, provision one tenant per untrusted party; do NOT put
+  multiple untrusted parties in one tenant and rely on agent/session
+  isolation — it does not exist.
 - **No rate limiting.** Acceptable for local-first; add before any
   network exposure.
 - **No CORS middleware** (deliberate): browser clients must proxy
@@ -206,9 +238,23 @@ Severian is designed **local-first**. The current posture:
   mandatory on every request; cross-scope reads return 404 / empty
   results and never leak existence. Blank scope dimensions are rejected
   at the schema and the storage layer.
-- **No destructive-operation confirmation.** Observations are
-  immutable; revision supersession is the correction path. There is no
-  delete endpoint in this release.
+- **Deletion semantics (OPS-02, implemented at the service layer).**
+  Observations and memories are immutable; there is NO hard-delete
+  endpoint in this release. Erasure is tombstone-based: the service
+  `erase_memory` / `erase_observation` mark records superseded by a
+  synthetic `[reason]` tombstone so they disappear from active reads and
+  search, while history retains the record + tombstone for audit. This
+  satisfies regulated "data stops being returned" deletion without
+  compromising the immutable audit trail. Hard delete / physical purge
+  is deliberately NOT offered.
+
+- **Dead-letter inspection/recovery (OPS-07, implemented).** Jobs that
+  exhaust their retry budget are marked `dead_letter`. Inspect them with
+  `severian dead-letter --database … --fts … --vectors …` (emits JSON
+  list) and recover one with `severian dead-letter --requeue <job-id>`
+  (resets to pending with a fresh attempt budget; the next `severian
+  work` pass retries it). This is the only supported recovery path for
+  exhausted jobs — do not edit the database directly.
 
 ## 6. systemd unit example (API + worker)
 

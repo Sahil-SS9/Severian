@@ -26,16 +26,25 @@ it composes the same application services the API uses.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
+from severian.application.dreaming import (
+    ConsolidationService,
+    ContradictionScanService,
+    CurationService,
+    RetentionPolicyService,
+)
 from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Job, Scope
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,19 +59,33 @@ class WorkerSummary:
 
 
 class DerivationWorker:
-    """Processes pending derive jobs and keeps projections in sync."""
+    """Processes pending derive/episode/dream jobs and keeps projections in sync.
+
+    The derivation service may be None for dream-only operation (a worker
+    that only processes dream/episode jobs). A derive job arriving when
+    derivation is None raises a clear RuntimeError instead of a bare
+    AttributeError on NoneType.
+    """
 
     def __init__(
         self,
         repository: CanonicalRepository,
-        derivation: DerivationService,
+        derivation: DerivationService | None,
         projection: ProjectionCoordinator,
         episodes: EpisodeService | None = None,
+        consolidation: ConsolidationService | None = None,
+        curation: CurationService | None = None,
+        retention: RetentionPolicyService | None = None,
+        contradictions: ContradictionScanService | None = None,
     ) -> None:
         self._repository = repository
         self._derivation = derivation
         self._projection = projection
         self._episodes = episodes if episodes is not None else EpisodeService(repository)
+        self._consolidation = consolidation if consolidation is not None else ConsolidationService(repository)
+        self._curation = curation if curation is not None else CurationService(repository)
+        self._retention = retention if retention is not None else RetentionPolicyService(repository)
+        self._contradictions = contradictions if contradictions is not None else ContradictionScanService(repository)
 
     def drain(
         self,
@@ -76,7 +99,16 @@ class DerivationWorker:
 
         ``max_jobs`` bounds the pass (useful for tests and throttled
         loops); ``None`` drains everything currently pending.
+
+        JOB-01: expired leases are reaped at the start of every pass so a
+        crashed worker's ``running`` jobs are re-queued (or dead-lettered
+        once attempts are exhausted) as part of normal runtime operation —
+        the reaper is wired in, not dead code.
         """
+        try:
+            self._repository.reap_expired_jobs()
+        except Exception:
+            logger.warning("reap_expired_jobs failed at drain start", exc_info=True)
         processed = 0
         failed = 0
         touched: dict[str, Scope] = {}
@@ -104,7 +136,7 @@ class DerivationWorker:
                 try:
                     self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=str(exc))
                 except Exception:
-                    pass
+                    logger.warning("failed to mark job %s as failed: %s", job.id, exc, exc_info=True)
                 failed += 1
         # Converge projections for every touched scope BEFORE any
         # completed job becomes durable.
@@ -112,11 +144,35 @@ class DerivationWorker:
             self._projection.rebuild(scope)
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
+        # OPS-01: the outbox projector. Every canonical write appended an
+        # outbox event; the projection rebuild above satisfies them for
+        # the touched scopes, so ack those events now. Pending events for
+        # untouched scopes stay pending (a later pass that touches them
+        # will ack). Ack is idempotent — a crash between rebuild and ack
+        # leaves the event pending and the next pass re-processes it.
+        try:
+            self._project_outbox(touched)
+        except Exception:
+            logger.warning("outbox projection failed at drain end", exc_info=True)
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
         )
+
+    def _project_outbox(self, touched: dict[str, Scope]) -> None:
+        """Ack pending outbox events whose scope was touched this pass.
+
+        The outbox is append-only and written on every canonical write;
+        the projection rebuild for a touched scope makes those writes
+        visible to retrieval, which satisfies the corresponding outbox
+        events. Acking only touched scopes keeps the log honest — events
+        for scopes we did not rebuild remain pending and unacked.
+        """
+        touched_set = set(touched.keys())
+        for event in self._repository.pending_outbox():
+            if event.scope.model_dump_json() in touched_set:
+                self._repository.ack_outbox(event.id)
 
     def _derive(
         self,
@@ -125,6 +181,11 @@ class DerivationWorker:
         policy: Mapping[str, Any] | None,
     ) -> None:
         if job.kind == "derive":
+            if self._derivation is None:
+                raise RuntimeError(
+                    "derive job requires a derivation service, but worker has "
+                    "derivation=None (dream-only mode); cannot process derive jobs"
+                )
             observation_id = str(job.payload.get("observation_id", ""))
             if not observation_id:
                 raise ValueError("derive job missing observation_id")
@@ -137,5 +198,22 @@ class DerivationWorker:
             return
         if job.kind == "episode":
             self._episodes.consolidate_session(job.scope, gateway=gateway, policy=dict(policy or {}))
+            return
+        if job.kind == "dream":
+            mode = str(job.payload.get("mode", "consolidate"))
+            if mode == "consolidate":
+                self._consolidation.consolidate(job.scope)
+            elif mode == "curate":
+                self._curation.curate(job.scope)
+            elif mode == "retention":
+                policy = dict(job.payload.get("policy", {}) or {})
+                self._retention.evaluate(job.scope, policy)
+            elif mode == "retention-archive":
+                policy = dict(job.payload.get("policy", {}) or {})
+                self._retention.apply_archive(job.scope, policy)
+            elif mode == "contradictions":
+                self._contradictions.scan(job.scope)
+            else:
+                raise ValueError(f"unsupported dream mode: {mode}")
             return
         raise ValueError(f"unsupported job kind: {job.kind}")

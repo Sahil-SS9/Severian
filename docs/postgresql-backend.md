@@ -42,6 +42,8 @@ docker run -d --name severian-pg \
   -p 127.0.0.1:5432:5432 \
   pgvector/pgvector:pg16
 ```
+> ⚠️ The credentials above are NON-PRODUCTION placeholder values for local
+> development only — replace them before any real deployment.
 
 DSN (SQLAlchemy 2.x + psycopg3; `postgresql://` is auto-normalised to
 `postgresql+psycopg://` by both classes):

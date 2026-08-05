@@ -29,6 +29,7 @@ from severian.api.schemas import (
 )
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
+from severian.auth.principal_resolver import PrincipalResolver
 from severian.domain.errors import ForbiddenError, NotFoundError
 from severian.domain.models import Scope
 
@@ -113,6 +114,7 @@ def create_app(
     service: MemoryService,
     gateway: GatewayFactory | DerivationGateway,
     principal: Scope | None = None,
+    principal_resolver: PrincipalResolver | None = None,
 ) -> FastAPI:
     """Build a FastAPI app bound to a ``MemoryService`` instance.
 
@@ -128,6 +130,13 @@ def create_app(
     scope becomes authorization, not a client-supplied selector. When
     unset (local/dev mode), the client must supply a fully-populated
     scope as before.
+
+    ``principal_resolver`` optionally enables per-request API-key
+    authentication (SEC-01). When set, each request must carry a
+    valid ``Authorization: Bearer <key>`` header; the resolved
+    principal overrides the static ``principal`` (if any). Fail-closed:
+    unauthenticated requests are rejected with 401. Health endpoints
+    (``/healthz``, ``/readyz``) are exempt.
     """
 
     def _get_gateway() -> DerivationGateway:
@@ -148,15 +157,30 @@ def create_app(
     def get_gateway() -> DerivationGateway:
         return _get_gateway()
 
-    def resolve_scope(scope_model: ScopeModel) -> Scope:
+    # SEC-01: when no principal_resolver is configured (dev/loopback mode),
+    # use a no-op dependency that returns None so FastAPI's parameter
+    # analysis treats ``payload`` as the body. When a resolver is
+    # configured, it is a callable that returns the authenticated Scope
+    # (or raises 401).
+    def _no_auth() -> Scope | None:
+        return None
+
+    auth_dependency = Depends(principal_resolver) if principal_resolver is not None else Depends(_no_auth)
+
+    def resolve_scope(scope_model: ScopeModel, request_principal: Scope | None = None) -> Scope:
         """Resolve the effective scope for a request.
 
         With a bound principal, tenant/profile are derived server-side
         and any disagreement is a 403. Without one, the client-supplied
         scope is used as-is (local/dev mode).
+
+        ``request_principal`` (from the auth resolver) takes precedence
+        over the static ``principal`` — it is the per-request authenticated
+        identity.
         """
-        if principal is not None:
-            return _bind_principal(scope_model, principal)
+        effective = request_principal if request_principal is not None else principal
+        if effective is not None:
+            return _bind_principal(scope_model, effective)
         return _scope_from_model(scope_model)
 
     @app.get("/healthz", response_model=HealthResponse)
@@ -190,10 +214,11 @@ def create_app(
     def ingest(
         payload: IngestRequest,
         svc: MemoryService = Depends(get_service),
+        request_principal: Scope | None = auth_dependency,
     ) -> IngestResponse:
         try:
             view = svc.ingest_observation(
-                resolve_scope(payload.scope),
+                resolve_scope(payload.scope, request_principal),
                 content=payload.content,
                 source=payload.source,
             )
@@ -205,7 +230,7 @@ def create_app(
         except ValueError as exc:
             # Pydantic surface for client errors — never leak internals.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
         return IngestResponse(
@@ -236,6 +261,7 @@ def create_app(
         agent_id: str = "",
         session_id: str = "",
         svc: MemoryService = Depends(get_service),
+        request_principal: Scope | None = auth_dependency,
     ) -> ObservationResponse:
         # P1-4: ScopeModel construction lives INSIDE the try so pydantic
         # validation failures surface as 422, not 500. Missing/invalid
@@ -248,7 +274,7 @@ def create_app(
                 agent_id=agent_id,
                 session_id=session_id,
             )
-            scope_obj = resolve_scope(scope)
+            scope_obj = resolve_scope(scope, request_principal)
         except ForbiddenError as exc:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -256,7 +282,7 @@ def create_app(
             ) from exc
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
         try:
@@ -283,6 +309,7 @@ def create_app(
         agent_id: str = "",
         session_id: str = "",
         svc: MemoryService = Depends(get_service),
+        request_principal: Scope | None = auth_dependency,
     ) -> MemoryResponse:
         # P1-4: memory-detail endpoint. Search returns memory ids (both
         # observation-derived and derived memories); the dashboard needs
@@ -296,7 +323,7 @@ def create_app(
                 agent_id=agent_id,
                 session_id=session_id,
             )
-            scope_obj = resolve_scope(scope)
+            scope_obj = resolve_scope(scope, request_principal)
         except ForbiddenError as exc:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -304,7 +331,7 @@ def create_app(
             ) from exc
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
         try:
@@ -331,9 +358,10 @@ def create_app(
         payload: SearchRequest,
         gw: DerivationGateway = Depends(get_gateway),
         svc: MemoryService = Depends(get_service),
+        request_principal: Scope | None = auth_dependency,
     ) -> SearchResponse:
         try:
-            scope = resolve_scope(payload.scope)
+            scope = resolve_scope(payload.scope, request_principal)
         except ForbiddenError as exc:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -341,7 +369,7 @@ def create_app(
             ) from exc
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
         try:
@@ -354,7 +382,7 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
         return SearchResponse(hits=[_hit_to_response(hit) for hit in hits])

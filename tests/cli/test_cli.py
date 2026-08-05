@@ -9,6 +9,7 @@ dry-run of the search subcommand.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -257,3 +258,121 @@ def test_export_refuses_symlink_destination(data_root: Path):
     # No stray temp files left behind.
     leftovers = [p.name for p in data_root.iterdir() if p.name.endswith(".tmp")]
     assert leftovers == []
+
+
+def test_export_import_records_admin_audit(data_root: Path):
+    """SEC-02: export and import must be recorded in the audit trail
+    under the reserved system scope."""
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    snapshot = data_root / "snapshot.json"
+
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Ada founded a company", "--source", "{}"]
+    ).exit_code == 0
+
+    export_result = runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(snapshot)]
+    )
+    assert export_result.exit_code == 0, export_result.output
+    assert snapshot.exists()
+
+    import_result = runner.invoke(
+        cli, ["import", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--input", str(snapshot)]
+    )
+    assert import_result.exit_code == 0, import_result.output
+
+    # Inspect the audit trail under the system scope directly.
+    from severian.domain.models import Scope
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    actions = [a.action for a in repo.list_audit(
+        Scope(tenant_id="_system", profile_id="_", collection_id="_", agent_id="_", session_id="_")
+    )]
+    repo.close()
+    assert "store.export" in actions
+    assert "store.import" in actions
+
+
+def test_import_rebuild_failure_reports_stale_projections(data_root: Path):
+    """DATA-02: if projection rebuild fails after a canonical import, the
+    canonical records are committed (atomic restore) but the CLI must
+    explicitly report the stale projections so the operator can re-run
+    with --rebuild."""
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    snapshot = data_root / "snapshot.json"
+
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Ada founded a company", "--source", "{}"]
+    ).exit_code == 0
+    # Derive the memory (a memory record is required for rebuild scopes).
+    assert runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    ).exit_code == 0
+    assert runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(snapshot)]
+    ).exit_code == 0
+
+    # Poison the VECTOR path (valid DB but read-only) so rebuild's write
+    # fails at rebuild time, not at bundle construction.
+    vec_path = data_root / "vectors.db"
+    os.chmod(vec_path, 0o400)
+
+    # Import into a FRESH canonical store so records are actually new and
+    # the rebuild runs (importing into the same store is idempotent-skip).
+    fresh_db = data_root / "fresh.db"
+    result = runner.invoke(
+        cli, ["import", "--database", str(fresh_db), "--fts", str(fts), "--vectors", str(vec_path),
+              "--input", str(snapshot)]
+    )
+    os.chmod(vec_path, 0o600)
+    # Import itself succeeds (canonical committed atomically).
+    assert result.exit_code == 0, result.output
+    # The stale-projection warning must be visible.
+    combined = result.output + (result.stderr or "")
+    assert "projections are stale" in combined or "WARNING" in combined
+
+
+def test_work_command_derives_graph_entities_via_canonical_composition(data_root: Path):
+    """ARCH-05: the CLI work command uses the canonical composition root's
+    DerivationService (WITH graph extraction). Previously it rebuilt a
+    bare DerivationService without the extractor, so CLI-derived memories
+    diverged from service-derived ones — no entities were ever written."""
+    runner = CliRunner()
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Alice works at Acme Corp", "--source", "{}"]
+    ).exit_code == 0
+    work_result = runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    )
+    assert work_result.exit_code == 0, work_result.output
+
+    # The canonical derivation with graph extraction must have written
+    # entities (the pre-ARCH-05 divergent path wrote none).
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    from severian.domain.models import Scope
+
+    scope = Scope(tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1")
+    entities = repo.list_entities(scope)
+    assert entities, "CLI work must derive graph entities via canonical composition"
+    repo.close()
