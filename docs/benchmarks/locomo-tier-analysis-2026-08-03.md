@@ -1,7 +1,7 @@
 # LOCOMO-tier conversation recall — B-1 evidence analysis (2026-08-03, updated 2026-08-04)
 
 **Manifest:** `docs/benchmarks/manifest-locomo-tier-v1.json` (validated)
-**Run:** `docs/benchmarks/evidence/2026-08-04/` (locomo-result.json, locomo-traces.json, locomo-fingerprint.json) — correction-lane producing SHA c8c4809
+**Run:** `docs/benchmarks/evidence/2026-08-04/` (locomo-result.json, locomo-traces.json, locomo-fingerprint.json) — correction-lane producing SHA 9749a75
 **Honest finding:** Severian does NOT yet pass the release gate on the harder
 conversation corpus, but the harness fixes below lifted recall from 0.769 → 0.923,
 temporal accuracy from 0.000 → 1.000, and (after C-08) made every metric
@@ -11,7 +11,7 @@ no fabricated parity.
 ## Results (gate: recall>=0.95, cit_prec>=1.0, stale==0, unsup==0)
 
 **Correction-lane re-run 2026-08-04 (fix/auditor-corrections-2026-08-04,
-producing SHA c8c4809; deterministic — two clean runs byte-identical):**
+producing SHA 9749a75; deterministic — two clean runs byte-identical):**
 
 | Provider | recall@10 | MRR | nDCG@10 | cit_prec | stale | unsup | temporal |
 |---|---|---|---|---|---|---|---|

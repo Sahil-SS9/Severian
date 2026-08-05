@@ -2,7 +2,7 @@
   "command_args": {
     "chroma_venv": "/tmp/bench-compare-venv",
     "docs": "200",
-    "out": "/tmp/final-ev-batch",
+    "out": "/tmp/final2-batch",
     "reps": "3"
   },
   "corpus_sha256": "e3d8fddb08501691645efb0a7cdc452b9e502e1297cfee7d3d3430ab994cecb4",
@@ -12,7 +12,7 @@
     "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
     "python": "3.12.3"
   },
-  "git_sha": "c8c480903af7155d775364379e5ecde6c1f32566",
+  "git_sha": "9749a750a470d68ce542bb7978554e322d25dc6a",
   "instrument": "A-4 chroma batch-ingest comparison (C-02/C-03 corrected)",
   "notes": [
     "chroma_batch_speedup_vs_perdoc_v2 = batch docs_per_sec / per_doc docs_per_sec (>=1 means batch faster)",
@@ -22,44 +22,44 @@
   "reps": 3,
   "results": {
     "chroma_batch": {
-      "docs_per_sec_median": 35.9,
-      "docs_per_sec_spread": 1.2,
-      "median_seconds": 5.564,
+      "docs_per_sec_median": 36.5,
+      "docs_per_sec_spread": 2.1,
+      "median_seconds": 5.4736,
       "repetitions": 3,
       "sample_seconds": [
-        5.61,
-        5.4353,
-        5.564
+        5.5474,
+        5.4736,
+        5.2558
       ],
-      "spread_seconds": 0.1747
+      "spread_seconds": 0.2916
     },
-    "chroma_batch_speedup_vs_perdoc_v2": 8.35,
+    "chroma_batch_speedup_vs_perdoc_v2": 8.69,
     "chroma_per_doc": {
-      "docs_per_sec_median": 4.3,
+      "docs_per_sec_median": 4.2,
       "docs_per_sec_spread": 0.0,
-      "median_seconds": 46.8187,
+      "median_seconds": 47.3067,
       "repetitions": 3,
       "sample_seconds": [
-        46.8187,
-        46.6606,
-        47.1307
+        47.4089,
+        47.3067,
+        47.0896
       ],
-      "spread_seconds": 0.4701
+      "spread_seconds": 0.3193
     },
     "severian_sqlite_per_doc": {
-      "docs_per_sec_median": 238.1,
-      "docs_per_sec_spread": 8.7,
-      "median_seconds": 0.84,
+      "docs_per_sec_median": 237.0,
+      "docs_per_sec_spread": 15.2,
+      "median_seconds": 0.844,
       "repetitions": 3,
       "sample_seconds": [
-        0.8588,
-        0.84,
-        0.8293
+        0.844,
+        0.889,
+        0.8381
       ],
-      "spread_seconds": 0.0295
+      "spread_seconds": 0.0509
     }
   },
-  "run_started_at": "2026-08-05T00:36:18.421039+00:00",
+  "run_started_at": "2026-08-05T00:54:29.471917+00:00",
   "scope": "t1/p1/c1/a1/s1",
   "seed": 20260803
 }

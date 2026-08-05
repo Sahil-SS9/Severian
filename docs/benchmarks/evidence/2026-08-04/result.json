@@ -14,7 +14,7 @@
       "citation_precision": 0.625,
       "cost_per_query_usd": 0.0,
       "cross_scope_leakage": 0.0,
-      "latency_p95_ms": 0.041451072320342064,
+      "latency_p95_ms": 0.042689964175224304,
       "mrr": 0.7761904761904762,
       "ndcg_at_10": 0.8150748396031804,
       "provider_id": "baseline-lexical",
@@ -34,7 +34,7 @@
             "d26"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.041451072320342064,
+          "elapsed_ms": 0.042689964175224304,
           "query_id": "q1",
           "returned_ids": [
             "d01",
@@ -55,7 +55,7 @@
             "d02"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.021490035578608513,
+          "elapsed_ms": 0.021860934793949127,
           "query_id": "q2",
           "returned_ids": [
             "d02"
@@ -76,7 +76,7 @@
             "d08"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.032349955290555954,
+          "elapsed_ms": 0.03366998862475157,
           "query_id": "q3",
           "returned_ids": [
             "d03",
@@ -106,7 +106,7 @@
             "d06"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.034381053410470486,
+          "elapsed_ms": 0.03554997965693474,
           "query_id": "q4",
           "returned_ids": [
             "d04",
@@ -136,7 +136,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.03335997462272644,
+          "elapsed_ms": 0.03475090488791466,
           "query_id": "q5",
           "returned_ids": [
             "d11",
@@ -166,7 +166,7 @@
             "d10"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.03177998587489128,
+          "elapsed_ms": 0.03296008799225092,
           "query_id": "q6",
           "returned_ids": [
             "d14",
@@ -191,7 +191,7 @@
             "d20"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.028889975510537624,
+          "elapsed_ms": 0.030199997127056122,
           "query_id": "q7",
           "returned_ids": [
             "d05",
@@ -216,7 +216,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.03313098568469286,
+          "elapsed_ms": 0.033600954338908195,
           "query_id": "q8",
           "returned_ids": [
             "d03",
@@ -242,7 +242,7 @@
             "d26"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.031010014936327934,
+          "elapsed_ms": 0.029480084776878357,
           "query_id": "q9",
           "returned_ids": [
             "d10",
@@ -268,7 +268,7 @@
             "d01"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.03621005453169346,
+          "elapsed_ms": 0.037470017559826374,
           "query_id": "q10",
           "returned_ids": [
             "d08",
@@ -298,7 +298,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.03297103103250265,
+          "elapsed_ms": 0.03831100184470415,
           "query_id": "q11",
           "returned_ids": [
             "d26",
@@ -328,7 +328,7 @@
             "d06"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.033130054362118244,
+          "elapsed_ms": 0.03520003519952297,
           "query_id": "q12",
           "returned_ids": [
             "d03",
@@ -358,7 +358,7 @@
             "d10"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.22602092940360308,
+          "elapsed_ms": 0.2321519423276186,
           "query_id": "q13",
           "returned_ids": [
             "d27",
@@ -380,7 +380,7 @@
             "d21"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.014959950931370258,
+          "elapsed_ms": 0.01704995520412922,
           "query_id": "q14",
           "returned_ids": [
             "d22",
@@ -396,7 +396,7 @@
             "d23"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.011969939805567265,
+          "elapsed_ms": 0.012650038115680218,
           "query_id": "q15",
           "returned_ids": [
             "d25",
@@ -413,7 +413,7 @@
             "d23"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 0.010959920473396778,
+          "elapsed_ms": 0.011390075087547302,
           "query_id": "q16",
           "returned_ids": [
             "d24",
@@ -432,7 +432,7 @@
       "citation_precision": 0.8125,
       "cost_per_query_usd": 0.0,
       "cross_scope_leakage": 0.0,
-      "latency_p95_ms": 241.5969530120492,
+      "latency_p95_ms": 230.5948849534616,
       "mrr": 0.9333333333333333,
       "ndcg_at_10": 0.9507906338095277,
       "provider_id": "chroma",
@@ -452,7 +452,7 @@
             "d15"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 200.79464500304312,
+          "elapsed_ms": 210.45563591178507,
           "query_id": "q1",
           "returned_ids": [
             "d01",
@@ -482,7 +482,7 @@
             "d17"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 203.41568300500512,
+          "elapsed_ms": 229.09394395537674,
           "query_id": "q2",
           "returned_ids": [
             "d02",
@@ -512,7 +512,7 @@
             "d27"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 252.60967703070492,
+          "elapsed_ms": 198.4709280077368,
           "query_id": "q3",
           "returned_ids": [
             "d02",
@@ -542,7 +542,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 203.03624996449798,
+          "elapsed_ms": 194.8168099625036,
           "query_id": "q4",
           "returned_ids": [
             "d04",
@@ -572,7 +572,7 @@
             "d15"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 202.59241701569408,
+          "elapsed_ms": 209.23163695260882,
           "query_id": "q5",
           "returned_ids": [
             "d11",
@@ -602,7 +602,7 @@
             "d12"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 201.28938800189644,
+          "elapsed_ms": 230.5948849534616,
           "query_id": "q6",
           "returned_ids": [
             "d14",
@@ -632,7 +632,7 @@
             "d26"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 208.53434794116765,
+          "elapsed_ms": 219.692514045164,
           "query_id": "q7",
           "returned_ids": [
             "d05",
@@ -662,7 +662,7 @@
             "d08"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 241.5969530120492,
+          "elapsed_ms": 195.97581902053207,
           "query_id": "q8",
           "returned_ids": [
             "d17",
@@ -692,7 +692,7 @@
             "d15"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 195.31518802978098,
+          "elapsed_ms": 196.78689492866397,
           "query_id": "q9",
           "returned_ids": [
             "d10",
@@ -722,7 +722,7 @@
             "d20"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 188.94019501749426,
+          "elapsed_ms": 191.63244706578553,
           "query_id": "q10",
           "returned_ids": [
             "d08",
@@ -752,7 +752,7 @@
             "d06"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 195.31090802047402,
+          "elapsed_ms": 228.9021119941026,
           "query_id": "q11",
           "returned_ids": [
             "d26",
@@ -782,7 +782,7 @@
             "d13"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 202.52662699203938,
+          "elapsed_ms": 214.03388201724738,
           "query_id": "q12",
           "returned_ids": [
             "d02",
@@ -812,7 +812,7 @@
             "d08"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 240.2442740276456,
+          "elapsed_ms": 198.09409498702735,
           "query_id": "q13",
           "returned_ids": [
             "d27",
@@ -837,7 +837,7 @@
             "d25"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 202.0920841023326,
+          "elapsed_ms": 206.66261797305197,
           "query_id": "q14",
           "returned_ids": [
             "d22",
@@ -857,7 +857,7 @@
             "d22"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 197.74589396547526,
+          "elapsed_ms": 205.0243060803041,
           "query_id": "q15",
           "returned_ids": [
             "d25",
@@ -877,7 +877,7 @@
             "d22"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 197.54503294825554,
+          "elapsed_ms": 246.5126229217276,
           "query_id": "q16",
           "returned_ids": [
             "d25",
@@ -898,7 +898,7 @@
       "citation_precision": 0.9375,
       "cost_per_query_usd": 0.0,
       "cross_scope_leakage": 0.0,
-      "latency_p95_ms": 140.77379589434713,
+      "latency_p95_ms": 158.6510930210352,
       "mrr": 0.9666666666666667,
       "ndcg_at_10": 0.9753953169047639,
       "provider_id": "severian-postgres",
@@ -909,7 +909,7 @@
             "d01"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 336.85370604507625,
+          "elapsed_ms": 348.07570301927626,
           "query_id": "q1",
           "returned_ids": [
             "d01"
@@ -923,7 +923,7 @@
             "d12"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 105.75603798497468,
+          "elapsed_ms": 133.28673597425222,
           "query_id": "q2",
           "returned_ids": [
             "d02",
@@ -937,7 +937,7 @@
             "d02"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 107.21611802000552,
+          "elapsed_ms": 97.87841304205358,
           "query_id": "q3",
           "returned_ids": [
             "d02"
@@ -957,7 +957,7 @@
             "d02"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 102.56708599627018,
+          "elapsed_ms": 100.01788998488337,
           "query_id": "q4",
           "returned_ids": [
             "d04",
@@ -979,7 +979,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 140.77379589434713,
+          "elapsed_ms": 103.90898794867098,
           "query_id": "q5",
           "returned_ids": [
             "d11",
@@ -994,7 +994,7 @@
             "d19"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 114.5837870426476,
+          "elapsed_ms": 101.85736301355064,
           "query_id": "q6",
           "returned_ids": [
             "d15",
@@ -1008,7 +1008,7 @@
             "d05"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 102.17242292128503,
+          "elapsed_ms": 101.62517102435231,
           "query_id": "q7",
           "returned_ids": [
             "d16",
@@ -1022,7 +1022,7 @@
             "d09"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 100.5381919676438,
+          "elapsed_ms": 102.43847698438913,
           "query_id": "q8",
           "returned_ids": [
             "d17",
@@ -1036,7 +1036,7 @@
             "d09"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 105.39451509248465,
+          "elapsed_ms": 113.61425998620689,
           "query_id": "q9",
           "returned_ids": [
             "d10",
@@ -1051,7 +1051,7 @@
             "d13"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 102.27569402195513,
+          "elapsed_ms": 103.10755192767829,
           "query_id": "q10",
           "returned_ids": [
             "d08",
@@ -1063,17 +1063,17 @@
         {
           "citations": [
             "d26",
-            "d13",
             "d04",
+            "d13",
             "d19"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 102.79711789917201,
+          "elapsed_ms": 158.6510930210352,
           "query_id": "q11",
           "returned_ids": [
             "d26",
-            "d13",
             "d04",
+            "d13",
             "d19"
           ],
           "scope": "t1/p1/c1/a1/s1"
@@ -1081,7 +1081,7 @@
         {
           "citations": [],
           "cost_usd": 0.0,
-          "elapsed_ms": 109.04342995490879,
+          "elapsed_ms": 106.41565697733313,
           "query_id": "q12",
           "returned_ids": [],
           "scope": "t1/p1/c1/a1/s1"
@@ -1092,7 +1092,7 @@
             "d15"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 101.58443893305957,
+          "elapsed_ms": 105.0636360887438,
           "query_id": "q13",
           "returned_ids": [
             "d27",
@@ -1106,7 +1106,7 @@
             "d21"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 98.59700908418745,
+          "elapsed_ms": 79.44592600688338,
           "query_id": "q14",
           "returned_ids": [
             "d22",
@@ -1119,7 +1119,7 @@
             "d25"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 48.81393094547093,
+          "elapsed_ms": 26.457465020939708,
           "query_id": "q15",
           "returned_ids": [
             "d25"
@@ -1131,7 +1131,7 @@
             "d25"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 37.304123979993165,
+          "elapsed_ms": 27.842435985803604,
           "query_id": "q16",
           "returned_ids": [
             "d25"
@@ -1148,7 +1148,7 @@
       "citation_precision": 0.9375,
       "cost_per_query_usd": 0.0,
       "cross_scope_leakage": 0.0,
-      "latency_p95_ms": 73.27474700286984,
+      "latency_p95_ms": 58.2179999910295,
       "mrr": 0.9666666666666667,
       "ndcg_at_10": 0.9753953169047639,
       "provider_id": "severian-sqlite",
@@ -1159,7 +1159,7 @@
             "d01"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 244.30841801222414,
+          "elapsed_ms": 263.83221009746194,
           "query_id": "q1",
           "returned_ids": [
             "d01"
@@ -1173,7 +1173,7 @@
             "d12"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 26.261088089086115,
+          "elapsed_ms": 32.89934294298291,
           "query_id": "q2",
           "returned_ids": [
             "d02",
@@ -1187,7 +1187,7 @@
             "d02"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 28.583502979017794,
+          "elapsed_ms": 32.28000900708139,
           "query_id": "q3",
           "returned_ids": [
             "d02"
@@ -1207,7 +1207,7 @@
             "d02"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.39531605038792,
+          "elapsed_ms": 28.351490036584437,
           "query_id": "q4",
           "returned_ids": [
             "d04",
@@ -1229,7 +1229,7 @@
             "d07"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.144143939949572,
+          "elapsed_ms": 27.956706006079912,
           "query_id": "q5",
           "returned_ids": [
             "d11",
@@ -1244,7 +1244,7 @@
             "d19"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.160994010046124,
+          "elapsed_ms": 26.877169031649828,
           "query_id": "q6",
           "returned_ids": [
             "d15",
@@ -1258,7 +1258,7 @@
             "d05"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.436404954642057,
+          "elapsed_ms": 27.121621067635715,
           "query_id": "q7",
           "returned_ids": [
             "d16",
@@ -1272,7 +1272,7 @@
             "d09"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 28.638285002671182,
+          "elapsed_ms": 28.2197380438447,
           "query_id": "q8",
           "returned_ids": [
             "d17",
@@ -1286,7 +1286,7 @@
             "d09"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 26.462140027433634,
+          "elapsed_ms": 27.3177019553259,
           "query_id": "q9",
           "returned_ids": [
             "d10",
@@ -1301,7 +1301,7 @@
             "d13"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.08476409316063,
+          "elapsed_ms": 27.006078977137804,
           "query_id": "q10",
           "returned_ids": [
             "d08",
@@ -1318,7 +1318,7 @@
             "d19"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 27.12785406038165,
+          "elapsed_ms": 27.22017199266702,
           "query_id": "q11",
           "returned_ids": [
             "d26",
@@ -1331,7 +1331,7 @@
         {
           "citations": [],
           "cost_usd": 0.0,
-          "elapsed_ms": 25.901406072080135,
+          "elapsed_ms": 27.340381988324225,
           "query_id": "q12",
           "returned_ids": [],
           "scope": "t1/p1/c1/a1/s1"
@@ -1342,7 +1342,7 @@
             "d15"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 33.278335933573544,
+          "elapsed_ms": 27.60619402397424,
           "query_id": "q13",
           "returned_ids": [
             "d27",
@@ -1356,7 +1356,7 @@
             "d21"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 73.27474700286984,
+          "elapsed_ms": 58.2179999910295,
           "query_id": "q14",
           "returned_ids": [
             "d22",
@@ -1369,7 +1369,7 @@
             "d25"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 8.218785980716348,
+          "elapsed_ms": 7.235583965666592,
           "query_id": "q15",
           "returned_ids": [
             "d25"
@@ -1381,7 +1381,7 @@
             "d25"
           ],
           "cost_usd": 0.0,
-          "elapsed_ms": 7.083968026563525,
+          "elapsed_ms": 6.696170079521835,
           "query_id": "q16",
           "returned_ids": [
             "d25"

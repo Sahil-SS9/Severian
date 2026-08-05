@@ -1,7 +1,7 @@
 # SEVERIAN — MASTER HANDOFF PACKAGE (2026-08-03)
 
 > Author: KENSEI
-> Status: **CORRECTION LANE COMPLETE — AWAITING INDEPENDENT REVIEW.** All register items A–G resolved or honestly blocked; auditor corrections C-01..C-10 implemented on branch `fix/auditor-corrections-2026-08-04` (HEAD `c8c4809`): 271 passed / 36 skipped, mypy --strict clean (46 files), ruff clean, `git diff --check` clean. Do not merge without review; the reviewer owns the READY verdict.
+> Status: **CORRECTION LANE COMPLETE — AWAITING INDEPENDENT REVIEW.** All register items A–G resolved or honestly blocked; auditor corrections C-01..C-10 implemented on branch `fix/auditor-corrections-2026-08-04` (HEAD `9749a75`): 271 passed / 36 skipped, mypy --strict clean (46 files), ruff clean, `git diff --check` clean. Do not merge without review; the reviewer owns the READY verdict.
 > Read order: this document first, end to end. Then the referenced files in §7.
 > Purpose: a third-party agent must be able to continue seamlessly from the
 > current project state with zero institutional memory.
@@ -36,12 +36,12 @@ external supermemory.ai competitor.
 
 | Repo | Branch | HEAD | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane) | `c8c4809` | CLEAN — auditor corrections C-01..C-10 implemented; awaiting independent review before merge |
+| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane) | `9749a75` | CLEAN — auditor corrections C-01..C-10 implemented; awaiting independent review before merge |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | CLEAN |
 
 - `main` on Severian is the canonical production branch — audit branch merged
   `--no-ff` (G-1, commit `6f32354`); all A/B/C/E/G work landed on main.
-  The correction lane (`fix/auditor-corrections-2026-08-04`, HEAD `c8c4809`)
+  The correction lane (`fix/auditor-corrections-2026-08-04`, HEAD `9749a75`)
   branches from `b628a97` (post-handover-prompt) and must be reviewed before
   merge back to main.
 - Release tag `v0.1.0` exists. Wheel + sdist in `dist/`
@@ -147,7 +147,7 @@ yet scheduled).
 
 | ID | Issue | Notes |
 |---|---|---|
-| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.885 (deterministic after C-08). Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-04/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3, updated c8c4809). |
+| B-1 | No measured conversation-recall number (LOCOMO/EvoArena tier never run) | **DONE (2026-08-03):** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes) + full harness run. Measured after harness fixes: recall 0.923, temporal 1.000, stale 0.000, MRR 0.885 (deterministic after C-08). Honest gate FAIL (recall < 0.95, cit_prec, unsup) with failures scoped to q6 semantic gap (A-1) + q9/q11 corpus artifacts. Evidence: `evidence/2026-08-04/`, analysis: `locomo-tier-analysis-2026-08-03.md` (2173c63, 783dcd3, updated 9749a75). |
 | B-2 | No episodic summarization path | **DONE (2026-08-03):** EpisodeService consolidates session observations into Memory(kind="episode") with deterministic budgeted summary + optional gateway summarize with rule-based fallback; worker 'episode' job kind; 6 tests (f02e268). |
 | B-3 | No claim may be made about conversation recall until B-1/B-2 exist | Per honest-numbers policy. **Now satisfied:** B-1 measured (0.923 hash / 0.808–0.885 granite), B-2 implemented. Claims still bounded by honest-numbers taxonomy. |
 
@@ -244,7 +244,7 @@ Run in order; each must pass before proceeding:
 cd /home/kensei/repos/Severian
 git status --short          # expect: clean
 git branch --show-current   # expect: fix/auditor-corrections-2026-08-04 (correction lane)
-git rev-parse HEAD          # expect: c8c4809 (descendant of baseline dfc418f)
+git rev-parse HEAD          # expect: 9749a75 (descendant of baseline dfc418f)
 
 uv run pytest -q            # expect: 271 passed, 36 skipped (3 warnings)
 uv run mypy --strict src/severian   # expect: Success, 46 files
@@ -330,7 +330,7 @@ All register items are resolved or honestly blocked:
 | Correction C-01..C-10 (auditor lane) | DONE | branch fix/auditor-corrections-2026-08-04 — Chroma isolation (incl. safety hardening), batch speedup, reproducibility, ranking determinism, doc reconciliation |
 
 **Correction-lane gate (branch fix/auditor-corrections-2026-08-04, HEAD
-c8c4809):** 271 passed / 36 skipped, mypy --strict clean (46 files), ruff
+9749a75):** 271 passed / 36 skipped, mypy --strict clean (46 files), ruff
 clean, both manifests validate, `git diff --check` clean.
 
 **Remaining honest limitations (not debt) — the six required items:**

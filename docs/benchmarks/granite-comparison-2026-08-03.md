@@ -2,7 +2,7 @@
 
 **Manifest:** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes)
 **Run:** `--embedding granite` → `evidence/2026-08-03-locomo-granite/` (historical full-lane, NOT re-run per C-04)
-**Baseline:** hash embeddings → `evidence/2026-08-04/` (current deterministic run, producing SHA c8c4809)
+**Baseline:** hash embeddings → `evidence/2026-08-04/` (current deterministic run, producing SHA 9749a75)
 
 ## Result: Granite does NOT beat hash on this synthetic corpus
 
@@ -15,7 +15,7 @@
 | chroma (semantic) | 0.962 | 0.833 | 0.531 | 0.144 | 0.188 | 1.000 |
 | baseline-lexical | 0.846 | 0.756 | 0.469 | 0.098 | 0.188 | 1.000 |
 
-Hash rows are the CURRENT deterministic run (c8c4809); Granite rows are the
+Hash rows are the CURRENT deterministic run (9749a75); Granite rows are the
 HISTORICAL full-lane run (75b61fc-era) — the full Granite lane was not re-run
 in the correction lane (C-04). Directional finding unchanged: Granite recall
 0.808/0.885 < hash 0.923.
@@ -37,7 +37,7 @@ in the correction lane (C-04). Directional finding unchanged: Granite recall
      q6 returned `[]` for both Granite lanes — the full-lane negative result
      (Granite recall 0.808/0.885 vs hash 0.923) is unchanged and internally
      consistent.
-   - Current bounded spot-check (producing SHA c8c4809): Granite returned
+   - Current bounded spot-check (producing SHA 9749a75): Granite returned
      `[c27, c12, c24]` for q6, c27 at rank 1. This is a DIFFERENT evidence
      statement from the full-lane trace. The spot-check shows the semantic
      gap IS closable; it does not change the full-lane negative result.

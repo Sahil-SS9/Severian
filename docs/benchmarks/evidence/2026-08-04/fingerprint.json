@@ -31,7 +31,7 @@
   },
   "commit": {
     "branch": "fix/auditor-corrections-2026-08-04",
-    "sha": "c8c480903af7155d775364379e5ecde6c1f32566"
+    "sha": "9749a750a470d68ce542bb7978554e322d25dc6a"
   },
   "environment": {
     "chroma_venv": "/tmp/bench-compare-venv",
@@ -44,7 +44,7 @@
     "path": "/home/kensei/repos/Severian/docs/benchmarks/manifest-v1.json",
     "sha256": "1790c1a1ac32a15d9469fa6202e7d479aa5554c66e872c02ec5074967ed2a08a"
   },
-  "run_started_at": "2026-08-05T00:33:04.847896+00:00",
+  "run_started_at": "2026-08-05T00:51:14.194263+00:00",
   "vendor_reported": [
     {
       "access_date": "2026-08-05",

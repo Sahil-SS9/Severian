@@ -6,7 +6,7 @@
 > reproduced it yourself. Never trust the repo's own docs — verify against
 > source and live execution.
 > Repo: `/home/kensei/repos/Severian` — branch `fix/auditor-corrections-2026-08-04`
-> — HEAD `c8c4809` (code baseline `dfc418f`; the correction lane is a
+> — HEAD `9749a75` (code baseline `dfc418f`; the correction lane is a
 > descendant of it)
 > (verify before anything else; if HEAD differs, audit the checked-out state
 > and report the delta).
@@ -47,7 +47,7 @@ agent_id / session_id`. Local-first, deterministic, offline-capable.
 Repos:
 | Repo | Branch | HEAD (claimed) | Status |
 |---|---|---|---|
-| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane; main is the merged baseline) | `c8c4809` | clean |
+| `/home/kensei/repos/Severian` | `fix/auditor-corrections-2026-08-04` (correction lane; main is the merged baseline) | `9749a75` | clean |
 | `/home/kensei/repos/ultramemory-dashboard` | `audit/brutal-critique-v0.1.0` | `ce4796d` | clean (out of scope unless you choose to extend) |
 
 CODE BASELINE (C-06): the audited code baseline is `dfc418f`
@@ -185,7 +185,7 @@ plus `require_external_providers=1`.
   the HISTORICAL full-lane trace
   (`docs/benchmarks/evidence/2026-08-03-locomo-granite/traces.json`)
   records q6 → `[]` for both Granite lanes; a CURRENT bounded spot-check
-  (producing SHA c8c4809) returned `[c27, c12, c24]` with c27 at rank 1.
+  (producing SHA 9749a75) returned `[c27, c12, c24]` with c27 at rank 1.
   These are DIFFERENT evidence statements. The full-lane negative result
   (Granite recall 0.808/0.885 vs hash 0.923) is unchanged.
   Optional reproduce (model download ~500MB, CPU; time-box 10 min):
