@@ -144,11 +144,35 @@ class DerivationWorker:
             self._projection.rebuild(scope)
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
+        # OPS-01: the outbox projector. Every canonical write appended an
+        # outbox event; the projection rebuild above satisfies them for
+        # the touched scopes, so ack those events now. Pending events for
+        # untouched scopes stay pending (a later pass that touches them
+        # will ack). Ack is idempotent — a crash between rebuild and ack
+        # leaves the event pending and the next pass re-processes it.
+        try:
+            self._project_outbox(touched)
+        except Exception:
+            logger.warning("outbox projection failed at drain end", exc_info=True)
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
         )
+
+    def _project_outbox(self, touched: dict[str, Scope]) -> None:
+        """Ack pending outbox events whose scope was touched this pass.
+
+        The outbox is append-only and written on every canonical write;
+        the projection rebuild for a touched scope makes those writes
+        visible to retrieval, which satisfies the corresponding outbox
+        events. Acking only touched scopes keeps the log honest — events
+        for scopes we did not rebuild remain pending and unacked.
+        """
+        touched_set = set(touched.keys())
+        for event in self._repository.pending_outbox():
+            if event.scope.model_dump_json() in touched_set:
+                self._repository.ack_outbox(event.id)
 
     def _derive(
         self,

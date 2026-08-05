@@ -266,3 +266,52 @@ def test_worker_recall_all_is_scope_bounded(bundle):
     hits_b = bundle["service"].search(sc_b, query="*", limit=200)
     assert len(hits_a) == 1
     assert hits_b == []  # recall-all never leaks across scope
+
+
+def test_worker_drain_acks_outbox_events_for_touched_scopes(bundle):
+    """OPS-01: the outbox projector is wired into runtime — after a drain
+    pass, pending outbox events for the touched scope are acked, while
+    events for an untouched scope remain pending (a later pass that
+    touches it will ack them)."""
+    repo = bundle["repo"]
+    sc_a = _scope(tenant="t1")
+    sc_b = _scope(tenant="t2")
+
+    # Writes in BOTH scopes append outbox events (memory.created etc.).
+    bundle["service"].ingest_observation(sc_a, content="alpha event", source={"uri": "a://1"})
+    bundle["service"].ingest_observation(sc_b, content="beta event", source={"uri": "b://1"})
+    assert len(repo.pending_outbox()) >= 2
+
+    # Drain processes ALL pending jobs (both scopes touched).
+    summary = bundle["worker"].drain(worker_id="w1", gateway=bundle["gateway"])
+    assert summary.processed == 2
+
+    # Both scopes' events are acked — nothing remains pending.
+    remaining = repo.pending_outbox()
+    remaining_scopes = {e.scope.tenant_id for e in remaining}
+    assert "t1" not in remaining_scopes
+    assert "t2" not in remaining_scopes
+
+
+def test_worker_drain_leaves_untouched_scope_outbox_pending(bundle):
+    """OPS-01: events for a scope NOT touched by this drain pass remain
+    pending — the projector only acks scopes whose projections converged."""
+    repo = bundle["repo"]
+    sc_a = _scope(tenant="t1")
+    sc_b = _scope(tenant="t2")
+
+    bundle["service"].ingest_observation(sc_a, content="alpha event", source={"uri": "a://1"})
+    bundle["service"].ingest_observation(sc_b, content="beta event", source={"uri": "b://1"})
+
+    # Drain with max_jobs=1 touches exactly ONE scope (whichever is claimed
+    # first — claim order is nondeterministic). The OTHER scope's events
+    # must remain pending for a later pass.
+    summary = bundle["worker"].drain(worker_id="w1", gateway=bundle["gateway"], max_jobs=1)
+    assert summary.processed == 1
+    touched_tenant = summary.touched_scopes[0].tenant_id
+    other_tenant = "t2" if touched_tenant == "t1" else "t1"
+
+    remaining = repo.pending_outbox()
+    remaining_scopes = {e.scope.tenant_id for e in remaining}
+    assert touched_tenant not in remaining_scopes  # acked this pass
+    assert other_tenant in remaining_scopes  # still pending
