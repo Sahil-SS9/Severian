@@ -333,6 +333,7 @@ def import_(
         payload = safe_input.read_text(encoding="utf-8")
         bundle.repository.import_json(payload)
         touched_scopes: list[Scope] = []
+        rebuild_error: str | None = None
         if rebuild:
             from severian.application.projections import ProjectionCoordinator
 
@@ -362,8 +363,15 @@ def import_(
                     agent_id=agent,
                     session_id=session,
                 )
-                coordinator.rebuild(scope)
-                touched_scopes.append(scope)
+                try:
+                    coordinator.rebuild(scope)
+                    touched_scopes.append(scope)
+                except Exception as exc:  # noqa: BLE001 — report, do not mask
+                    # DATA-02: the canonical import is committed and atomic,
+                    # but projections are now stale for this scope. Surface
+                    # the partial state explicitly so the operator can
+                    # re-run `severian import --rebuild`.
+                    rebuild_error = f"{scope.model_dump()}: {exc}"
         # SEC-02: record the admin action in the audit trail.
         try:
             bundle.repository.append_audit(
@@ -380,8 +388,18 @@ def import_(
                 "input": str(safe_input),
                 "status": "imported",
                 "rebuilt_scopes": [scope.model_dump() for scope in touched_scopes],
+                "rebuild_error": rebuild_error,
             }
         )
+        if rebuild_error is not None:
+            # DATA-02: the canonical import succeeded atomically, but at
+            # least one scope's projections could not be rebuilt. Make the
+            # partial state loud — the operator must re-run with --rebuild.
+            typer.echo(
+                f"WARNING: canonical store imported, but projections are stale "
+                f"for scope(s): {rebuild_error}; re-run `severian import --rebuild`",
+                err=True,
+            )
     except ValueError as exc:
         raise typer.BadParameter(f"cannot import snapshot: {exc}") from exc
     finally:

@@ -9,6 +9,7 @@ dry-run of the search subcommand.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -297,3 +298,47 @@ def test_export_import_records_admin_audit(data_root: Path):
     repo.close()
     assert "store.export" in actions
     assert "store.import" in actions
+
+
+def test_import_rebuild_failure_reports_stale_projections(data_root: Path):
+    """DATA-02: if projection rebuild fails after a canonical import, the
+    canonical records are committed (atomic restore) but the CLI must
+    explicitly report the stale projections so the operator can re-run
+    with --rebuild."""
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    snapshot = data_root / "snapshot.json"
+
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Ada founded a company", "--source", "{}"]
+    ).exit_code == 0
+    # Derive the memory (a memory record is required for rebuild scopes).
+    assert runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    ).exit_code == 0
+    assert runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(snapshot)]
+    ).exit_code == 0
+
+    # Poison the VECTOR path (valid DB but read-only) so rebuild's write
+    # fails at rebuild time, not at bundle construction.
+    vec_path = data_root / "vectors.db"
+    os.chmod(vec_path, 0o400)
+
+    # Import into a FRESH canonical store so records are actually new and
+    # the rebuild runs (importing into the same store is idempotent-skip).
+    fresh_db = data_root / "fresh.db"
+    result = runner.invoke(
+        cli, ["import", "--database", str(fresh_db), "--fts", str(fts), "--vectors", str(vec_path),
+              "--input", str(snapshot)]
+    )
+    os.chmod(vec_path, 0o600)
+    # Import itself succeeds (canonical committed atomically).
+    assert result.exit_code == 0, result.output
+    # The stale-projection warning must be visible.
+    combined = result.output + (result.stderr or "")
+    assert "projections are stale" in combined or "WARNING" in combined
