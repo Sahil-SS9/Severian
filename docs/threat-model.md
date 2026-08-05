@@ -31,7 +31,21 @@
 
 ## Authentication and authorisation
 
-Phase 1 still requires local authentication. Loopback binding is not authentication. API keys are hashed at rest, scoped and revocable. Browser sessions use secure cookies and CSRF protection. Destructive operations require explicit confirmation and produce audit events.
+**Required but not yet implemented (2026-08-05):** authentication, API keys,
+and CSRF protection are *required* before any network exposure but are NOT
+implemented in the current codebase. The operator runbook documents this:
+the HTTP API is loopback-only by default and has no authentication, no API
+key validation, and no CSRF protection. Any host user can read the store.
+
+Phase 1 requires:
+- local authentication (loopback binding is not authentication);
+- API keys hashed at rest, scoped and revocable;
+- browser sessions using secure cookies and CSRF protection;
+- destructive operations requiring explicit confirmation + audit events.
+
+None of these are shipped yet. Do not expose the API on a network interface
+until they are implemented. See `docs/operator-runbook.md` for the current
+deployment posture.
 
 ## Data lifecycle
 

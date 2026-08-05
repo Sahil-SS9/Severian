@@ -222,7 +222,7 @@ Honest limits: cold derive-on-read is super-linear (mitigated by the worker mode
                  ▼
    ┌──────────────────────────────────────────────────────────────┐
    │  RetrievalService (hybrid RRF fusion)                        │
-   │  · abstention floor (opt-in)   · salience-weighted ranking   │
+   │  · coverage abstention gate    · salience-weighted ranking   │
    │  · shared-scope read (search_shared, opt-in multi-agent)     │
    │  · temporal query orientation (active head first for present)│
    └───────────────┬──────────────────────────────────────────────┘
@@ -323,11 +323,27 @@ Configuration is code-level and per-call, not a single config file:
 | Embedding provider | `build_bundle(embedding=...)` | HashEmbedding (deterministic); Granite R2 opt-in |
 | Cloud derivation gate | Collection `policy: {"cloud_allowed": true}` | false (local only) |
 | Derivation mode | `search(derive=...)` or `severian work` | derive-on-read cold; worker hot |
-| Abstention floor | `search(min_fused_score=...)` | None (raw capability) |
+| Abstention gate (recommended) | `search(min_coverage=...)` | None (raw capability) |
+| Abstention floor (deprecated) | `search(min_fused_score=...)` | None — unreliable as an absolute floor; use `min_coverage` instead |
 | Salience weighting | `search(salience_weight=..., salience_halflife_h=...)` | 0.0 (unchanged ranking) |
 | Usage tracking | `search(track_usage=True)` | false (benchmark-safe) |
 | Retention policy | `RetentionPolicyService.evaluate/apply_archive(policy)` | report-only |
 | PG DSN / reset guard | env `SEVERIAN_PG_DSN`, `SEVERIAN_PG_ALLOW_RESET=1` | unset |
+
+### Abstention gate migration note
+
+**`min_coverage` is the supported abstention gate.** It filters results by
+the fraction of query tokens (stemmed, stopword-filtered) present in each
+candidate's content — a principled, measurable signal that separates genuine
+evidence from lexical decoys. Use `search(min_coverage=0.4)` or
+`search_shared(..., min_coverage=0.4)`.
+
+**`min_fused_score` is deprecated and unreliable** as an absolute floor:
+genuine weak matches and lexical decoys have overlapping fused-score ranges,
+so no single threshold can separate them. The parameter is retained for
+backward compatibility but should not be used as the primary abstention
+mechanism. It is not removed to avoid breaking existing callers — migrate
+to `min_coverage`.
 
 ## Contributing
 

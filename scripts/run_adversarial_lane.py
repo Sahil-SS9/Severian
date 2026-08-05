@@ -4,7 +4,8 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path("/home/kensei/repos/Severian")
+# File-relative repo root: this script lives in <repo>/scripts/.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from severian.benchmarks.adapters import LexicalBaselineAdapter, SeverianAdapter  # noqa: E402

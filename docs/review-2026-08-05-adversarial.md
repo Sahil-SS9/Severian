@@ -44,7 +44,7 @@ benchmarks* (LongMemEval, LOCOMO re-run, real-data probe) to compete.
 | Determinism across fresh adapters | `test_ranking_deterministic_across_fresh_adapters` passes 8/8 consecutive (post derive-time revision guard) | ✅ VERIFIED |
 | Porter stemming aligns FTS + vector | 113/116 stemmer consistency vs SQLite FTS5 porter; all 27 critical corpus tokens match | ✅ VERIFIED |
 | Query-coverage abstention fixes aq11 | decoy coverage 0.33 vs genuine ≥0.50; threshold 0.4 | ✅ VERIFIED |
-| LSH flattens dreaming curve | 10k consolidate 437s → 131s (3.3×); candidate ratio 0.18 | ✅ VERIFIED |
+| LSH accelerates dreaming detectors | 10k consolidate 437s → 131s (3.3×); candidate ratio 0.18. Both contradiction scan and duplicate grouping use LSH candidates with exact Jaccard decision. Dense corpora remain worst-case. | ✅ VERIFIED |
 | mypy --strict, ruff clean, 326 passed / 36 skipped | full gate run 2026-08-05 | ✅ VERIFIED |
 
 ---
@@ -85,7 +85,7 @@ benchmarks* (LongMemEval, LOCOMO re-run, real-data probe) to compete.
 | O5 | **HTTP API has NO authentication.** | High (security) | Loopback-only by default (good), but README's "API keys hashed at rest" is aspirational, not implemented. Any host user can read the store. Phase-1 auth required before any network exposure. |
 | O6 | **Hash embeddings are the default** — deterministic but semantically weaker. | Medium | Granite R2 opt-in exists; A-3 decision pending. Competitors (Mem0, Hindsight, Supermemory) use LLM/semantic embeddings by default. |
 | O7 | **LongMemEval not run.** | Medium | The comparison matrix says it; competitors market LongMemEval numbers. Running it = credible public proof. |
-| O8 | **Dense-corpus dreaming still O(n²)-ish.** | Low | LSH helps diverse corpora (0.18 candidate ratio); dense shared-template corpora still slow. |
+| O8 | **Dense-corpus dreaming still O(n²)-ish.** | Low | LSH accelerates both contradiction and duplicate detection on diverse corpora (0.18 candidate ratio); dense shared-template corpora still slow (candidate ratio → 1.0). Per-group merge writes remain linear in duplicate fraction. |
 | O9 | **`min_fused_score` floor is a footgun.** | Low | Replaced by coverage for the lane, but the param still exists and is mathematically unreliable as an absolute floor. Either document loudly or remove. |
 
 ---

@@ -27,12 +27,25 @@ filtered by the exact 5-D scope.
 """
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Entity, Memory, Relation, Scope
+
+_TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Casefolded word-token set for membership matching.
+
+    Used by related_memories to match entity names by TOKEN membership
+    rather than substring containment (so 'Al' does not match 'album').
+    """
+    return {tok.casefold() for tok in _TOKEN_RE.findall(text)}
+
 
 
 @dataclass(frozen=True)
@@ -169,11 +182,15 @@ class GraphRetrievalService:
         hits: list[RelatedMemory] = []
         seen_memory_ids: set[str] = set()
         for memory in self._repository.list_memories(scope):
-            content_lower = memory.content.casefold()
+            content_tokens = _content_tokens(memory.content)
             best: tuple[int, str] | None = None
             for entity in entities:
-                if entity.name.casefold() in content_lower:
-                    candidate = (name_to_distance[entity.name.casefold()], entity.id)
+                entity_name_cf = entity.name.casefold()
+                # Match by TOKEN membership, not substring containment:
+                # 'Al' must not match 'album' (substring), but must match
+                # a memory that contains the standalone token 'Al'.
+                if entity_name_cf in content_tokens:
+                    candidate = (name_to_distance[entity_name_cf], entity.id)
                     if best is None or candidate[0] < best[0]:
                         best = candidate
             if best is not None and memory.id not in seen_memory_ids:
