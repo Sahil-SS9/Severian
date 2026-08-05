@@ -668,7 +668,7 @@ class PostgreSQLBackend:
             for m in memories
         ]
         with self.engine.begin() as connection:
-            existing_by_identity: dict[str, Memory] = {}
+            existing_by_identity: dict[tuple[str, str], Memory] = {}
             rows = connection.execute(
                 select(records.c.payload).where(
                     records.c.record_type == "memory",
@@ -684,11 +684,19 @@ class PostgreSQLBackend:
                     memory.model_id,
                     memory.prompt_version,
                 )
-                existing_by_identity[key] = memory
+                # DATA-06: key by (scope, identity) — a memory with the
+                # same identity in ANOTHER scope must NOT satisfy this
+                # batch insert (the single-insert path already scopes;
+                # the batch path must agree). Without this, a cross-scope
+                # match would suppress a new insert or return the wrong
+                # memory.
+                scope_key = memory.scope.model_dump_json()
+                existing_by_identity[(scope_key, key)] = memory
             results: list[Memory] = []
             for memory, identity_key in zip(memories, identities, strict=True):
-                if identity_key in existing_by_identity:
-                    results.append(existing_by_identity[identity_key])
+                scope_key = memory.scope.model_dump_json()
+                if (scope_key, identity_key) in existing_by_identity:
+                    results.append(existing_by_identity[(scope_key, identity_key)])
                     continue
                 connection.execute(
                     records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))

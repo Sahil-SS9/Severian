@@ -341,6 +341,61 @@ def test_sqlite_backend_enforces_collection_scope(tmp_path: Path) -> None:
     repo.close()
 
 
+def test_sqlite_batch_memory_lookup_is_scope_aware(tmp_path: Path) -> None:
+    """DATA-06: batch memory insert must not be satisfied by a memory with
+    the same identity in a DIFFERENT scope.
+
+    A memory's identity (kind+content+source+model+prompt) is scope-less;
+    the batch lookup previously matched on identity alone, so a memory in
+    scope A could suppress (or return) the insert for the same content in
+    scope B. The single-insert path scopes correctly; batch must agree.
+    """
+    repo = SQLiteRepository(tmp_path / "severian.db")
+    repo.initialize()
+    # Collection IDs are globally unique (records.id is the PK); give each
+    # tenant its own collection id.
+    repo.create_collection(Collection(id="c-a", tenant_id="t1", name="Primary"))
+    repo.create_collection(Collection(id="c-b", tenant_id="t2", name="Primary"))
+
+    scope_a = Scope(tenant_id="t1", profile_id="p1", collection_id="c-a", agent_id="a1", session_id="s1")
+    scope_b = Scope(tenant_id="t2", profile_id="p1", collection_id="c-b", agent_id="a1", session_id="s1")
+
+    # Source observations must exist in each scope (memory references are
+    # validated same-scope). The observation id is content-derived and
+    # scope-specific, so capture each scope's real id.
+    obs_a = repo.add_observation(Observation(scope=scope_a, content="Ada founded a company"))
+    obs_b = repo.add_observation(Observation(scope=scope_b, content="Ada founded a company"))
+
+    def _mem(scope: Scope, memory_id: str, obs_id: str) -> Memory:
+        return Memory(
+            id=memory_id,
+            scope=scope,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[obs_id],
+            model_id="test",
+            prompt_version="v1",
+            confidence=1.0,
+        )
+
+    # Insert the same content+kind+source in scope A first.
+    inserted_a = repo.add_memory(_mem(scope_a, "mem-a", obs_a.id))
+    assert inserted_a.id == "mem-a"
+
+    # Batch-insert the IDENTICAL identity in scope B. It must NOT be
+    # suppressed by the scope-A memory — both must exist.
+    inserted_b = repo.add_memories_batch([_mem(scope_b, "mem-b", obs_b.id)])
+    assert len(inserted_b) == 1
+    assert inserted_b[0].id == "mem-b"
+
+    # Both scopes now return their own memory.
+    assert repo.get_memory(scope_a, "mem-a").id == "mem-a"
+    assert repo.get_memory(scope_b, "mem-b").id == "mem-b"
+    assert len(repo.list_memories(scope_a)) == 1
+    assert len(repo.list_memories(scope_b)) == 1
+    repo.close()
+
+
 def test_postgresql_backend_rejects_blank_scope_before_storage() -> None:
     # A live-DSN-less backend fails closed at construction.
     with pytest.raises(ValueError):
