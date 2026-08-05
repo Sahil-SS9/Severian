@@ -95,6 +95,15 @@ class ScopedCanonicalPort(Protocol):
         """
         ...
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int: ...
+    def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
+        """Mark one active memory as superseded by a replacement head.
+
+        Generic form of ``supersede_memories_for_source`` used by the
+        dreaming/consolidation pass: the replaced memory stays in history
+        (P0-1), but default reads and projection rebuilds drop it. Returns
+        the superseded memory (now marked).
+        """
+        ...
     def revise_memory(
         self,
         scope: Scope,

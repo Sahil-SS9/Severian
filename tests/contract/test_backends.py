@@ -26,6 +26,7 @@ from severian.backends import (
     ProjectionIndex,
     check_scope,
 )
+from severian.domain.errors import ConflictError
 from severian.domain.models import (
     AuditEvent,
     Collection,
@@ -225,6 +226,22 @@ class _FakeRepository:
                 self._memories[key] = memory.model_copy(update={"superseded_by_id": f"source-rev:{observation_id}"})
                 superseded += 1
         return superseded
+
+    def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
+        for key in list(self._memories):
+            rid, *s = key
+            if tuple(s) != tuple(scope.model_dump().values()):
+                continue
+            memory = self._memories[key]
+            if memory.id == memory_id:
+                if memory.superseded_by_id is not None:
+                    raise ConflictError("memory is already superseded")
+                if memory_id == replacement_id:
+                    raise ConflictError("cannot supersede a memory by itself")
+                updated = memory.model_copy(update={"superseded_by_id": replacement_id})
+                self._memories[key] = updated
+                return updated
+        raise NotFoundError(f"memory {memory_id} not found")
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)

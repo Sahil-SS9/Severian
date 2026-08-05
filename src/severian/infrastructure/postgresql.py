@@ -789,6 +789,31 @@ class PostgreSQLBackend:
                 superseded += 1
         return superseded
 
+    def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
+        """Mark one active memory as superseded by a replacement head.
+
+        Used by the dreaming/consolidation pass to retire duplicate heads
+        in favour of a survivor. Non-destructive: the memory remains in
+        history (P0-1); active reads and projection rebuilds drop it.
+        """
+        self._require_scope(scope)
+        memory = self.get_memory(scope, memory_id)
+        if memory.superseded_by_id is not None:
+            raise ConflictError("memory is already superseded")
+        if memory_id == replacement_id:
+            raise ConflictError("cannot supersede a memory by itself")
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == memory_id)
+                .values(
+                    payload=memory.model_copy(
+                        update={"superseded_by_id": replacement_id}
+                    ).model_dump(mode="json")
+                )
+            )
+        return self.get_memory(scope, memory_id)
+
     def revise_memory(
         self,
         scope: Scope,

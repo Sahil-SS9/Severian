@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
+from severian.application.dreaming import ConsolidationService, CurationService
 from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
@@ -58,11 +59,15 @@ class DerivationWorker:
         derivation: DerivationService,
         projection: ProjectionCoordinator,
         episodes: EpisodeService | None = None,
+        consolidation: ConsolidationService | None = None,
+        curation: CurationService | None = None,
     ) -> None:
         self._repository = repository
         self._derivation = derivation
         self._projection = projection
         self._episodes = episodes if episodes is not None else EpisodeService(repository)
+        self._consolidation = consolidation if consolidation is not None else ConsolidationService(repository)
+        self._curation = curation if curation is not None else CurationService(repository)
 
     def drain(
         self,
@@ -137,5 +142,14 @@ class DerivationWorker:
             return
         if job.kind == "episode":
             self._episodes.consolidate_session(job.scope, gateway=gateway, policy=dict(policy or {}))
+            return
+        if job.kind == "dream":
+            mode = str(job.payload.get("mode", "consolidate"))
+            if mode == "consolidate":
+                self._consolidation.consolidate(job.scope)
+            elif mode == "curate":
+                self._curation.curate(job.scope)
+            else:
+                raise ValueError(f"unsupported dream mode: {mode}")
             return
         raise ValueError(f"unsupported job kind: {job.kind}")
