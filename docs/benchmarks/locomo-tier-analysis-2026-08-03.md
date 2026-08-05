@@ -1,4 +1,4 @@
-# LOCOMO-tier conversation recall — B-1 evidence analysis (2026-08-03, updated 2026-08-04)
+# LOCOMO-tier conversation recall — B-1 evidence analysis (2026-08-03, updated 2026-08-04, RECONCILED 2026-08-05)
 
 **Manifest:** `docs/benchmarks/manifest-locomo-tier-v1.json` (validated)
 **Run:** `docs/benchmarks/evidence/2026-08-04/` (locomo-result.json, locomo-traces.json, locomo-fingerprint.json) — correction-lane producing SHA 9749a75
@@ -9,6 +9,25 @@ deterministic across runs. This is the measured number Sahil's (d) requires —
 no fabricated parity.
 
 ## Results (gate: recall>=0.95, cit_prec>=1.0, stale==0, unsup==0)
+
+**Current-HEAD re-run 2026-08-05 (feat/ai-memory-concepts, producing SHA
+9d7c989; evidence: `docs/benchmarks/evidence/2026-08-05-head/locomo/`):**
+
+| Provider | recall@10 | MRR | nDCG@10 | cit_prec | stale | unsup | temporal |
+|---|---|---|---|---|---|---|---|
+| severian-sqlite | **0.962** | **0.962** | 0.956 | **0.844** | **0.000** | **0.062** | 1.000 |
+| chroma | 0.962 | 0.833 | 0.862 | 0.531 | 0.144 | 0.188 | 1.000 |
+| baseline-lexical | 0.846 | 0.756 | 0.755 | 0.469 | 0.098 | 0.188 | 1.000 |
+
+> **EVID-04 reconciliation vs the 2026-08-04 rows below:** the
+> determinism fix (derive-time revision guard + stable tiebreaks +
+> query-coverage abstention) lifted the severian-sqlite lane at current
+> HEAD: recall 0.923 → **0.962** (now above the 0.95 gate), MRR 0.885 →
+> **0.962**, cit_prec 0.719 → **0.844**, unsup 0.188 → **0.062**, stale
+> 0.000, temporal 1.000. The lane still FAILS the release gate on
+> citation_precision (0.844 < 1.0) and unsupported_answer_rate (0.062 >
+> 0) — honest state, no fabricated parity. The 2026-08-04 rows are
+> retained below as the historical baseline.
 
 **Correction-lane re-run 2026-08-04 (fix/auditor-corrections-2026-08-04,
 producing SHA 9749a75; deterministic — two clean runs byte-identical):**
