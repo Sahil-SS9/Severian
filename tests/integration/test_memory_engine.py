@@ -9,6 +9,7 @@ from severian.application.derivation import CloudPolicyError, DerivationService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
+from severian.application.service import MemoryService
 from severian.domain.errors import ConflictError
 from severian.domain.models import Collection, Memory, Scope
 from severian.infrastructure.fts import FTS5Index
@@ -496,3 +497,97 @@ def test_correction_converges_projection_via_rebuild_fallback(repo):
     hits = retrieval_svc.search(sc, "Ada Lovelace founded", limit=10)
     assert hits, "corrected memory must be searchable after rebuild fallback"
     assert hits[0].memory.id == revision.id
+
+
+def test_erase_memory_tombstones_from_active_reads_and_search(repo):
+    """OPS-02: erase_memory removes a memory from active reads and search
+    (tombstone semantics) while history preserves the record for audit."""
+    sc = scope()
+    fts = FTS5Index(Path("/tmp/severian-ops02-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-ops02-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    observation = IngestionService(repo).ingest(sc, "Ada founded a company", {}).observation
+    mem = repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Ada founded a company",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        RetrievalService(repo, fts, vec),
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+
+    erased = service.erase_memory(sc, mem.id, reason="user-requested")
+
+    # Active reads: the memory is gone.
+    assert repo.list_memories(sc) == []
+    # erased is the ORIGINAL marked superseded; its superseded_by_id
+    # points at the tombstone revision (a distinct record).
+    assert erased.id == mem.id
+    tombstone = repo.get_memory(sc, erased.superseded_by_id or "")
+    assert tombstone.id != mem.id
+    assert tombstone.content == "[user-requested]"
+    assert tombstone.revision_of_id == mem.id
+    # Search: the memory no longer surfaces.
+    hits = RetrievalService(repo, fts, vec).search(sc, "Ada founded", limit=10)
+    assert hits == []
+    # History: the record AND the tombstone are retained for audit.
+    history = repo.list_memories_history(sc)
+    assert {m.id for m in history} == {mem.id, tombstone.id}
+
+
+def test_erase_observation_propagates_to_derived_memories(repo):
+    """OPS-02: erase_observation tombstones the source AND erases every
+    active memory derived from it — search stops returning facts whose
+    only source was erased."""
+    sc = scope()
+    fts = FTS5Index(Path("/tmp/severian-ops02b-fts.db"))
+    vec = LocalVectorIndex(Path("/tmp/severian-ops02b-vec.db"), HashEmbedding())
+    coordinator = ProjectionCoordinator(repo, fts, vec)
+
+    result = IngestionService(repo).ingest(sc, "Grace invented COBOL", {})
+    observation = result.observation
+    repo.add_memory(
+        Memory(
+            scope=sc,
+            kind="fact",
+            content="Grace invented COBOL",
+            source_observation_ids=[observation.id],
+            model_id="local/model",
+            prompt_version="v1",
+            confidence=0.8,
+        )
+    )
+    coordinator.rebuild(sc)
+
+    service = MemoryService(
+        repo,
+        IngestionService(repo),
+        RetrievalService(repo, fts, vec),
+        coordinator,
+        DerivationService(repo),
+        ContextAssembler(),
+    )
+
+    service.erase_observation(sc, observation.id, reason="source-withdrawn")
+
+    # Observation tombstoned, derived memory erased, search empty.
+    assert repo.get_observation(sc, observation.id).superseded_by_id is not None
+    assert repo.list_memories(sc) == []
+    hits = RetrievalService(repo, fts, vec).search(sc, "Grace COBOL", limit=10)
+    assert hits == []
+    # History intact for audit.
+    assert len(repo.list_memories_history(sc)) == 2

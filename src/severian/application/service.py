@@ -21,7 +21,7 @@ from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Memory, Observation, Scope
 from severian.infrastructure.fts import FTS5Index
 
@@ -172,6 +172,81 @@ class MemoryService:
             # a stale fact before the next drain.
             self._projection.rebuild(scope)
         return revision
+
+    # -- erasure lifecycle (OPS-02) -------------------------------------
+
+    def erase_memory(
+        self,
+        scope: Scope,
+        memory_id: str,
+        *,
+        reason: str = "erased",
+    ) -> Memory:
+        """Erase a memory from active reads and search (OPS-02).
+
+        Deletion is tombstone-based, never a hard delete: the memory is
+        superseded by a synthetic ``:erased`` tombstone so default reads
+        and projections stop returning it, while the immutable history
+        retains the record (and the tombstone) for audit. Re-derivation
+        of the same fact via a fresh observation produces a NEW memory —
+        erasure does not poison future ingestion.
+        """
+        original = self._repository.get_memory(scope, memory_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("memory is already superseded")
+        # Tombstone record: a revision of the original whose OWN
+        # superseded_by_id is the reserved sentinel ``:erased`` — so the
+        # tombstone is excluded from active reads (superseded_by_id is
+        # non-NULL) while remaining in history for audit. The original is
+        # then superseded BY the tombstone, closing the chain.
+        tombstone = Memory(
+            scope=scope,
+            kind=original.kind,
+            content=f"[{reason}]",
+            source_observation_ids=original.source_observation_ids,
+            model_id=original.model_id,
+            prompt_version=f"{original.prompt_version}:erased",
+            confidence=0.0,
+            revision_of_id=original.id,
+            superseded_by_id=":erased",
+        )
+        inserted = self._repository.add_memory(tombstone)
+        erased = self._repository.supersede_memory(scope, memory_id, inserted.id)
+        try:
+            self._projection.remove_memory(memory_id)
+        except Exception:
+            self._projection.rebuild(scope)
+        return erased
+
+    def erase_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        *,
+        reason: str = "erased",
+    ) -> Observation:
+        """Erase a source observation and everything derived from it (OPS-02).
+
+        The observation is superseded (tombstoned) and all active
+        memories derived from it are erased via the same tombstone path —
+        the erasure propagates through the derivation lineage so search
+        stops returning facts whose only source was erased. History is
+        preserved for audit.
+        """
+        original = self._repository.get_observation(scope, observation_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("observation is already superseded")
+        # Tombstone the observation via the revision machinery (marks the
+        # old head superseded with a synthetic ``[erased]`` revision).
+        self._repository.revise_observation(scope, observation_id, f"[{reason}]")
+        for memory in self._repository.list_memories(scope):
+            if (
+                memory.superseded_by_id is None
+                and observation_id in memory.source_observation_ids
+            ):
+                self.erase_memory(scope, memory.id, reason=reason)
+        self._projection.rebuild(scope)
+        return self._repository.get_observation(scope, observation_id)
 
     # -- reads ----------------------------------------------------------
 

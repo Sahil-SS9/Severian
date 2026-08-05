@@ -227,9 +227,15 @@ Severian is designed **local-first**. The current posture:
   mandatory on every request; cross-scope reads return 404 / empty
   results and never leak existence. Blank scope dimensions are rejected
   at the schema and the storage layer.
-- **No destructive-operation confirmation.** Observations are
-  immutable; revision supersession is the correction path. There is no
-  delete endpoint in this release.
+- **Deletion semantics (OPS-02, implemented at the service layer).**
+  Observations and memories are immutable; there is NO hard-delete
+  endpoint in this release. Erasure is tombstone-based: the service
+  `erase_memory` / `erase_observation` mark records superseded by a
+  synthetic `[reason]` tombstone so they disappear from active reads and
+  search, while history retains the record + tombstone for audit. This
+  satisfies regulated "data stops being returned" deletion without
+  compromising the immutable audit trail. Hard delete / physical purge
+  is deliberately NOT offered.
 
 ## 6. systemd unit example (API + worker)
 
