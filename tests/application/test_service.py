@@ -187,3 +187,32 @@ def test_service_health_reports_components(bundle):
     assert health.components["repository"] == "ok"
     assert health.components["lexical"] == "ok"
     assert health.components["vector"] == "ok"
+
+
+def test_synchronous_derive_is_bounded(bundle):
+    """OPS-03: derive=True must be bounded — with N observations and a
+    small derive_max_observations, only that many memories are derived
+    per call (oldest first); the rest require the durable worker."""
+    sc = _scope()
+    # Ingest 5 observations (each enqueues a derive job).
+    for i in range(5):
+        bundle["service"].ingest_observation(sc, content=f"fact number {i}", source={"uri": f"n://{i}"})
+
+    # One synchronous derive pass bounded to 2 observations.
+    hits = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits) == 2  # only the first 2 observations derived -> 2 memories
+
+    # A second bounded pass derives the NEXT 2 fresh observations
+    # (already-derived ones are skipped and don't count) -> 4 total.
+    hits2 = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits2) == 4
+
+    # A final pass derives the last observation -> all 5.
+    hits3 = bundle["service"].search(
+        sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
+    )
+    assert len(hits3) == 5

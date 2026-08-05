@@ -293,6 +293,7 @@ class MemoryService:
         salience_weight: float = 0.0,
         salience_halflife_h: float = 720.0,
         track_usage: bool = False,
+        derive_max_observations: int = 50,
     ) -> list[SearchHitView]:
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
@@ -300,12 +301,27 @@ class MemoryService:
             # Ensure observations are derived into memories, then reindex
             # before retrieval. The service is the only place that owns
             # the ordering: derive -> project -> retrieve.
+            # OPS-03: synchronous derive is BOUNDED — at most
+            # ``derive_max_observations`` NEW memories are derived per
+            # call (oldest first), so a caller cannot accidentally
+            # trigger an unbounded O(n) synchronous derivation + rebuild
+            # on a large scope. Already-derived observations (idempotent
+            # dedupe) do NOT count against the bound — only fresh work
+            # does. Anything beyond the bound must go through the durable
+            # worker (enqueue + drain).
+            derived = 0
             for observation in self._repository.list_observations(scope):
                 if observation.superseded_by_id is not None:
                     continue
+                if derived >= derive_max_observations:
+                    break
+                before = len(self._repository.list_memories(scope))
                 self._derivation.derive_observation(
                     scope, observation.id, gateway, policy=dict(policy or {})  # type: ignore[arg-type]
                 )
+                after = len(self._repository.list_memories(scope))
+                if after > before:  # fresh work only counts against the bound
+                    derived += 1
             self._projection.rebuild(scope)
         results = self._retrieval.search(
             scope,
