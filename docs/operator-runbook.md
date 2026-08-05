@@ -115,6 +115,12 @@ The snapshot is a checksummed `severian-v1` JSON document. It is
 backend-portable: export from SQLite, import into PostgreSQL and vice
 versa.
 
+> **Integrity, not authenticity:** the snapshot checksum verifies that
+> the file was not accidentally corrupted or tampered with after
+> creation. It does NOT prove who created it or that it came from a
+> trusted source. For trusted snapshots (authenticity + tamper-proofing)
+> encrypt/MAC the file at rest and keep the key outside the snapshot.
+
 Restore into a fresh store:
 
 ```bash

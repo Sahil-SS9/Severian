@@ -274,6 +274,9 @@ def export(
         safe_output.parent.mkdir(parents=True, exist_ok=True)
         temporary = safe_output.parent / f".{safe_output.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         temporary.write_text(payload, encoding="utf-8")
+        # SEC-03: the temp snapshot contains the full multi-scope store —
+        # never leave it world-readable (default umask 0644).
+        os.chmod(temporary, 0o600)
         os.replace(temporary, safe_output)
         _emit({"format": "severian-v1", "output": str(safe_output), "bytes": len(payload.encode("utf-8"))})
     finally:

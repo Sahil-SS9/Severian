@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -12,6 +13,20 @@ from typing import Protocol
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.stemming import porter_stem
+
+
+def _restrict_private(path: str | Path) -> None:
+    """Restrict a DB file and its WAL/SHM siblings to the owning user.
+
+    Mirrors the canonical store's hardening (sqlite.py initialize):
+    memory content is sensitive; FTS/vector projection files must not
+    be world-readable (default umask 0644).
+    """
+    for candidate in (str(path), str(path) + "-wal", str(path) + "-shm"):
+        try:
+            os.chmod(candidate, 0o600)
+        except FileNotFoundError:
+            pass
 
 
 @dataclass(frozen=True)
@@ -82,6 +97,7 @@ class LocalVectorIndex:
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=30000")
+        _restrict_private(self.path)
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS memory_vectors (
                 memory_id TEXT PRIMARY KEY,

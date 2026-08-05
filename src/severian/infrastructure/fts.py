@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -8,6 +9,22 @@ from pathlib import Path
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.vector import _STOPWORDS
+
+_TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
+
+
+def _restrict_private(path: str | Path) -> None:
+    """Restrict a DB file and its WAL/SHM siblings to the owning user.
+
+    Mirrors the canonical store's hardening (sqlite.py initialize):
+    memory content is sensitive; FTS/vector projection files must not
+    be world-readable (default umask 0644).
+    """
+    for candidate in (str(path), str(path) + "-wal", str(path) + "-shm"):
+        try:
+            os.chmod(candidate, 0o600)
+        except FileNotFoundError:
+            pass
 
 
 @dataclass(frozen=True)
@@ -24,6 +41,7 @@ class FTS5Index:
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=30000")
+        _restrict_private(self.path)
         self.connection.execute(
             """CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
                 memory_id UNINDEXED,
