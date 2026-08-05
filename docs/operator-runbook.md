@@ -248,6 +248,14 @@ Severian is designed **local-first**. The current posture:
   compromising the immutable audit trail. Hard delete / physical purge
   is deliberately NOT offered.
 
+- **Dead-letter inspection/recovery (OPS-07, implemented).** Jobs that
+  exhaust their retry budget are marked `dead_letter`. Inspect them with
+  `severian dead-letter --database … --fts … --vectors …` (emits JSON
+  list) and recover one with `severian dead-letter --requeue <job-id>`
+  (resets to pending with a fresh attempt budget; the next `severian
+  work` pass retries it). This is the only supported recovery path for
+  exhausted jobs — do not edit the database directly.
+
 ## 6. systemd unit example (API + worker)
 
 ```ini

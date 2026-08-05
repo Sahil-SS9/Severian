@@ -96,6 +96,7 @@ The PostgreSQL backend shares the same canonical-store contract as SQLite — id
 | `severian ingest` | Ingest an observation into the canonical store (scope-mandatory) |
 | `severian search` | Hybrid search; emits JSON hits with lexical/vector/fused scores + sources |
 | `severian work` | Drain derivation jobs; rebuild projections for touched scopes (production loop) |
+| `severian dead-letter` | Inspect dead-lettered jobs, or requeue one (`--requeue <id>`) for retry |
 | `severian episode` | Consolidate a session's observations into an episode memory (B-2) |
 | `severian rollback` | Restore a historical memory revision as the active head (A-2) |
 | `severian export` / `severian import` | Portable JSON snapshots with approved-path policy |
@@ -145,28 +146,28 @@ Severian ships an MCP server exposing scoped tools (`ingest`, `search`, `episode
 
 All numbers are independently reproduced with the in-repo runner and manifest — never vendor-mixed. Evidence lives in `docs/benchmarks/evidence/`.
 
-### Quality gate (adversarial-27 manifest, producing SHA 9749a75)
+### Quality gate (adversarial-27 manifest, reconciled at SHA 5a5f9f7)
 
-**As of 2026-08-05 (post porter-stemming + query-coverage abstention fixes).** Evidence: `docs/benchmarks/evidence/` + `scripts/run_adversarial_lane.py`.
+**As of 2026-08-05 (post porter-stemming + query-coverage abstention + derive-guard fixes).** Evidence: `docs/benchmarks/evidence/2026-08-05-head/` + `scripts/run_adversarial_lane.py`.
 
 | Provider | recall@10 | MRR | cit-prec | stale | leak | unsup | gate |
 |---|---|---|---|---|---|---|---|
 | **Severian SQLite** | 1.000 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 | **PASS** |
-| **Severian PostgreSQL** | 1.000 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 | **PASS** |
-| ChromaDB 1.5.9 | 1.000 | 0.933 | 0.812 | 0.179 | 0.000 | 0.062 | FAIL |
-| Baseline (lexical) | 0.933 | 0.776 | 0.625 | 0.215 | 0.000 | 0.062 | FAIL |
+| Baseline (lexical) | 0.933 | 0.718 | 0.562 | 0.173 | 0.000 | 0.062 | FAIL |
 
-The gate now **passes** — citation_precision reached 1.000 after the coverage-abstention fix (earlier runs honestly reported 0.938 and FAILed; thresholds were never lowered).
+The gate now **passes** — citation_precision reached 1.000 after the coverage-abstention + derive-time revision-guard fixes (earlier runs honestly reported 0.938 and FAILed; thresholds were never lowered). The PostgreSQL lane was re-measured at 9749a75 (PASS); it was not re-run at 5a5f9f7 (DSN unavailable in the release session — disclosed in the evidence README).
 
 ### LOCOMO-tier conversation recall (30 docs, 16 typed probes)
 
-| Provider | recall@10 | MRR | cit-prec | stale | temporal |
-|---|---|---|---|---|---|
-| **Severian SQLite/PG** | 0.923 | 0.885 | 0.719 | 0.000 | 1.000 |
-| ChromaDB 1.5.9 | 0.962 | 0.833 | 0.531 | 0.144 | 1.000 |
-| Baseline (lexical) | 0.846 | 0.756 | 0.469 | 0.098 | 1.000 |
+**Reconciled at SHA 5a5f9f7.** Evidence: `docs/benchmarks/evidence/2026-08-05-head/locomo/`.
 
-Honest note: this LOCOMO snapshot is from 2026-08-04 (pre porter-stemming). The adversarial-27 lane above reflects the current post-fix state; a re-run of LOCOMO with the current code is a tracked follow-up. Deterministic: two clean runs are byte-identical (C-08 tiebreak fixes).
+| Provider | recall@10 | MRR | cit-prec | stale | temporal | unsup | gate |
+|---|---|---|---|---|---|---|---|
+| **Severian SQLite** | 0.962 | 0.962 | 0.844 | 0.000 | 1.000 | 0.062 | FAIL (cit-prec < 1.0, unsup > 0) |
+| ChromaDB 1.5.9 | 0.962 | 0.833 | 0.531 | 0.144 | 1.000 | 0.188 | FAIL |
+| Baseline (lexical) | 0.846 | 0.756 | 0.469 | 0.098 | 1.000 | 0.188 | FAIL |
+
+Honest note: this LOCOMO snapshot is reconciled at current HEAD (2026-08-05) — up from the 2026-08-04 baseline (recall 0.923 → 0.962, MRR 0.885 → 0.962, cit-prec 0.719 → 0.844, unsup 0.188 → 0.062) after the determinism fixes. It still does not pass the release gate on citation precision + unsupported-answer rate; that is a tracked follow-up. Deterministic: two clean runs are byte-identical (C-08 tiebreak fixes).
 
 ### Scale (synthetic, hot path = worker-derived)
 
