@@ -11,19 +11,28 @@ uses a different corpus/conditions — no false equivalence).
 
 ---
 
-## 1. Independently reproduced (our harness, our evidence)
+## 1. Independently reproduced (our harness, our evidence — correction-lane producing SHA 9749a75)
 
 | Metric | Severian SQLite | Severian PG | ChromaDB 1.5.9 | Source |
 |---|---|---|---|---|
-| recall@10 | 1.000 | 1.000 | 0.964 | results.md §1 |
-| citation_precision | 1.000 | 1.000 | 0.353 | results.md §1 |
-| stale_fact_rate | 0.000 | 0.000 | 0.179 | results.md §1 |
-| cross_scope_leakage | 0.000 | 0.000 | 0.000 | results.md §1 |
-| unsupported_answer_rate | 0.000 | 0.000 | 0.062 | results.md §1 |
+| recall@10 (manifest-v1) | 1.000 | 1.000 | 1.000 | results.md §1 |
+| citation_precision (manifest-v1) | 0.938 | 0.938 | 0.812 | results.md §1 |
+| stale_fact_rate (manifest-v1) | 0.000 | 0.000 | 0.179 | results.md §1 |
+| cross_scope_leakage (manifest-v1) | 0.000 | 0.000 | 0.000 | results.md §1 |
+| unsupported_answer_rate (manifest-v1) | 0.000 | 0.000 | 0.062 | results.md §1 |
+| LOCOMO recall@10 | 0.923 | 0.923 | 0.962 | locomo-tier-analysis §results |
+| LOCOMO MRR | 0.885 | 0.885 | 0.833 | locomo-tier-analysis §results |
+| LOCOMO cit_prec | 0.719 | 0.719 | 0.531 | locomo-tier-analysis §results |
+| LOCOMO stale_fact_rate | 0.000 | 0.000 | 0.144 | locomo-tier-analysis §results |
+| LOCOMO temporal_accuracy | 1.000 | 1.000 | 1.000 | locomo-tier-analysis §results |
 | ingest throughput (1k/10k/100k docs/s) | 248/254/206 | 170/156/160 | 4.2/3.7/skipped | scale-1k-10k.json, scale-100k.json |
 | query p95 hot (1k→100k ms) | 69.9→3,238.6 | 83.3→151.6 | 247.7→276.6 | same |
 | cold derive 100k (s) | 6,458 | 3,147 | n/a (skipped, ~9h) | scale-100k.json |
 | Determinism / offline | YES | YES | NO (downloaded model) | results.md §6 |
+
+> **Correction (2026-08-04):** this table previously carried pre-correction
+> numbers (cit_prec 1.000, Chroma cit_prec 0.353, Chroma recall 0.964).
+> Superseded per C-05 — current evidence above is authoritative.
 
 ## 2. Vendor claims → our position (C-1)
 
