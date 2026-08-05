@@ -38,9 +38,11 @@ duplicate fraction, as designed.
    contradiction-proposal list. The original honest_notes claim
    ("curation is O(n)") was WRONG and was corrected in the runner.
 
-3. **MinHash-LSH pre-filter flattens the consolidation curve.** With 24
-   bands x 2 rows and stopword-filtered signatures, unrelated pairs are
-   pruned before exact Jaccard:
+3. **MinHash-LSH pre-filter accelerates both contradiction detection and
+   duplicate grouping.** Both detector paths now use the same LSH candidate
+   generator (`detect_contradictions` / `_lsh_candidates`) with exact Jaccard
+   as the final decision. With 24 bands x 2 rows and stopword-filtered
+   signatures, unrelated pairs are pruned before exact Jaccard:
    - diverse corpus: candidate ratio **0.18** (82% of pairs pruned)
    - dense corpus (every doc shares a template): ratio 1.00 — the honest
      worst case, LSH cannot help structurally identical docs
@@ -49,6 +51,10 @@ duplicate fraction, as designed.
      a candidate generator, not the merge decision; the merge stays
      exact Jaccard)
    - measured 10k consolidate: **437s → 131s (3.3x faster)**
+   - **What remains bounded/worst-case (NOT LSH-accelerated):** dense
+     shared-template corpora (candidate ratio → 1.0), and the per-group
+     merge writes (supersede + consolidated memory emission), which are
+     inherent to the workload and linear in the duplicate fraction.
 
 4. **Curation improved less (234.9s → 183s).** The contradiction reuse
    now runs on the LSH-pruned candidate set, but curation additionally

@@ -81,9 +81,16 @@ cognitive-science literature) converge on these concepts. Each is marked
    recorded, `consolidated` memory emitted), contradiction flags (0.6-0.8
    overlap band, report-only). Worker `dream` job kind (mode=consolidate).
    **P1d scale fix (2026-08-05):** MinHash-LSH pre-filter (24 bands x 2
-   rows, stopword-filtered signatures) prunes the all-pairs Jaccard scan
-   — measured 10k consolidate 437s → 131s on a diverse corpus; merge
-   decision stays exact Jaccard (LSH is a candidate generator only).
+   rows, stopword-filtered signatures) accelerates BOTH the contradiction
+   scan AND the duplicate-merge grouping: both use the same LSH candidate
+   generator (`detect_contradictions` / `_lsh_candidates`) with exact
+   Jaccard as the final decision. Measured 10k consolidate 437s → 131s on
+   a diverse corpus. What remains bounded/worst-case (NOT LSH-accelerated):
+   dense corpora where every document shares a structural template (LSH
+   candidate ratio → 1.0, no pruning possible), and the per-group merge
+   writes (supersede + consolidated memory emission), which are inherent
+   to the workload. LSH is a candidate generator only; the merge/contradiction
+   decisions stay exact Jaccard.
 2. **Self-curation** — DONE. `CurationService`: salience scoring
    (0.4*confidence + 0.3*recency + 0.3*usage, 720h half-life), low-value
    CANDIDATES (never deleted), contradiction pairs, `curation_review`
