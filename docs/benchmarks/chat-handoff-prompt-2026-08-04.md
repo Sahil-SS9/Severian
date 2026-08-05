@@ -2,7 +2,8 @@
 
 > Copy everything below the line into a FRESH chat with an independent
 > auditor/reviewer agent. Self-contained: no prior context needed.
-> Producing SHA: bc634ce374d15693eb5c9889742e1628315fdf92
+> Producing SHA: eb2b169e22edf4a4a2795912f390a125ee8eb13c
+> (code/evidence final: 9749a75 — the tip eb2b169 adds this prompt only)
 
 ---
 
@@ -16,7 +17,9 @@ failed command IS the finding. No fabricated numbers.
 
 - Repo: `/home/kensei/repos/Severian`
 - Branch: `fix/auditor-corrections-2026-08-04`
-- HEAD: `bc634ce374d15693eb5c9889742e1628315fdf92`
+- HEAD: `eb2b169e22edf4a4a2795912f390a125ee8eb13c`
+- Code/evidence final: `9749a750a470d68ce542bb7978554e322d25dc6a` (ancestor;
+  the delta 9749a75..HEAD is this prompt file + HANDOFF docs only)
 - Code baseline: `dfc418f226e7705b4304ae30c9b720fc12ede210`
   (the correction lane is a descendant; the diff baseline..HEAD must be
   limited to: `src/severian/benchmarks/`, `scripts/run_batch_compare.py`,
@@ -27,7 +30,7 @@ failed command IS the finding. No fabricated numbers.
 cd /home/kensei/repos/Severian
 git status --short          # expect: clean
 git branch --show-current   # expect: fix/auditor-corrections-2026-08-04
-git rev-parse HEAD          # expect: bc634ce
+git rev-parse HEAD          # expect: eb2b169
 git merge-base --is-ancestor dfc418f226e7705b4304ae30c9b720fc12ede210 HEAD && echo "ancestry OK"
 git diff --check b628a97..HEAD   # expect: exit 0 (no whitespace)
 

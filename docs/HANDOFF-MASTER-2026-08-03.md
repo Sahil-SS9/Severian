@@ -62,11 +62,16 @@ external supermemory.ai competitor.
 
 ### Verified gate state (independent 3rd-party eval, 2026-08-03, at e6ead47)
 
-- `228 passed, 36 skipped, 3 warnings` — REPRODUCED by eval.
-- `mypy --strict` clean (48 files) — REPRODUCED.
+- `228 passed, 36 skipped, 3 warnings` — REPRODUCED by eval (HISTORICAL —
+  current correction-lane gate: 271 passed / 36 skipped at eb2b169).
+- `mypy --strict` clean (48 files) — REPRODUCED (HISTORICAL — current:
+  46 files clean at eb2b169).
 - `ruff check` clean — REPRODUCED.
-- Severian quality: both lanes pass all configured release gates; raw traces
-  independently recomputed with zero discrepancy — REPRODUCED.
+- Severian quality gate at e6ead47: the 2026-08-03 eval recorded both lanes
+  passing at that commit. **SUPERSEDED (C-05): the current manifest-v1 gate
+  HONESTLY FAILS** — recall 1.000, stale 0.000, leakage 0.000, unsupported
+  0.000 pass, but citation_precision 0.9375 < 1.0 fails. No active doc may
+  claim the release gate passes. See §8 limitations item 3.
 - 5-doc anomaly 0 → 5 → 5 pattern — REPRODUCED via genuine SDK run
   (SDK timings: 1.606611 / 73.768587 / 3.784587 ms; direct-service was 0.27 /
   57.6 / 1.8 ms — the SDK numbers are the valid evidence).
@@ -294,7 +299,8 @@ review.
 | `docs/benchmarks/strategy.md` | Benchmark selection rationale (why not LOCOMO/BEAM as primary), methodology |
 | `docs/benchmarks/manifest-v1.json` | Deterministic comparison manifest (16 queries, 5 thresholds) |
 | `docs/benchmarks/evidence/2026-08-03/*.json` | Raw scale evidence (1k/10k + 100k) |
-| `docs/benchmarks/handover-third-party-eval-2026-08-03.md` | Self-contained 3rd-party eval prompt (corrected) |
+| `docs/benchmarks/chat-handoff-prompt-2026-08-04.md` | CURRENT share-ready 3rd-party audit prompt (correction lane) — use this |
+| `docs/benchmarks/handover-third-party-eval-2026-08-03.md` | HISTORICAL 3rd-party eval prompt (2026-08-03, pre-correction; superseded banner added) |
 | `docs/benchmarks/handover-superiority-2026-08-03.md` | Answers to Sahil a/b/d + research-interrogation prompt |
 | `docs/benchmarks/superiority-roadmap-2026-08-03.md` | Tier-by-tier gap analysis, ranked benchmarks/techniques, claim set |
 | `docs/handoff-brutal-critique-fixes.md` | Original P0–P2 audit findings + remediation sequence (all fixed; keep as provenance) |
