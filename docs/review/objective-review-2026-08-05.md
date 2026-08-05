@@ -151,3 +151,26 @@ backup/export policy, deletion semantics or explicit restriction,
 composition-root convergence, current benchmark evidence, clean CI,
 explicit PG/integration skips, independent final rerun, no worktree
 residue.
+
+---
+
+## Final release gate — VERIFIED 2026-08-05 (all items complete)
+
+Independent rerun at commit `b200ed0` (branch `feat/ai-memory-concepts`):
+
+| Gate | Result |
+|---|---|
+| pytest full suite | **433 passed, 36 skipped, 1 warning** (third-party httpx2 deprecation only) |
+| ruff | All checks passed (src + tests + scripts) |
+| mypy --strict | Clean except documented pre-existing `granite_embedding.py:58` (sentence_transformers optional import) |
+| Worktree residue | None — merged worktrees `severian-sec01` + `severian-architecture-repairs-2026-08-05` removed; branches deleted; `git status` clean |
+| Push state | `feat/ai-memory-concepts` == `origin/feat/ai-memory-concepts` (no ahead/behind) |
+| Comparison benchmark (current HEAD) | gate_passed True — severian-sqlite recall 1.000, stale 0.000, cross-scope 0.000 (evidence/2026-08-05-head/) |
+| Adversarial-27 (current HEAD) | recall 1.000, MRR 1.000, cit_prec 1.000, stale 0.000, unsup 0.000 — gate passed |
+| LOCOMO (current HEAD) | recall 0.962, MRR 0.962, cit_prec 0.844, stale 0.000 — honest: still fails cit_prec/unsup gate (documented, non-blocking for trusted single-user release) |
+
+All 36 review items [x] — SEC-01/02/03, DATA-01..07, JOB-01, OPS-01..07,
+ARCH-01..05, EVID-01..10. Release posture: **CONDITIONAL for trusted
+single-user, loopback-only development use** (as previously documented);
+**BLOCKED for networked/multi-user** until PG lane re-measured with a DSN
+and the LOCOMO cit_prec/unsup gaps close.
