@@ -233,14 +233,16 @@ def work(
     """
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
-        from severian.application.derivation import DerivationService
-        from severian.application.projections import ProjectionCoordinator
         from severian.application.worker import DerivationWorker
 
+        # ARCH-05: use the canonical derivation + projection from the
+        # composition root. Previously this reconstructed DerivationService
+        # WITHOUT the graph extractor, so CLI-derived memories diverged
+        # from service-derived ones.
         worker = DerivationWorker(
             bundle.repository,
-            DerivationService(bundle.repository),
-            ProjectionCoordinator(bundle.repository, bundle.lexical, bundle.vector),
+            bundle.derivation,
+            bundle.projection,
         )
         summary = worker.drain(
             worker_id=worker_id,

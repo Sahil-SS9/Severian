@@ -342,3 +342,37 @@ def test_import_rebuild_failure_reports_stale_projections(data_root: Path):
     # The stale-projection warning must be visible.
     combined = result.output + (result.stderr or "")
     assert "projections are stale" in combined or "WARNING" in combined
+
+
+def test_work_command_derives_graph_entities_via_canonical_composition(data_root: Path):
+    """ARCH-05: the CLI work command uses the canonical composition root's
+    DerivationService (WITH graph extraction). Previously it rebuilt a
+    bare DerivationService without the extractor, so CLI-derived memories
+    diverged from service-derived ones — no entities were ever written."""
+    runner = CliRunner()
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Alice works at Acme Corp", "--source", "{}"]
+    ).exit_code == 0
+    work_result = runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    )
+    assert work_result.exit_code == 0, work_result.output
+
+    # The canonical derivation with graph extraction must have written
+    # entities (the pre-ARCH-05 divergent path wrote none).
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    from severian.domain.models import Scope
+
+    scope = Scope(tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1")
+    entities = repo.list_entities(scope)
+    assert entities, "CLI work must derive graph entities via canonical composition"
+    repo.close()

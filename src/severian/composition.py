@@ -44,6 +44,7 @@ class ServiceBundle:
     vector: Any
     gateway: Any
     projection: Any
+    derivation: Any
     backend: str = "sqlite"
 
     def close(self) -> None:
@@ -112,12 +113,13 @@ def _compose(
 ) -> ServiceBundle:
     projection = ProjectionCoordinator(repository, lexical, vector)
     extraction = EntityExtractionService(repository)
+    derivation = DerivationService(repository, extraction=extraction)
     service = BuildMemoryService(
         repository=repository,
         ingestion=IngestionService(repository),
         retrieval=RetrievalService(repository, lexical, vector),
         projection=projection,
-        derivation=DerivationService(repository, extraction=extraction),
+        derivation=derivation,
         context=ContextAssembler(),
     )
     return ServiceBundle(
@@ -126,6 +128,7 @@ def _compose(
         lexical=lexical,
         vector=vector,
         projection=projection,
+        derivation=derivation,
         gateway=gateway or _HashingGateway(),
         backend=backend,
     )
