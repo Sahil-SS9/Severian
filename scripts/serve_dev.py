@@ -21,6 +21,8 @@ from typing import Any
 from severian.api.app import create_app
 from severian.application.derivation import DerivationService
 from severian.application.projections import ProjectionCoordinator
+from severian.auth.principal_resolver import PrincipalResolver
+from severian.auth.store import ApiKeyStore
 from severian.composition import build_bundle
 
 
@@ -59,6 +61,42 @@ def _start_worker(
     return thread
 
 
+# -- SEC-01: non-loopback startup guard ------------------------------------
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+class NonLoopbackGuardError(RuntimeError):
+    """Raised when starting on a non-loopback host without auth configured."""
+
+
+def is_loopback_host(host: str) -> bool:
+    """True when the host is a loopback address."""
+    return host.lower() in _LOOPBACK_HOSTS
+
+
+def should_require_auth(*, host: str, auth_file: str | None) -> bool:
+    """True when auth is required for this host.
+
+    Loopback hosts do not require auth (dev mode). Non-loopback hosts
+    require an ``--auth-file`` so the API is not exposed without
+    authentication.
+    """
+    if is_loopback_host(host):
+        return False
+    return auth_file is None
+
+
+def enforce_loopback_guard(*, host: str, auth_file: str | None) -> None:
+    """Raise if starting on a non-loopback host without auth."""
+    if should_require_auth(host=host, auth_file=auth_file):
+        raise NonLoopbackGuardError(
+            f"refusing to start on non-loopback host {host!r} without --auth-file: "
+            "the HTTP API is fail-closed; configure an auth file with API keys "
+            "before exposing on a network interface"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the Severian memory API (dev).")
     parser.add_argument("--host", default="127.0.0.1")
@@ -66,6 +104,11 @@ def main() -> None:
     parser.add_argument("--storage", default="/tmp/severian-dev/severian.db")
     parser.add_argument("--backend", default="sqlite", choices=["sqlite", "postgresql"])
     parser.add_argument("--dsn", default=None, help="PostgreSQL DSN (backend=postgresql)")
+    parser.add_argument(
+        "--auth-file",
+        default=None,
+        help="Path to the API-key store SQLite file. Required for non-loopback hosts.",
+    )
     args = parser.parse_args()
 
     root = Path(args.storage).resolve().parent
@@ -86,9 +129,18 @@ def main() -> None:
     vector_idx = bundle.vector
     gateway = bundle.gateway
 
+    # SEC-01: refuse to start on a non-loopback host without auth.
+    enforce_loopback_guard(host=args.host, auth_file=args.auth_file)
+
     _start_worker(repository, lexical_idx, vector_idx, gateway)
 
-    app = create_app(service=bundle.service, gateway=gateway)
+    # SEC-01: wire the principal resolver when an auth file is configured.
+    principal_resolver: PrincipalResolver | None = None
+    if args.auth_file:
+        auth_store = ApiKeyStore(args.auth_file)
+        principal_resolver = PrincipalResolver(store=auth_store)
+
+    app = create_app(service=bundle.service, gateway=gateway, principal_resolver=principal_resolver)
 
     import uvicorn
 

@@ -31,21 +31,41 @@
 
 ## Authentication and authorisation
 
-**Required but not yet implemented (2026-08-05):** authentication, API keys,
-and CSRF protection are *required* before any network exposure but are NOT
-implemented in the current codebase. The operator runbook documents this:
-the HTTP API is loopback-only by default and has no authentication, no API
-key validation, and no CSRF protection. Any host user can read the store.
+**Implemented (SEC-01, 2026-08-05):** API-key authentication and
+principal-bound scope are now implemented for the HTTP API.
 
-Phase 1 requires:
-- local authentication (loopback binding is not authentication);
-- API keys hashed at rest, scoped and revocable;
+- **API keys hashed at rest** with SHA-256. The credential store is a
+  small SQLite database (``--auth-file`` / ``SEVERIAN_AUTH_FILE``). Keys
+  are never persisted in plaintext; verification uses constant-time
+  comparison. Keys are scoped to a principal :class:`Scope` and are
+  revocable.
+- **Fail-closed HTTP API.** When auth is enabled (a principal resolver is
+  configured), every data endpoint requires a valid
+  ``Authorization: Bearer <key>`` header. Missing or invalid tokens are
+  rejected with 401. Cross-tenant claims are rejected with 403 (via the
+  existing ``_bind_principal``). Health endpoints (``/healthz``,
+  ``/readyz``) are exempt.
+- **Non-loopback startup guard.** ``serve_dev.py`` refuses to start on a
+  non-loopback host (not ``127.0.0.1``/``localhost``/``::1``) unless
+  ``--auth-file`` is provided. This prevents accidental network exposure
+  without authentication.
+- **SDK credential support.** ``SeverianClient`` accepts ``api_key`` and
+  sends ``Authorization: Bearer`` on every request.
+- **MCP construct-time binding.** ``SeverianMCPServer`` optionally accepts
+  a principal :class:`Scope` at construction. When bound, tool args cannot
+  switch tenant/profile — the principal's security-sensitive dimensions
+  override them. (stdio MCP cannot do interactive auth; capability binding
+  means the server's scope is fixed at construction.)
+- **Hermes construct-time binding.** ``SeverianMemoryProvider`` optionally
+  accepts a principal :class:`Scope` at construction. When bound,
+  ``initialize()`` and tool calls cannot switch tenant/profile.
+
+**Still required (not yet implemented):**
 - browser sessions using secure cookies and CSRF protection;
-- destructive operations requiring explicit confirmation + audit events.
+- destructive operations requiring explicit confirmation + audit events;
+- rate limiting (acceptable for local-first; add before network exposure).
 
-None of these are shipped yet. Do not expose the API on a network interface
-until they are implemented. See `docs/operator-runbook.md` for the current
-deployment posture.
+See `docs/operator-runbook.md` for the current deployment posture.
 
 ## Data lifecycle
 

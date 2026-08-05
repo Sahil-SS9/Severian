@@ -34,6 +34,7 @@ class Transport(Protocol):
         *,
         json: Any = None,
         params: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> Any: ...
 
     def close(self) -> None: ...
@@ -105,14 +106,20 @@ class _HTTPXTransport:
         self._client = httpx.Client(base_url=base_url, timeout=timeout)
 
     def request(
-        self, method: str, url: str, *, json: Any = None, params: Any = None
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,
+        params: Any = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         # P1-4: do NOT raise_for_status here. The client's ``_request``
         # maps non-2xx responses to ``SeverianError``; raising in the
         # transport would surface ``httpx.HTTPStatusError`` instead and
         # break the SDK error contract for every failure mode (500
         # included).
-        return self._client.request(method, url, json=json, params=params)
+        return self._client.request(method, url, json=json, params=params, headers=headers)
 
     def close(self) -> None:
         self._client.close()
@@ -128,7 +135,12 @@ class SeverianError(RuntimeError):
 
 
 class SeverianClient:
-    """Typed client for the Severian HTTP API."""
+    """Typed client for the Severian HTTP API.
+
+    SEC-01: ``api_key`` adds an ``Authorization: Bearer <key>`` header
+    to every request. When omitted, no auth header is sent (suitable
+    for loopback / dev mode where auth is disabled).
+    """
 
     def __init__(
         self,
@@ -136,10 +148,12 @@ class SeverianClient:
         base_url: str,
         transport: Transport | None = None,
         timeout: float = 30.0,
+        api_key: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._transport: Transport = transport or _HTTPXTransport(base_url, timeout=timeout)
         self._owns_transport = transport is None
+        self._api_key = api_key
         # Warm the schemas so import-time errors surface early.
         _ = APISchemaScope.model_json_schema()
 
@@ -172,7 +186,10 @@ class SeverianClient:
         params: Any = None,
     ) -> Any:
         url = f"{self._base_url}{path}"
-        response = self._transport.request(method, url, json=json, params=params)
+        headers: dict[str, str] | None = None
+        if self._api_key:
+            headers = {"Authorization": f"Bearer {self._api_key}"}
+        response = self._transport.request(method, url, json=json, params=params, headers=headers)
         if getattr(response, "status_code", 200) >= 400:
             body: Any
             try:

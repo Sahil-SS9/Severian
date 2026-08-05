@@ -31,7 +31,7 @@ severian-serve = "severian.cli.app:serve"
 packages = ["src/severian"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/application", "tests/api", "tests/sdk", "tests/cli", "tests/benchmarks", "tests/mcp", "tests/integrations", "tests/gates"]
+testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/application", "tests/api", "tests/sdk", "tests/cli", "tests/benchmarks", "tests/mcp", "tests/integrations", "tests/gates", "tests/auth"]
 
 [tool.ruff]
 line-length = 120

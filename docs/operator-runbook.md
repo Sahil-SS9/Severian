@@ -56,6 +56,19 @@ The dev launcher also starts a derivation worker thread that drains
 pending derive jobs every 0.2s, so observations automatically promote
 to memories and become searchable.
 
+To expose on a network interface (non-loopback), you MUST provide an
+auth file with API keys:
+
+```bash
+uv run python scripts/serve_dev.py \
+  --host 0.0.0.0 --port 8000 \
+  --storage /srv/severian/data/severian.db \
+  --auth-file /srv/severian/data/auth.db
+```
+
+The launcher refuses to start on a non-loopback host without
+`--auth-file` (SEC-01 non-loopback guard).
+
 Health checks:
 
 ```bash
@@ -197,13 +210,15 @@ SEVERIAN_PG_DSN=postgresql://severian:<redacted>@127.0.0.1:5432/severian \
 
 Severian is designed **local-first**. The current posture:
 
-- **Loopback binding only.** The API is served on 127.0.0.1 by
-  `serve_dev.py`. Do not bind to 0.0.0.0 without an auth layer.
-- **No authentication on the HTTP API yet.** The threat model
-  (`docs/threat-model.md`) documents local auth as a Phase 1
-  requirement. "API keys hashed at rest, scoped and revocable" is an
-  aspirational claim, **not implemented**. Anyone with host access can
-  read the store.
+- **Loopback binding only by default.** The API is served on 127.0.0.1
+  by `serve_dev.py`. Binding to a non-loopback host requires
+  `--auth-file`; the launcher refuses to start otherwise (SEC-01 guard).
+- **API-key authentication (SEC-01, implemented).** When an auth file is
+  configured, the HTTP API is fail-closed: every data endpoint requires a
+  valid `Authorization: Bearer <key>` header. Keys are hashed at rest
+  (SHA-256), scoped to a principal (tenant/profile), and revocable.
+  Generate a key file with the auth store API or a small admin script.
+  Without an auth file (loopback/dev mode), the API is open as before.
 - **No rate limiting.** Acceptable for local-first; add before any
   network exposure.
 - **No CORS middleware** (deliberate): browser clients must proxy
