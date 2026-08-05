@@ -21,20 +21,45 @@ Generator: `scripts/gen_adversarial_manifest.py`.
 - negative / abstention (aq11)
 - temporal past/present pairs (aq13-aq16)
 
-## Results (2026-08-05)
+## Results (2026-08-05) — RECONCILED at current HEAD (9d7c989, feat/ai-memory-concepts)
+
+> **EVID-03 reconciliation:** the numbers below were re-run at commit
+> `9d7c989` (2026-08-05T20:0x) via `scripts/run_adversarial_lane.py`.
+> The earlier rows in this document (0.933 recall / 0.875 cit_prec /
+> 0.022 stale) predate the determinism fix (derive-time revision guard +
+> superseded-first corpus ordering) and are superseded by the rows
+> below. Gate: **passed** (`gate_failures: {}`).
 
 ### Hash embeddings (Severian default, raw capability mode)
 
 | Provider | recall@10 | MRR | cit_prec | stale | temporal | leak | unsup |
 |---|---|---|---|---|---|---|---|
-| **Severian SQLite (hash)** | 0.933 | 0.933 | 0.875 | 0.022 | 1.000 | 0.000 | 0.062 |
+| **Severian SQLite (hash)** | **1.000** | **1.000** | **1.000** | **0.000** | 1.000 | 0.000 | **0.000** |
 | Baseline (lexical) | 0.933 | 0.718 | 0.562 | 0.173 | 0.750 | 0.000 | 0.062 |
+
+The reconciled lane meets the full release target (recall 1.000, MRR
+1.000, stale 0.000, cit_prec 1.000). The derive-time revision guard
+(Turn 1) closed the residual stale path and the superseded-first
+ordering closed the cit_prec gap; abstention (aq11) now returns no
+hits because the query-coverage abstention (min_coverage=0.4) rejects
+the weak decoy overlap.
 
 ### Granite R2 embeddings (semantic, opt-in)
 
 | Provider | recall@10 | MRR | cit_prec | stale | temporal | leak | unsup |
 |---|---|---|---|---|---|---|---|
 | **Severian SQLite (Granite)** | 1.000 | 0.967 | 0.875 | 0.021 | 1.000 | 0.000 | 0.062 |
+
+> **Reconciliation note:** the Granite row above is the pre-fix
+> measurement from the original 2026-08-05 run (before the derive-time
+> revision guard). At current HEAD, `run_adversarial_granite.py`
+> cannot re-measure with real Granite embeddings because
+> `sentence_transformers` is not installed in this session's
+> environment (falls back to hash with a different adapter
+> configuration, which is NOT a valid Granite result). The Granite
+> lane remains an opt-in semantic embedding; its release-critical
+> status is NOT blocking (Chroma/Granite are never release-blocking).
+> Re-run requires installing the optional embedding dependency.
 
 ## Findings
 
