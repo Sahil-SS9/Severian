@@ -37,7 +37,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Verify live PostgreSQL + pgvector reachable
         run: |
@@ -58,6 +58,9 @@ jobs:
 
       - name: Type check (mypy --strict)
         run: uv run mypy --strict src/severian tests/benchmarks
+
+      - name: Dependency vulnerability scan (pip-audit)
+        run: uv run pip-audit
 
       - name: Test (SQLite + live PostgreSQL lanes)
         run: uv run pytest -q
