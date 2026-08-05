@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tempfile
 import time
@@ -123,11 +124,37 @@ def main() -> None:
     out_path = Path("docs/benchmarks/evidence/2026-08-05/dreaming-scale.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def git_head() -> str:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
+            )
+            return result.stdout.strip() if result.returncode == 0 else "unknown"
+        except Exception:
+            return "unknown"
+
+    def git_branch() -> str:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
+            )
+            return result.stdout.strip() if result.returncode == 0 else "unknown"
+        except Exception:
+            return "unknown"
+
     def out_payload(r: dict[str, Any]) -> dict[str, Any]:
         return {
             "lane": "dreaming-curation-scale",
             "date": datetime.now(UTC).isoformat(),
-            "buckets": [str(b) for b in buckets],
+            # EVID-06: provenance — every evidence artifact must be
+            # traceable to the exact commit + corpus that produced it.
+            "commit": {"sha": git_head(), "branch": git_branch()},
+            "corpus": {
+                "mode": args.corpus_mode,
+                "buckets": [str(b) for b in buckets],
+                "generator": "deterministic synthetic (no RNG seed; content template + modulo near-duplicates)",
+                "near_duplicate_ratio": "~10%",
+            },
             "results": r,
             "honest_notes": (
                 "Synthetic seeded corpus; ~10% near-duplicates per bucket. "

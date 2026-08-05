@@ -1,41 +1,33 @@
 {
   "lane": "dreaming-curation-scale",
-  "date": "2026-08-05T12:01:26.359141+00:00",
-  "buckets": [
-    "1000",
-    "10000"
-  ],
+  "date": "2026-08-05T20:07:58.573932+00:00",
+  "commit": {
+    "sha": "6d40e2b6463cf4f5f615956f634698b969ff9a32",
+    "branch": "feat/ai-memory-concepts"
+  },
+  "corpus": {
+    "mode": "dense",
+    "buckets": [
+      "1000"
+    ],
+    "generator": "deterministic synthetic (no RNG seed; content template + modulo near-duplicates)",
+    "near_duplicate_ratio": "~10%"
+  },
   "results": {
     "1000": {
       "consolidation": {
         "memories": 1000,
-        "seconds": 5.811,
-        "duplicate_groups": 462,
-        "merged": 462,
-        "contradictions": 16537,
-        "memories_per_sec": 172.1
+        "seconds": 6.274,
+        "duplicate_groups": 50,
+        "merged": 50,
+        "contradictions": 404550,
+        "memories_per_sec": 159.4
       },
       "curation": {
         "memories": 1000,
-        "seconds": 2.383,
+        "seconds": 2.635,
         "scored": 1000,
-        "memories_per_sec": 419.7
-      }
-    },
-    "10000": {
-      "consolidation": {
-        "memories": 10000,
-        "seconds": 131.238,
-        "duplicate_groups": 4737,
-        "merged": 4737,
-        "contradictions": 1655382,
-        "memories_per_sec": 76.2
-      },
-      "curation": {
-        "memories": 10000,
-        "seconds": 183.007,
-        "scored": 10000,
-        "memories_per_sec": 54.6
+        "memories_per_sec": 379.5
       }
     }
   },
