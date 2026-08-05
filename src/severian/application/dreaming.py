@@ -229,6 +229,11 @@ class RetentionPolicyService:
                 )
             )
             for memory_id in eval_result.archived_ids:
+                # OPS-05: idempotent re-run — a second apply_archive on the
+                # same scope must not crash on already-archived memories.
+                archived = self._repository.get_memory(scope, memory_id)
+                if archived.superseded_by_id is not None:
+                    continue
                 self._repository.supersede_memory(scope, memory_id, replacement_id=marker.id)
             eval_result.expired_ids = list(eval_result.archived_ids)
             eval_result.archived_ids = []
@@ -435,6 +440,13 @@ class ConsolidationService:
             survivor = self._repository.get_memory(scope, group.survivor_id)
             merged_sources = sorted(set(survivor.source_observation_ids) | set(group.merged_source_ids))
             for old_id in group.superseded_ids:
+                # OPS-05: idempotent re-run — a second consolidate pass on
+                # the same scope must not crash on an already-superseded
+                # duplicate (supersede_memory raises ConflictError). Skip
+                # members already superseded by a previous pass.
+                existing = self._repository.get_memory(scope, old_id)
+                if existing.superseded_by_id is not None:
+                    continue
                 self._repository.supersede_memory(scope, old_id, replacement_id=survivor.id)
                 self._repository.append_audit(
                     scope,

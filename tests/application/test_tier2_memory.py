@@ -200,6 +200,28 @@ def test_retention_apply_archive_is_opt_in_non_destructive() -> None:
         assert "retention_archive" in kinds
 
 
+def test_retention_apply_archive_is_idempotent_on_rerun() -> None:
+    """OPS-05: a second apply_archive on the same scope must not crash
+    (no ConflictError on already-archived memories) and must not create a
+    duplicate retention marker."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, *_ = _bundle(tmp)
+        scope = _scope()
+        _add_memory(repo, scope, "expired fact one", created_delta=timedelta(days=500))
+        service = RetentionPolicyService(repo, now=datetime.now(UTC))
+
+        first = service.apply_archive(scope, {"max_age_days": 365})
+        assert first.expired_ids
+
+        # Second pass: same scope, no crash, no duplicate marker.
+        second = service.apply_archive(scope, {"max_age_days": 365})
+        assert second.expired_ids == []
+        markers = [
+            m for m in repo.list_memories_history(scope) if m.kind == "retention_archive"
+        ]
+        assert len(markers) == 1
+
+
 # --- contradiction scan -----------------------------------------------------
 
 

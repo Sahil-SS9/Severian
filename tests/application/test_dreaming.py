@@ -121,6 +121,31 @@ def test_consolidation_merges_near_duplicates_non_destructively() -> None:
         assert report.audit_events >= 1
 
 
+def test_consolidation_is_idempotent_on_rerun() -> None:
+    """OPS-05: running consolidate twice on the same scope must not
+    crash (no ConflictError on re-superseding) and must not emit a
+    duplicate consolidated memory."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, *_ = _bundle(tmp)
+        scope = _scope()
+        _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=10))
+        _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=1))
+        service = ConsolidationService(repo)
+
+        first = service.consolidate(scope)
+        assert len(first.duplicate_groups) == 1
+        assert len(first.consolidated_memory_ids) == 1
+
+        # Second pass: same scope, no new work, no crash, no duplicate.
+        second = service.consolidate(scope)
+        assert second.duplicate_groups == []
+        consolidated_kinds = [
+            m for m in repo.list_memories_history(scope) if m.kind == "consolidated"
+        ]
+        # Exactly ONE consolidated memory exists (first pass only).
+        assert len(consolidated_kinds) == 1
+
+
 def test_consolidation_flags_contradictions_without_mutation() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         repo, *_ = _bundle(tmp)
