@@ -89,26 +89,36 @@ def _run_manifest(manifest_path: Path, run_namespace: str, workdir: Path) -> dic
 
 def test_collection_names_namespace_isolated() -> None:
     """Two adapters with different run namespaces resolve to different collections."""
-    a = ChromaAdapter(provider_id="chroma", workdir="/tmp/bench-test-ns-a", run_namespace="run-1")
-    b = ChromaAdapter(provider_id="chroma", workdir="/tmp/bench-test-ns-b", run_namespace="run-2")
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    root = Path(tempfile.mkdtemp(prefix="severian-bench-test-ns-"))
     try:
+        a = ChromaAdapter(provider_id="chroma", workdir=str(root), run_namespace="run-1")
+        b = ChromaAdapter(provider_id="chroma", workdir=str(root), run_namespace="run-2")
         assert a._collection_name("t1/p1/c1/a1/s1") != b._collection_name("t1/p1/c1/a1/s1")
         assert "run-1" in a._collection_name("t1/p1/c1/a1/s1")
         assert "run-2" in b._collection_name("t1/p1/c1/a1/s1")
     finally:
-        shutil.rmtree("/tmp/bench-test-ns-a", ignore_errors=True)
-        shutil.rmtree("/tmp/bench-test-ns-b", ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_prefix_changes_collection() -> None:
     """Two prefixes cannot resolve to the same collection."""
-    a = ChromaAdapter(provider_id="chroma", workdir="/tmp/bench-test-prefix-a", collection_prefix="alpha")
-    b = ChromaAdapter(provider_id="chroma", workdir="/tmp/bench-test-prefix-b", collection_prefix="beta")
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    root = Path(tempfile.mkdtemp(prefix="severian-bench-test-prefix-"))
     try:
+        a = ChromaAdapter(provider_id="chroma", workdir=str(root), collection_prefix="alpha")
+        b = ChromaAdapter(provider_id="chroma", workdir=str(root), collection_prefix="beta")
         assert a._collection_name("t1/p1/c1/a1/s1") != b._collection_name("t1/p1/c1/a1/s1")
     finally:
-        shutil.rmtree("/tmp/bench-test-prefix-a", ignore_errors=True)
-        shutil.rmtree("/tmp/bench-test-prefix-b", ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_run_order_independence() -> None:
@@ -191,6 +201,69 @@ def test_same_workdir_different_namespace_is_isolated() -> None:
         b.close()
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_same_namespace_reuse_refused() -> None:
+    """Re-claiming the same namespace in the same workdir root must raise.
+
+    The reviewer's direct check: same workdir + same namespace returned
+    ['d1', 'c01'] — prior invocation documents visible in the new run.
+    The adapter now refuses namespace reuse outright (per-process claim
+    registry), so this contamination path cannot occur.
+    """
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    workdir = Path(tempfile.mkdtemp(prefix="severian-bench-reuse-"))
+    try:
+        a = ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="ns")
+        a.ingest("d1", "annual revenue ten million", scope="t1/p1/c1/a1/s1")
+        a.close()
+        with pytest.raises(ValueError):
+            ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="ns")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_namespace_path_traversal_rejected() -> None:
+    """A namespace with path separators / .. must be rejected, never escape."""
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    workdir = Path(tempfile.mkdtemp(prefix="severian-bench-traversal-"))
+    try:
+        for bad in ("../escaped", "a/b", "/abs", "..", "a\\b"):
+            with pytest.raises(ValueError):
+                ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace=bad)
+        # The escaped directory must NOT exist outside the root.
+        assert not (workdir.parent / "escaped").exists()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_reset_refuses_unowned_prefix_matching_dir() -> None:
+    """reset() must refuse a directory that shares the basename prefix but
+    carries no ownership marker — a user directory must never be deleted."""
+    import sys
+
+    site = next((Path("/tmp/bench-compare-venv") / "lib").glob("python*/site-packages"), None)
+    if site is not None and str(site) not in sys.path:
+        sys.path.insert(0, str(site))
+    victim = Path(tempfile.mkdtemp(prefix="severian-bench-chroma-"))
+    sentinel = victim / "user-data.txt"
+    sentinel.write_text("user data")
+    try:
+        adapter = ChromaAdapter(provider_id="chroma", workdir=str(victim))
+        with pytest.raises(PermissionError):
+            adapter.reset()
+        assert victim.exists(), "reset() must not delete an unowned directory"
+        assert sentinel.exists(), "user data must survive reset()"
+    finally:
+        shutil.rmtree(victim, ignore_errors=True)
 
 
 def test_default_workdir_is_unique_per_adapter() -> None:

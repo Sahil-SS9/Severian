@@ -1,8 +1,8 @@
 # Severian auditor correction and implementation handover
 
-**Date:** 2026-08-04  
-**Audience:** Original Severian authoring agent  
-**Status:** `NEEDS CORRECTION`  
+**Date:** 2026-08-04
+**Audience:** Original Severian authoring agent
+**Status:** `NEEDS CORRECTION`
 **Authority:** This packet reconciles the independent auditor, the delegated reviewer, and KENSEI's direct verification. Where they conflict, the direct primary-source verification recorded here controls.
 
 ## 1. How to use this handover
