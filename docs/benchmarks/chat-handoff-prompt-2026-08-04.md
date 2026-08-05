@@ -34,7 +34,9 @@ git branch --show-current   # expect: fix/auditor-corrections-2026-08-04
 git rev-parse HEAD          # any descendant of 9749a75 (see HEAD note above)
 git merge-base --is-ancestor 9749a750a470d68ce542bb7978554e322d25dc6a HEAD && echo "evidence ancestry OK"
 git diff --name-only 9749a750a470d68ce542bb7978554e322d25dc6a..HEAD | cat
-                              # must be docs/ only — code changes are a finding
+                              # must be under docs/ ONLY (incl. evidence JSON
+                              # under docs/benchmarks/evidence/) — any code
+                              # change is a finding
 git merge-base --is-ancestor dfc418f226e7705b4304ae30c9b720fc12ede210 HEAD && echo "ancestry OK"
 git diff --check b628a97..HEAD   # expect: exit 0 (no whitespace)
 
