@@ -16,7 +16,7 @@ uses a different corpus/conditions — no false equivalence).
 | Metric | Severian SQLite | Severian PG | ChromaDB 1.5.9 | Source |
 |---|---|---|---|---|
 | recall@10 (manifest-v1) | 1.000 | 1.000 | 1.000 | results.md §1 |
-| citation_precision (manifest-v1) | 0.938 | 0.938 | 0.812 | results.md §1 |
+| citation_precision (manifest-v1) | 1.000 | 1.000 | 0.812 | results.md §1 |
 | stale_fact_rate (manifest-v1) | 0.000 | 0.000 | 0.179 | results.md §1 |
 | cross_scope_leakage (manifest-v1) | 0.000 | 0.000 | 0.000 | results.md §1 |
 | unsupported_answer_rate (manifest-v1) | 0.000 | 0.000 | 0.062 | results.md §1 |
@@ -33,6 +33,12 @@ uses a different corpus/conditions — no false equivalence).
 > **Correction (2026-08-04):** this table previously carried pre-correction
 > numbers (cit_prec 1.000, Chroma cit_prec 0.353, Chroma recall 0.964).
 > Superseded per C-05 — current evidence above is authoritative.
+>
+> **Correction (2026-08-05):** cit_prec raised 0.938 → 1.000 by the
+> temporal query-orientation fix (commit 0403f3f): present-oriented
+> temporal queries now rank the active head first. Evidence:
+> `evidence/2026-08-04/result.json` (pre-fix) vs Turn-1 focused lane
+> (post-fix, cit_prec 1.000, recall 1.000, stale 0.000).
 
 ## 2. Vendor claims → our position (C-1)
 

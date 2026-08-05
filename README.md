@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/severian-hero.png" alt="Severian" width="40%">
+
 # Severian
 
 *Local-first AI memory platform. SQLite or PostgreSQL. Deterministic. Offline-capable. CVE-free core.*
@@ -7,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-299%20passed-brightgreen)](https://github.com/Sahil-SS9/severian)
+[![Tests](https://img.shields.io/badge/tests-310%20passed-brightgreen)](https://github.com/Sahil-SS9/severian)
 [![MCP](https://img.shields.io/badge/MCP-Ready-6366f1)](https://modelcontextprotocol.io)
 [![Platform](https://img.shields.io/badge/platform-Linux-blueviolet)](https://github.com/Sahil-SS9/severian)
 
@@ -26,6 +28,7 @@
 - [MCP Server](#mcp-server)
 - [Benchmarks](#benchmarks)
 - [Architecture](#architecture)
+- [Comparison with Other Memory Providers](#comparison-with-other-memory-providers)
 - [Memory Concepts](#memory-concepts)
 - [Security & Privacy Model](#security--privacy-model)
 - [Configuration](#configuration)
@@ -177,18 +180,70 @@ Honest limits: cold derive-on-read is super-linear (mitigated by the worker mode
 ## Architecture
 
 ```text
-source input
-  -> IngestionService (normalisation + optional attachments)
-  -> Canonical store (SQLite/PostgreSQL): observations, memories,
-     entities, relations, jobs — append-only, scoped, hashed
-  -> DerivationService (scope + cloud-policy gate; deterministic local default)
-  -> Memories with source/model/prompt lineage + usage_count
-  -> ProjectionCoordinator
-       -> FTS5 projection
-       -> vector projection (hash default; Granite R2 opt-in)
-  -> RetrievalService (hybrid RRF, abstention, salience, shared-scope)
-  -> ContextAssembler (bounded, source-cited context)
-  -> GraphRetrievalService (entity/relation neighborhood, multi-hop)
+                        ┌──────────────────────────────────────────┐
+                        │                SOURCE INPUT              │
+                        │  text observation · attachments (multi-  │
+                        │  modal metadata: image/audio/video/file) │
+                        └──────────────────┬───────────────────────┘
+                                           │
+                                           ▼
+                        ┌──────────────────────────────────────────┐
+                        │          IngestionService                │
+                        │  normalise · hash raw · source identity  │
+                        └──────────────────┬───────────────────────┘
+                                           │
+                 ┌─────────────────────────┼─────────────────────────┐
+                 ▼                         ▼                         ▼
+   ┌───────────────────────┐   ┌───────────────────────┐   ┌───────────────────────┐
+   │   CANONICAL STORE     │   │   derive job queue    │   │  Entity/Relation       │
+   │  (SQLite | PostgreSQL)│──▶│  (leased, crash-safe, │──▶│  Graph (auto-populated │
+   │  observations         │   │   idempotent)         │   │  by EntityExtraction)  │
+   │  memories             │   └───────────────────────┘   └───────────────────────┘
+   │  entities/relations   │
+   │  jobs · audit events  │   append-only · scoped · hashed · supersede-aware
+   └───────────────────────┘
+                 │
+                 ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  DerivationService (worker drains derive/episode/dream jobs) │
+   │  · policy-gated (cloud_allowed false by default)             │
+   │  · deterministic local gateway (hash) OR Granite R2 opt-in   │
+   │  · skips superseded observations (P0-5)                      │
+   │  · EntityExtractionService upserts entities + typed relations│
+   └──────────────────────────────────────────────────────────────┘
+                 │
+                 ├──────────────► ProjectionCoordinator
+                 │                 ├──► FTS5 lexical projection (BM25)
+                 │                 └──► vector projection (hash default;
+                 │                      Granite R2 opt-in, dim auto)
+                 │
+                 ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  RetrievalService (hybrid RRF fusion)                        │
+   │  · abstention floor (opt-in)   · salience-weighted ranking   │
+   │  · shared-scope read (search_shared, opt-in multi-agent)     │
+   │  · temporal query orientation (active head first for present)│
+   └───────────────┬──────────────────────────────────────────────┘
+                   │
+                   ├──────────────► ContextAssembler (bounded, source-cited)
+                   │
+                   ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  GraphRetrievalService                                       │
+   │  · BFS neighborhood over Entity/Relation (both directions)   │
+   │  · temporal validity filtering (expired relations excluded)  │
+   │  · related_memories by min graph distance                    │
+   └──────────────────────────────────────────────────────────────┘
+
+   OFFLINE SELF-REGULATION (dream worker jobs, non-destructive):
+   ┌──────────────────────────────────────────────────────────────┐
+   │  ConsolidationService  · Jaccard near-dup merge (>= 0.8)     │
+   │  CurationService       · salience scoring (recency+usage+    │
+   │                          confidence), review markers only    │
+   │  RetentionPolicyService· max_age/min_usage/kinds policy,     │
+   │                          evaluate + opt-in archive           │
+   │  ContradictionScanService · report-only, never auto-resolves │
+   └──────────────────────────────────────────────────────────────┘
 ```
 
 Design invariants:
@@ -196,8 +251,39 @@ Design invariants:
 - **Append-only + supersede**: corrections create revisions; old heads stay in history (P0-5); rollback restores them (A-2).
 - **Worker lifecycle**: derive/episode/dream jobs are leased, crash-safe, idempotent (P0-4).
 - **Scope is the security boundary**: every read/write filters by the 5-D scope; cross-scope reads return empty, never leak existence.
+- **Deterministic graph**: EntityExtractionService is rule-based; the same observation always yields the same entities/relations (no LLM, no randomness).
 
 See `docs/memory-engine.md`, `docs/architecture.md`, `docs/operator-runbook.md`.
+
+## Comparison with Other Memory Providers
+Severian is a local-first, deterministic memory PLATFORM — not a hosted
+service. The honest comparison (feature map, 2026-08-05; measured where
+Severian numbers exist, vendor-labelled otherwise). Full matrix:
+`docs/benchmarks/comparison-matrix-2026-08-05.md`.
+
+| Capability | **Severian** | Mnemosyne | Honcho | Hindsight | Supermemory | Mem0 | Zep/Graphiti |
+|---|---|---|---|---|---|---|---|
+| Local-first / offline | **YES (default)** | YES (Hermes native) | no (managed) | YES (MIT) | self-hostable | self-host | self-host |
+| Correction / supersession | **YES (0.000 stale, measured)** | partial | partial | partial | resolves contradictions | partial | bi-temporal |
+| Immutable audit + rollback | **YES (append-only, A-2)** | ? | no | no | ? | no | partial |
+| 5-D scope isolation | **YES (0.000 leakage)** | profile-scoped | multi-tenant | bank-scoped | user-scoped | 4-dim | graph-scoped |
+| Abstention (unknown → nothing) | **YES (0.000 unsup)** | partial | no | ? | no | no | no |
+| Deterministic embeddings | **YES (hash default)** | n/a | no (LLM) | no (LLM) | no (LLM) | no (LLM) | no (LLM) |
+| Temporal reasoning | **YES (1.000)** | ? | partial | YES (belief nets) | YES | partial | **bi-temporal (best-in-class)** |
+| Knowledge-update handling | **YES (supersede chain)** | ? | partial | YES | YES | partial | YES |
+| Multi-session / episodic | **YES (episode jobs)** | session-based | YES | YES | YES | YES | YES |
+| Graph retrieval | **YES (BFS multi-hop)** | ? | partial (peers) | YES (mental models) | YES (memory graph) | partial | **YES (SOTA)** |
+| Offline self-curation (dreaming) | **YES (worker jobs)** | YES (dreaming) | partial (deriver) | YES (reflect) | partial | no | no |
+| Benchmark transparency | **open harness + evidence** | n/a | no | arXiv paper | MemoryBench open | vendor numbers vary | paper |
+
+Where Severian leads (measured): correction/supersession, abstention,
+immutable audit + rollback, scope isolation, determinism, benchmark
+transparency. Where it trails (honest): hosted API (roadmap), default
+semantic embeddings (Granite opt-in pending A-3), LongMemEval
+reproduction (not yet run), dreaming O(n²) at 10k+ (LSH pre-filter
+planned). Hindsight leads on structured-belief conversation memory;
+Zep/Graphiti on bi-temporal knowledge graphs; Supermemory on recall
+speed (sub-300ms) and benchmark marketing.
 
 ## Memory Concepts
 

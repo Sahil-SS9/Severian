@@ -1,0 +1,43 @@
+{
+  "lane": "dreaming-curation-scale",
+  "date": "2026-08-05T10:30:31.117210+00:00",
+  "buckets": [
+    "1000",
+    "10000"
+  ],
+  "results": {
+    "1000": {
+      "consolidation": {
+        "memories": 1000,
+        "seconds": 6.281,
+        "duplicate_groups": 50,
+        "merged": 50,
+        "contradictions": 404550,
+        "memories_per_sec": 159.2
+      },
+      "curation": {
+        "memories": 1000,
+        "seconds": 2.314,
+        "scored": 1000,
+        "memories_per_sec": 432.1
+      }
+    },
+    "10000": {
+      "consolidation": {
+        "memories": 10000,
+        "seconds": 437.002,
+        "duplicate_groups": 500,
+        "merged": 500,
+        "contradictions": 40495500,
+        "memories_per_sec": 22.9
+      },
+      "curation": {
+        "memories": 10000,
+        "seconds": 234.909,
+        "scored": 10000,
+        "memories_per_sec": 42.6
+      }
+    }
+  },
+  "honest_notes": "Synthetic seeded corpus; ~10% near-duplicates per bucket. Consolidation is O(n^2) pairwise \u2014 expect super-linear cost. Curation is O(n) scoring (recency + usage + confidence). Not a throughput claim; the cost curve is the finding."
+}
