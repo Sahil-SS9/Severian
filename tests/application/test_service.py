@@ -216,3 +216,23 @@ def test_synchronous_derive_is_bounded(bundle):
         sc, query="fact", limit=20, derive=True, gateway=bundle["gateway"], derive_max_observations=2
     )
     assert len(hits3) == 5
+
+
+def test_projection_status_is_authoritative_contract(bundle):
+    """ARCH-02: ProjectionCoordinator.status is the ONE authoritative
+    projection contract — after a derive+rebuild through the service,
+    the coordinator's digest-based status is in sync and matches what
+    search returns (no second, drifting projection contract)."""
+    sc = _scope()
+    bundle["service"].ingest_observation(sc, content="Ada founded a company", source={"uri": "a://1"})
+    bundle["service"].search(sc, query="Ada", limit=5, derive=True, gateway=bundle["gateway"])
+
+    coordinator = ProjectionCoordinator(bundle["repo"], bundle["fts"], bundle["vector"])
+    status = coordinator.status(sc)
+    assert status.in_sync is True
+    assert status.canonical_memories == status.lexical_entries == status.vector_entries
+    assert status.canonical_memories >= 1
+
+    # Search reads the SAME contract: hits match the canonical count.
+    hits = bundle["service"].search(sc, query="*", limit=200)
+    assert len(hits) == status.canonical_memories
