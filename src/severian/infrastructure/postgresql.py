@@ -22,6 +22,7 @@ safe to call on an already-initialised database.
 
 The DSN is a standard libpq URL, e.g. ``postgresql://user:pass@host:5432/db``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -32,7 +33,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, inspect, or_, select, update
+from sqlalchemy import (
+    Column,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    func,
+    inspect,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Connection, Engine
@@ -123,18 +137,10 @@ class PostgreSQLBackend:
         with self.engine.begin() as connection:
             connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
             metadata.create_all(connection)
-            connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_records_type ON records (record_type)"
-            )
-            connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_records_tenant ON records (tenant_id)"
-            )
-            connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_records_collection ON records (collection_id)"
-            )
-            connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_records_status ON records (status)"
-            )
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_type ON records (record_type)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_tenant ON records (tenant_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_collection ON records (collection_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_status ON records (status)")
 
     def verify_schema(self) -> None:
         """Fail startup on schema mismatch (P1-3).
@@ -162,9 +168,7 @@ class PostgreSQLBackend:
             has_version_table = inspect(connection).has_table("alembic_version")
             version = None
             if has_version_table:
-                version = connection.execute(
-                    sa_text("SELECT version_num FROM alembic_version")
-                ).scalar_one_or_none()
+                version = connection.execute(sa_text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
 
         if version is None:
             # Fresh install (or pre-migration database): initialize()
@@ -196,8 +200,7 @@ class PostgreSQLBackend:
         allow = db_name.lower().count("test") > 0 or os.environ.get("SEVERIAN_PG_ALLOW_RESET") == "1"
         if not allow:
             raise ValueError(
-                "reset() refused: database is not test-owned "
-                f"(db_name={db_name!r}, SEVERIAN_PG_ALLOW_RESET not set)"
+                f"reset() refused: database is not test-owned (db_name={db_name!r}, SEVERIAN_PG_ALLOW_RESET not set)"
             )
         with self.engine.begin() as connection:
             pg_vectors.drop(connection, checkfirst=True)
@@ -409,9 +412,7 @@ class PostgreSQLBackend:
         # raw_hash; the raw pair is never rewritten on revision.
         raw = observation.raw_content or observation.content
         raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
-        candidate = observation.model_copy(
-            update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash}
-        )
+        candidate = observation.model_copy(update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash})
         # Dedupe on stable source identity + content digest, never digest
         # alone: ``"1"`` from note://A and ``"1"`` from note://B are
         # distinct evidence and must not collapse (P0-1).
@@ -454,9 +455,7 @@ class PostgreSQLBackend:
         digest = hashlib.sha256(observation.content.encode()).hexdigest()
         raw = observation.raw_content or observation.content
         raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
-        candidate = observation.model_copy(
-            update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash}
-        )
+        candidate = observation.model_copy(update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash})
         identity_parts: tuple[object, ...] = (digest,)
         source = source_identity(candidate.source)
         if source:
@@ -669,12 +668,16 @@ class PostgreSQLBackend:
         ]
         with self.engine.begin() as connection:
             existing_by_identity: dict[tuple[str, str], Memory] = {}
-            rows = connection.execute(
-                select(records.c.payload).where(
-                    records.c.record_type == "memory",
-                    records.c.identity_key.in_(identities),
+            rows = (
+                connection.execute(
+                    select(records.c.payload).where(
+                        records.c.record_type == "memory",
+                        records.c.identity_key.in_(identities),
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for value in rows:
                 memory = Memory.model_validate(value)
                 key = self._identity(
@@ -715,19 +718,38 @@ class PostgreSQLBackend:
         return self._get("memory", memory_id, Memory, scope=scope)
 
     def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
-        """Increment a memory's usage_count by one (retrieval hit)."""
+        """Increment a memory's usage_count by one (retrieval hit).
+
+        Atomic increment (DATA-07): the update runs in one statement
+        against the CURRENT payload — it never rewrites a stale read-back
+        copy. A concurrent supersede can therefore not be lost to a
+        usage update that overwrote the whole payload with an old value.
+        """
         self._require_scope(scope)
-        memory = self.get_memory(scope, memory_id)
-        if memory.superseded_by_id is not None:
-            return memory
-        updated = memory.model_copy(update={"usage_count": memory.usage_count + 1})
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 update(records)
-                .where(records.c.id == memory_id)
-                .values(payload=updated.model_dump(mode="json"))
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                )
+                .values(
+                    payload=func.jsonb_set(
+                        records.c.payload,
+                        "{usage_count}",
+                        (records.c.payload["usage_count"].astext.cast(Integer) + 1),
+                    )
+                )
             )
-        return updated
+            if result.rowcount == 0:
+                # No active memory in this scope with this id: it is either
+                # superseded (usage on stale heads is not recorded) or does
+                # not exist. Return the (possibly superseded) record as-is
+                # for the caller, matching the pre-fix no-op contract.
+                return self.get_memory(scope, memory_id)
+        return self.get_memory(scope, memory_id)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded (P0-5)."""
@@ -761,9 +783,7 @@ class PostgreSQLBackend:
         chain: dict[str, Memory] = {}
         with self.engine.connect() as connection:
             rows = connection.execute(
-                select(records.c.payload).where(
-                    records.c.record_type == "memory", *self._scope_predicates(scope)
-                )
+                select(records.c.payload).where(records.c.record_type == "memory", *self._scope_predicates(scope))
             ).scalars()
             for value in rows:
                 memory = Memory.model_validate(value)
@@ -789,13 +809,17 @@ class PostgreSQLBackend:
         self._require_scope(scope)
         superseded = 0
         with self.engine.begin() as connection:
-            rows = connection.execute(
-                select(records.c.id, records.c.payload).where(
-                    records.c.record_type == "memory",
-                    *self._scope_predicates(scope),
-                    records.c.payload["superseded_by_id"].astext.is_(None),
+            rows = (
+                connection.execute(
+                    select(records.c.id, records.c.payload).where(
+                        records.c.record_type == "memory",
+                        *self._scope_predicates(scope),
+                        records.c.payload["superseded_by_id"].astext.is_(None),
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             for row in rows:
                 memory = Memory.model_validate(row["payload"])
                 if observation_id not in memory.source_observation_ids:
@@ -829,11 +853,7 @@ class PostgreSQLBackend:
             connection.execute(
                 update(records)
                 .where(records.c.id == memory_id)
-                .values(
-                    payload=memory.model_copy(
-                        update={"superseded_by_id": replacement_id}
-                    ).model_dump(mode="json")
-                )
+                .values(payload=memory.model_copy(update={"superseded_by_id": replacement_id}).model_dump(mode="json"))
             )
         return self.get_memory(scope, memory_id)
 
@@ -1076,12 +1096,16 @@ class PostgreSQLBackend:
             .scalar_subquery()
         )
         with self.engine.begin() as connection:
-            row = connection.execute(
-                update(records)
-                .where(records.c.id == pending_id, records.c.status == "pending")
-                .values(status="running", lease_until=lease_iso)
-                .returning(records.c.id, records.c.payload)
-            ).mappings().one_or_none()
+            row = (
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == pending_id, records.c.status == "pending")
+                    .values(status="running", lease_until=lease_iso)
+                    .returning(records.c.id, records.c.payload)
+                )
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 raise NotFoundError("no pending job")
             prior = Job.model_validate(row["payload"])
@@ -1110,13 +1134,17 @@ class PostgreSQLBackend:
         if status not in ("done", "failed"):
             raise ValueError("job status must be 'done' or 'failed'")
         with self.engine.begin() as connection:
-            row = connection.execute(
-                select(records.c.payload).where(
-                    records.c.id == job_id,
-                    records.c.record_type == "job",
-                    records.c.status == "running",
+            row = (
+                connection.execute(
+                    select(records.c.payload).where(
+                        records.c.id == job_id,
+                        records.c.record_type == "job",
+                        records.c.status == "running",
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 raise NotFoundError("job not claimed")
             job = Job.model_validate(row["payload"])
@@ -1148,14 +1176,18 @@ class PostgreSQLBackend:
         now_iso = _iso(now_value)
         reaped = 0
         with self.engine.begin() as connection:
-            rows = connection.execute(
-                select(records.c.id, records.c.payload).where(
-                    records.c.record_type == "job",
-                    records.c.status == "running",
-                    records.c.lease_until.is_not(None),
-                    records.c.lease_until < now_iso,
+            rows = (
+                connection.execute(
+                    select(records.c.id, records.c.payload).where(
+                        records.c.record_type == "job",
+                        records.c.status == "running",
+                        records.c.lease_until.is_not(None),
+                        records.c.lease_until < now_iso,
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             for row in rows:
                 job = Job.model_validate(row["payload"])
                 if job.attempts >= max_attempts:
@@ -1173,9 +1205,9 @@ class PostgreSQLBackend:
                         .where(records.c.id == row["id"])
                         .values(
                             status="pending",
-                            payload=job.model_copy(
-                                update={"worker_id": None, "lease_until": None}
-                            ).model_dump(mode="json"),
+                            payload=job.model_copy(update={"worker_id": None, "lease_until": None}).model_dump(
+                                mode="json"
+                            ),
                         )
                     )
                 reaped += 1
@@ -1304,11 +1336,7 @@ class PostgreSQLBackend:
             with self.engine.begin() as connection:
                 existing_rows = [dict(row) for row in connection.execute(select(records)).mappings()]
                 existing = {row["id"]: row for row in existing_rows}
-                existing_identities = {
-                    key: row["id"]
-                    for row in existing_rows
-                    if (key := identity(row)) is not None
-                }
+                existing_identities = {key: row["id"] for row in existing_rows if (key := identity(row)) is not None}
                 for item in incoming:
                     current = existing.get(item["id"])
                     if current is not None and current != item:

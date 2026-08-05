@@ -562,21 +562,38 @@ class SQLiteRepository:
         return self._get("memory", memory_id, Memory, scope=scope)
 
     def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
-        """Increment a memory's usage_count by one (retrieval hit)."""
+        """Increment a memory's usage_count by one (retrieval hit).
+
+        Atomic increment (DATA-07): the update runs in one statement
+        against the CURRENT payload — it never rewrites a stale read-back
+        copy. A concurrent supersede can therefore not be lost to a
+        usage update that overwrote the whole payload with an old value.
+        """
         self._require_scope(scope)
-        memory = self.get_memory(scope, memory_id)
-        if memory.superseded_by_id is not None:
-            # Usage on a superseded (stale) head is not recorded — it is
-            # no longer an active retrieval target.
-            return memory
-        updated = memory.model_copy(update={"usage_count": memory.usage_count + 1})
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 update(records)
-                .where(records.c.id == memory_id)
-                .values(payload=updated.model_dump(mode="json"))
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+                )
+                .values(
+                    payload=func.json_set(
+                        records.c.payload,
+                        "$.usage_count",
+                        func.json_extract(records.c.payload, "$.usage_count") + 1,
+                    )
+                )
             )
-        return updated
+            if result.rowcount == 0:
+                # No active memory in this scope with this id: it is either
+                # superseded (usage on stale heads is not recorded) or does
+                # not exist. Return the (possibly superseded) record as-is
+                # for the caller, matching the pre-fix no-op contract.
+                return self.get_memory(scope, memory_id)
+        return self.get_memory(scope, memory_id)
 
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded.
