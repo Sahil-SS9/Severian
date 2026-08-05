@@ -209,6 +209,12 @@ class _FakeRepository:
     def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
         return 0
 
+    def list_dead_letter_jobs(self) -> list[Job]:
+        return []
+
+    def requeue_job(self, job_id: str) -> Job:
+        raise NotFoundError(f"dead-letter job {job_id!r} not found")
+
     def ack_outbox(self, event_id: str) -> None:
         raise NotFoundError("outbox event not found or already acked")
 

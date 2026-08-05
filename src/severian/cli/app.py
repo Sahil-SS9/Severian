@@ -258,6 +258,42 @@ def work(
         bundle.close()
 
 
+@cli.command("dead-letter")
+def dead_letter(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    requeue: str = typer.Option("", "--requeue", help="Job ID to requeue (recover) back to pending."),
+) -> None:
+    """Inspect dead-lettered jobs, or requeue one for recovery (OPS-07).
+
+    With no --requeue, lists all dead-lettered jobs as JSON. With
+    --requeue <job-id>, resets that job to pending with a fresh attempt
+    budget so the next ``work`` pass retries it.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    if requeue:
+        job = bundle.repository.requeue_job(requeue)
+        _emit({"action": "requeue", "job_id": job.id, "status": job.status})
+        return
+    dead = bundle.repository.list_dead_letter_jobs()
+    _emit(
+        {
+            "dead_letter_count": len(dead),
+            "jobs": [
+                {
+                    "id": j.id,
+                    "kind": j.kind,
+                    "scope": j.scope.model_dump(),
+                    "attempts": j.attempts,
+                    "last_error": j.last_error,
+                }
+                for j in dead
+            ],
+        }
+    )
+
+
 @cli.command("export")
 def export(
     database: Path = typer.Option(..., "--database"),

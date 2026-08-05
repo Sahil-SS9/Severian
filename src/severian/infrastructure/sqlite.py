@@ -1284,6 +1284,44 @@ class SQLiteRepository:
                 reaped += 1
         return reaped
 
+    def list_dead_letter_jobs(self) -> list[Job]:
+        """Inspect dead-lettered jobs (OPS-07)."""
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "job", records.c.status == "dead_letter")
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Job.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def requeue_job(self, job_id: str) -> Job:
+        """Recover a dead-lettered job: reset to pending with a fresh
+        attempt budget (OPS-07). The job is retried on the next drain."""
+        query = select(records.c.payload).where(
+            records.c.id == job_id, records.c.record_type == "job", records.c.status == "dead_letter"
+        )
+        with self.engine.connect() as connection:
+            value = connection.execute(query).scalar_one_or_none()
+        if value is None:
+            raise NotFoundError(f"dead-letter job {job_id!r} not found")
+        job = Job.model_validate(value)
+        requeued = job.model_copy(
+            update={
+                "status": "pending",
+                "attempts": 0,
+                "worker_id": None,
+                "lease_until": None,
+                "dead_letter": False,
+            }
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(records.c.id == job_id, records.c.record_type == "job", records.c.status == "dead_letter")
+                .values(status="pending", payload=requeued.model_dump(mode="json"))
+            )
+        return requeued
+
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event:
         self._require_scope(scope)
         return self._insert("outbox", Event(scope=scope, kind=kind, payload=payload), status="pending")

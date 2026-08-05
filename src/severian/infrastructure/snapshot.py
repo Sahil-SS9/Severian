@@ -57,8 +57,8 @@ RECORD_MODELS: dict[str, type[Any]] = {
     "audit": AuditEvent,
 }
 
-JOB_STATUSES = {"pending", "running", "done", "failed"}
-OUTBOX_STATUSES = {"pending"}
+JOB_STATUSES = {"pending", "running", "done", "failed", "dead_letter"}
+OUTBOX_STATUSES = {"pending", "acked"}
 
 
 def _canonical_json(value: Any) -> str:
