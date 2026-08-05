@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from severian.application.dreaming import (
     ConsolidationService,
     CurationService,
@@ -25,6 +27,7 @@ from severian.application.dreaming import (
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.worker import DerivationWorker
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Collection, Memory, Observation, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
@@ -231,3 +234,38 @@ def test_worker_dream_job_kind_curate() -> None:
         assert summary.processed == 1
         kinds = {m.kind for m in repo.list_memories(scope)}
         assert "curation_review" in kinds
+
+
+def test_consolidation_preflight_aborts_before_any_write() -> None:
+    """OPS-06: consolidation failure-atomicity — if pre-flight validation
+    fails (a survivor's source observation is unresolvable), the pass
+    aborts BEFORE any write: no supersedes, no consolidated memory, no
+    audit events — the scope is left exactly as it was."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, *_ = _bundle(tmp)
+        scope = _scope()
+        older = _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=10))
+        _add_memory(repo, scope, "the search index uses sqlite fts5", created_delta=timedelta(days=1))
+        service = ConsolidationService(repo)
+
+        # Force pre-flight failure: the survivor's source observation
+        # becomes unresolvable mid-consolidation (simulated corruption).
+        real_get = repo.get_observation
+
+        def _flaky_get_observation(sc, obs_id):
+            if obs_id == older.source_observation_ids[0]:
+                raise NotFoundError("simulated corrupt source")
+            return real_get(sc, obs_id)
+
+        repo.get_observation = _flaky_get_observation  # type: ignore[method-assign]
+        try:
+            with pytest.raises(ValueError, match="aborted before any write"):
+                service.consolidate(scope)
+        finally:
+            repo.get_observation = real_get  # type: ignore[method-assign]
+
+        # Nothing mutated: both memories active, no consolidated memory,
+        # no audit events from the aborted pass.
+        active = repo.list_memories(scope)
+        assert len(active) == 2
+        assert repo.get_memory(scope, older.id).superseded_by_id is None

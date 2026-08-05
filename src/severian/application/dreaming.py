@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.vector import _STOPWORDS
 
@@ -436,6 +437,22 @@ class ConsolidationService:
         # 1. Near-duplicate detection (pairwise, deterministic, O(n^2) but
         # bounded: memories per scope are typically small; scale tier later).
         groups = self._find_duplicate_groups(memories)
+        # OPS-06: pre-flight validation BEFORE any mutation — a failure
+        # mid-consolidation must not leave a partially-applied pass. All
+        # survivor source observations must resolve (add_memory validates
+        # sources); checking up front moves the common failure mode
+        # (invalid provenance) to BEFORE the first write.
+        for group in groups:
+            survivor = self._repository.get_memory(scope, group.survivor_id)
+            merged_sources = sorted(set(survivor.source_observation_ids) | set(group.merged_source_ids))
+            for source_id in merged_sources:
+                try:
+                    self._repository.get_observation(scope, source_id)
+                except NotFoundError as exc:
+                    raise ValueError(
+                        f"consolidation aborted before any write: survivor "
+                        f"{survivor.id!r} references missing observation {source_id!r}"
+                    ) from exc
         for group in groups:
             survivor = self._repository.get_memory(scope, group.survivor_id)
             merged_sources = sorted(set(survivor.source_observation_ids) | set(group.merged_source_ids))
