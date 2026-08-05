@@ -11,14 +11,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from severian.application.derivation import DerivationService
-from severian.application.ingestion import IngestionService
-from severian.application.projections import ProjectionCoordinator
-from severian.application.retrieval import ContextAssembler, RetrievalService
-from severian.application.service import BuildMemoryService
+from severian.composition import build_bundle
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
-from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
+from severian.infrastructure.vector import LocalVectorIndex
 from severian.mcp.server import SeverianMCPServer
 
 
@@ -39,21 +35,12 @@ def _build_server(
     fts: Path,
     vectors: Path,
 ) -> tuple[SeverianMCPServer, SQLiteRepository, FTS5Index, LocalVectorIndex]:
-    repository = SQLiteRepository(database)
-    repository.initialize()
-    lexical = FTS5Index(fts)
-    vector = LocalVectorIndex(vectors, HashEmbedding(dimension=256))
-    service = BuildMemoryService(
-        repository=repository,
-        ingestion=IngestionService(repository),
-        retrieval=RetrievalService(repository, lexical, vector),
-        projection=ProjectionCoordinator(repository, lexical, vector),
-        derivation=DerivationService(repository),
-        context=ContextAssembler(),
-    )
-    gateway = _LocalHashingGateway()
-    server = SeverianMCPServer(service=service, gateway=gateway)
-    return server, repository, lexical, vector
+    # ARCH-01: use the SINGLE composition root — the MCP runner must not
+    # hand-wire repository + indexes + services (that duplicated the
+    # composition logic and drifted from CLI/dev/API wiring).
+    bundle = build_bundle(backend="sqlite", database=database, fts=fts, vectors=vectors)
+    server = SeverianMCPServer(service=bundle.service, gateway=bundle.gateway)
+    return server, bundle.repository, bundle.lexical, bundle.vector
 
 
 def main(argv: list[str] | None = None) -> int:
