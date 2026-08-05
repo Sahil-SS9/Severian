@@ -160,3 +160,46 @@ Remaining future work: retrieval-time usage feedback into ranking
 
 *Written 2026-08-05. Gap analysis grounded in code inspection + measured
 evidence; competitor features are vendor-reported (see competitor-claims.md).*
+
+---
+
+## Session status — 2026-08-05 (release programme COMPLETE, merged to main)
+
+**HEAD:** `3eb2db5` (main, merge of `feat/ai-memory-concepts` 7968319) — pushed.
+**Full suite:** 433 passed / 36 skipped / 1 warning (third-party httpx2). ruff clean.
+mypy --strict: one documented pre-existing exclusion (`granite_embedding.py:58`,
+optional sentence_transformers import).
+
+### All 36 objective-review items completed
+- **Security:** SEC-01 principal auth, SEC-02 admin audit trail, SEC-03 0600 perms
+- **Data:** DATA-01..07 (import provenance, staged atomic restore, correction
+  durability, atomic graph+memory publish, collection ownership, batch scope
+  lookup, atomic usage count)
+- **Ops:** JOB-01 reaper wiring; OPS-01 outbox projector, OPS-02 tombstone
+  erasure, OPS-03 bounded sync derive, OPS-04 shared-memory ACL policy,
+  OPS-05 idempotent consolidation/retention, OPS-06 failure-atomic preflight,
+  OPS-07 dead-letter inspect/requeue (CLI: `severian dead-letter`)
+- **Arch:** ARCH-01 composition roots collapsed (MCP via build_bundle),
+  ARCH-02 single projection contract, ARCH-03 5-D boundary (domain text/hits
+  modules, LexicalIndex protocol), ARCH-04 no Memory proxy, ARCH-05 CLI work
+  uses canonical derivation (graph extractor)
+- **Evidence:** EVID-01..10 — CI bootstrap, current-HEAD benchmark package
+  (`docs/benchmarks/evidence/2026-08-05-head/`), adversarial-27 reconciled
+  (recall 1.000 / MRR 1.000 / cit_prec 1.000 / stale 0.000 — gate PASS),
+  LOCOMO reconciled (recall 0.962 / MRR 0.962 / cit_prec 0.844), dreaming
+  provenance, schema migration tests, warnings 3→1, 433-test count verified.
+
+### Remaining caveats (next session, if picked up)
+1. **PostgreSQL benchmark lane** not re-run at HEAD — requires `--pg-dsn` /
+   `SEVERIAN_PG_DSN`; last measured 2026-08-04 (9749a75, PASS). Disclosed in
+   `docs/benchmarks/evidence/2026-08-05-head/README.md`.
+2. **LOCOMO gate still FAILS** on citation_precision (0.844 < 1.0) and
+   unsupported_answer_rate (0.062 > 0). Tracked follow-up; improved from
+   2026-08-04 (0.719 / 0.188) but not closed.
+3. Release posture: CONDITIONAL (trusted single-user, loopback); BLOCKED for
+   networked/multi-user until the above two close.
+4. Historical branches kept: `audit/brutal-critique-v0.1.0`,
+   `fix/auditor-corrections-2026-08-04`. Worktree residue cleaned.
+
+*Session context appended 2026-08-05. Full gate record in
+`docs/review/objective-review-2026-08-05.md`.*
