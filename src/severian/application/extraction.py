@@ -196,6 +196,25 @@ class EntityExtractionService:
     def __init__(self, repository: CanonicalRepository) -> None:
         self._repository = repository
 
+    def extract(
+        self,
+        scope: Scope,
+        content: str,
+    ) -> ExtractionResult:
+        """Extract entities + relations from content WITHOUT writing.
+
+        DATA-04: derivation calls this to parse the graph, then passes
+        the result to ``publish_derivation`` so graph + memories commit
+        in ONE atomic transaction. No repository writes happen here.
+        """
+        entity_pairs = extract_entities(content)
+        relation_triples = extract_relations(content, entity_pairs)
+        return ExtractionResult(
+            entities=entity_pairs,
+            relations=relation_triples,
+            source_observation_id="",
+        )
+
     def extract_and_upsert(
         self,
         scope: Scope,
@@ -207,6 +226,10 @@ class EntityExtractionService:
         Uses the repository's identity-deduped add_entity/add_relation:
         repeated observations converge on the same entity rows and the
         same typed relations (no duplicates, deterministic).
+
+        NOTE: prefer ``extract`` + ``publish_derivation`` for the derive
+        path (DATA-04 atomicity). This method remains for callers that
+        write the graph independently.
         """
         entity_pairs = extract_entities(content)
         relation_triples = extract_relations(content, entity_pairs)

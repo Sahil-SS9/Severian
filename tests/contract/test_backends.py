@@ -223,6 +223,25 @@ class _FakeRepository:
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
         return [self.add_memory(memory) for memory in memories]
 
+    def publish_derivation(
+        self,
+        scope: Scope,
+        *,
+        entities: list[tuple[str, str]],
+        relations: list[tuple[str, str, str]],
+        memories: list[Memory],
+    ) -> list[Memory]:
+        # In-memory analogue of the backend atomic publish (DATA-04).
+        # The fake's add_entity/add_relation are no-op shapes (no storage),
+        # so this mirrors the call pattern without graph resolution.
+        for kind, name in entities:
+            self.add_entity(scope, kind, name)
+        for subject, predicate, obj in relations:
+            subject_ent = self.add_entity(scope, "entity", subject)
+            object_ent = self.add_entity(scope, "entity", obj)
+            self.add_relation(scope, subject_ent.id, predicate, object_ent.id)
+        return self.add_memories_batch(memories)
+
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
         memory = self.get_memory(scope, memory_id)
         return [memory]

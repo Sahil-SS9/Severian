@@ -47,10 +47,12 @@ class FailingGateway:
 
 
 def _scope(tenant: str = "t1") -> Scope:
+    # DATA-05: collection ids are globally unique — each tenant needs its
+    # own collection id (a t2 scope cannot reference t1's 'c1').
     return Scope(
         tenant_id=tenant,
         profile_id="p1",
-        collection_id="c1",
+        collection_id=f"c1-{tenant}",
         agent_id="a1",
         session_id="s1",
     )
@@ -60,7 +62,8 @@ def _scope(tenant: str = "t1") -> Scope:
 def bundle(tmp_path: Path):
     repo = SQLiteRepository(tmp_path / "severian.db")
     repo.initialize()
-    repo.create_collection(Collection(id="c1", tenant_id="t1", name="Primary"))
+    repo.create_collection(Collection(id="c1-t1", tenant_id="t1", name="Primary"))
+    repo.create_collection(Collection(id="c1-t2", tenant_id="t2", name="Primary"))
     fts = FTS5Index(tmp_path / "fts.db")
     vector = LocalVectorIndex(tmp_path / "vectors.db", HashEmbedding(dimension=64))
     derivation = DerivationService(repo)

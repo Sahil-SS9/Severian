@@ -14,6 +14,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from severian.application.derivation import DerivationService
 from severian.application.extraction import (
     EntityExtractionService,
@@ -126,6 +128,41 @@ def test_derive_populates_entities_and_relations() -> None:
         relations = repo.list_relations(scope)
         assert len(relations) == 1
         assert relations[0].predicate == "works_at"
+
+
+class _MalformedGateway:
+    """Gateway that produces a malformed candidate (empty content) —
+    forces derive_observation to raise AFTER graph extraction."""
+
+    model_id = "local/bad"
+    prompt_version = "prompt-v1"
+    is_cloud = False
+
+    def derive(self, content: str, *, policy: dict[str, object]) -> list[dict[str, object]]:
+        return [{"kind": "fact", "content": "", "confidence": 0.9}]
+
+
+def test_derive_graph_not_committed_when_memory_publication_fails() -> None:
+    """DATA-04: graph extraction and memory publication are atomic — if the
+    memory publication fails (malformed candidate), the extracted entities
+    and relations must NOT be committed (no orphaned graph)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _bundle(tmp)
+        scope = _scope()
+        extraction = EntityExtractionService(repo)
+        derive = DerivationService(repo, extraction=extraction)
+        ingest = IngestionService(repo)
+
+        result = ingest.ingest(
+            scope, "Alice Johnson works at Acme Corp.", {"uri": "note://atomic"}
+        )
+        with pytest.raises(ValueError, match="content must not be empty"):
+            derive.derive_observation(scope, result.observation.id, _MalformedGateway())
+
+        # The graph must NOT be committed — atomic rollback.
+        assert repo.list_entities(scope) == []
+        assert repo.list_relations(scope) == []
+        assert repo.list_memories(scope) == []
 
 
 def test_derive_is_idempotent_on_entities() -> None:

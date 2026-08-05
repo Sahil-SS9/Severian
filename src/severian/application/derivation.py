@@ -91,11 +91,16 @@ class DerivationService:
         # also populates the Entity/Relation store so the graph retrieval
         # service has data without manual seeding. Extraction is
         # rule-based and reproducible — no LLM, no randomness.
+        # DATA-04: extraction and memory publication are ONE atomic
+        # transaction via ``publish_derivation`` — the graph can never be
+        # orphaned from the memory it produced (or vice versa).
         extraction_service = getattr(self, "_extraction", None)
+        extracted_entities: list[tuple[str, str]] = []
+        extracted_relations: list[tuple[str, str, str]] = []
         if extraction_service is not None:
-            extraction_service.extract_and_upsert(
-                scope, observation_id, observation.content
-            )
+            result = extraction_service.extract(scope, observation.content)
+            extracted_entities = result.entities
+            extracted_relations = result.relations
         # Strict candidate validation BEFORE any write: a malformed
         # candidate aborts the whole batch — no partial publication
         # (P0-4). Provenance comes from the TRUSTED gateway adapter,
@@ -146,4 +151,9 @@ class DerivationService:
                     confidence=float(candidate.get("confidence", 0.5)),
                 )
             )
-        return self.repository.add_memories_batch(validated)
+        return self.repository.publish_derivation(
+            scope,
+            entities=extracted_entities,
+            relations=extracted_relations,
+            memories=validated,
+        )

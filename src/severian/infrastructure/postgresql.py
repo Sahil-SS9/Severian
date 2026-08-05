@@ -726,6 +726,144 @@ class PostgreSQLBackend:
                 results.append(memory)
         return results
 
+    def publish_derivation(
+        self,
+        scope: Scope,
+        *,
+        entities: list[tuple[str, str]],
+        relations: list[tuple[str, str, str]],
+        memories: list[Memory],
+    ) -> list[Memory]:
+        """Atomically publish graph extraction + derived memories (DATA-04).
+
+        The graph entities/relations AND the candidate memories land in
+        ONE transaction: a failure anywhere aborts everything, so the
+        graph can never be orphaned from the memory it came from (or
+        vice versa). Entity/relation upserts are identity-deduped exactly
+        like ``add_entity``/``add_relation``; memory insert matches
+        ``add_memories_batch`` semantics.
+        """
+        self._require_scope(scope)
+        self._require_collection(scope)
+        if not memories and not entities and not relations:
+            return []
+        # Validate memory source references BEFORE the transaction.
+        for memory in memories:
+            for source_id in memory.source_observation_ids:
+                source = self.get_observation(memory.scope, source_id)
+                if source.scope != memory.scope:
+                    raise ConflictError("source observation scope does not match memory scope")
+
+        memory_identities = [
+            self._identity(
+                m.kind,
+                m.content,
+                m.source_observation_ids,
+                m.model_id,
+                m.prompt_version,
+            )
+            for m in memories
+        ]
+        with self.engine.begin() as connection:
+            # -- entities (identity-deduped, same as add_entity) --
+            entity_ids: dict[str, str] = {}
+            for kind, name in entities:
+                identity_key = self._identity(kind, name.casefold())
+                row = connection.execute(
+                    select(records.c.payload).where(
+                        records.c.record_type == "entity",
+                        *self._scope_predicates(scope),
+                        records.c.identity_key == identity_key,
+                    )
+                ).scalar_one_or_none()
+                if row is not None:
+                    entity_ids[name.casefold()] = Entity.model_validate(row).id
+                    continue
+                entity = Entity(scope=scope, kind=kind, name=name)
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values("entity", entity, identity_key=identity_key)
+                    )
+                )
+                if (events := self._event_models("entity", entity)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                entity_ids[name.casefold()] = entity.id
+            # -- relations (only when both endpoints were upserted) --
+            for subject, predicate, obj in relations:
+                subject_id = entity_ids.get(subject.casefold())
+                object_id = entity_ids.get(obj.casefold())
+                if subject_id is None or object_id is None:
+                    continue
+                relation = Relation(
+                    scope=scope,
+                    subject_id=subject_id,
+                    predicate=predicate,
+                    object_id=object_id,
+                )
+                identity_key = self._identity(
+                    "relation", relation.subject_id, relation.predicate, relation.object_id
+                )
+                existing = connection.execute(
+                    select(records.c.payload).where(
+                        records.c.record_type == "relation",
+                        *self._scope_predicates(scope),
+                        records.c.identity_key == identity_key,
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    continue
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values("relation", relation, identity_key=identity_key)
+                    )
+                )
+                if (events := self._event_models("relation", relation)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+            # -- memories (same as add_memories_batch) --
+            existing_rows = connection.execute(
+                select(records.c.payload).where(
+                    records.c.record_type == "memory",
+                    records.c.identity_key.in_(memory_identities),
+                )
+            ).scalars().all()
+            existing_by_identity: dict[tuple[str, str], Memory] = {}
+            for value in existing_rows:
+                memory = Memory.model_validate(value)
+                key = self._identity(
+                    memory.kind,
+                    memory.content,
+                    memory.source_observation_ids,
+                    memory.model_id,
+                    memory.prompt_version,
+                )
+                scope_key = memory.scope.model_dump_json()
+                existing_by_identity[(scope_key, key)] = memory
+            results: list[Memory] = []
+            for memory, identity_key in zip(memories, memory_identities, strict=True):
+                scope_key = memory.scope.model_dump_json()
+                if (scope_key, identity_key) in existing_by_identity:
+                    results.append(existing_by_identity[(scope_key, identity_key)])
+                    continue
+                connection.execute(
+                    records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))
+                )
+                if (events := self._event_models("memory", memory)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                results.append(memory)
+        return results
+
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         self._require_scope(scope)
         return self._get("memory", memory_id, Memory, scope=scope)
