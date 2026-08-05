@@ -2,8 +2,8 @@
 
 > Copy everything below the line into a FRESH chat with an independent
 > auditor/reviewer agent. Self-contained: no prior context needed.
-> Producing SHA: 341af8922a712a08522d4b0f8441d9f067de9d57
-> (code/evidence final: 9749a75 — commits after it are prompt/docs only)
+> Producing baseline: code/evidence final `9749a750a470d68ce542bb7978554e322d25dc6a`
+> (branch tip adds prompt/docs only — see HEAD note below)
 
 ---
 
@@ -17,9 +17,10 @@ failed command IS the finding. No fabricated numbers.
 
 - Repo: `/home/kensei/repos/Severian`
 - Branch: `fix/auditor-corrections-2026-08-04`
-- HEAD: `341af8922a712a08522d4b0f8441d9f067de9d57`
-- Code/evidence final: `9749a750a470d68ce542bb7978554e322d25dc6a` (ancestor;
-  the delta 9749a75..HEAD is prompt/docs files only)
+- HEAD: any descendant of `9749a750a470d68ce542bb7978554e322d25dc6a` whose
+  diff 9749a75..HEAD touches ONLY docs/ (the current tip adds prompt/docs;
+  if HEAD touches code, that is a finding)
+- Code/evidence final: `9749a750a470d68ce542bb7978554e322d25dc6a`
 - Code baseline: `dfc418f226e7705b4304ae30c9b720fc12ede210`
   (the correction lane is a descendant; the diff baseline..HEAD must be
   limited to: `src/severian/benchmarks/`, `scripts/run_batch_compare.py`,
@@ -30,7 +31,10 @@ failed command IS the finding. No fabricated numbers.
 cd /home/kensei/repos/Severian
 git status --short          # expect: clean
 git branch --show-current   # expect: fix/auditor-corrections-2026-08-04
-git rev-parse HEAD          # expect: 341af89
+git rev-parse HEAD          # any descendant of 9749a75 (see HEAD note above)
+git merge-base --is-ancestor 9749a750a470d68ce542bb7978554e322d25dc6a HEAD && echo "evidence ancestry OK"
+git diff --name-only 9749a750a470d68ce542bb7978554e322d25dc6a..HEAD | cat
+                              # must be docs/ only — code changes are a finding
 git merge-base --is-ancestor dfc418f226e7705b4304ae30c9b720fc12ede210 HEAD && echo "ancestry OK"
 git diff --check b628a97..HEAD   # expect: exit 0 (no whitespace)
 
