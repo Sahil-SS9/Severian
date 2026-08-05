@@ -176,6 +176,50 @@ def test_worker_unknown_job_kind_is_failed_not_wedged(bundle):
     assert drained.total == 0
 
 
+def test_worker_drain_reaps_expired_leases_at_start(bundle):
+    """JOB-01: a crashed worker's expired-lease job must be re-queued by
+    the NEXT drain (the reaper is wired into runtime operation), so the
+    job is eventually processed instead of stuck 'running' forever."""
+    repo = bundle["repo"]
+    sc = _scope()
+    bundle["service"].ingest_observation(sc, content="orphaned by crash", source={"uri": "c://1"})
+
+    # Claim the job under worker 'w1' but never complete it (crash).
+    job = repo.claim_job("w1", lease_seconds=1)
+
+    # Simulate the crash: the lease expires (backdate the lease_until).
+    from severian.domain.models import Job
+
+    with repo.engine.begin() as connection:
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select, update
+
+        from severian.infrastructure.sqlite import _iso
+        from severian.infrastructure.sqlite import records as records_table
+
+        row = connection.execute(
+            select(records_table.c.payload).where(records_table.c.id == job.id)
+        ).scalar_one()
+        expired = Job.model_validate(row).model_copy(
+            update={"lease_until": datetime.now(UTC) - timedelta(seconds=30)}
+        )
+        connection.execute(
+            update(records_table)
+            .where(records_table.c.id == job.id)
+            .values(payload=expired.model_dump(mode="json"), lease_until=_iso(expired.lease_until))
+        )
+
+    # Next drain reaps the expired lease (re-queues to pending) and then
+    # processes the job to done with a working gateway.
+    summary = bundle["worker"].drain(worker_id="w2", gateway=bundle["gateway"])
+    assert summary.processed == 1
+    assert summary.failed == 0
+
+    hits = bundle["service"].search(sc, query="orphaned", limit=10)
+    assert len(hits) == 1
+
+
 def test_worker_scopes_are_respected(bundle):
     sc_a = _scope(tenant="t1")
     sc_b = _scope(tenant="t2")

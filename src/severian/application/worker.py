@@ -99,7 +99,16 @@ class DerivationWorker:
 
         ``max_jobs`` bounds the pass (useful for tests and throttled
         loops); ``None`` drains everything currently pending.
+
+        JOB-01: expired leases are reaped at the start of every pass so a
+        crashed worker's ``running`` jobs are re-queued (or dead-lettered
+        once attempts are exhausted) as part of normal runtime operation —
+        the reaper is wired in, not dead code.
         """
+        try:
+            self._repository.reap_expired_jobs()
+        except Exception:
+            logger.warning("reap_expired_jobs failed at drain start", exc_info=True)
         processed = 0
         failed = 0
         touched: dict[str, Scope] = {}
