@@ -53,8 +53,8 @@ def test_porter_migration_makes_inflected_query_match(tmp_path: Path) -> None:
     _old_schema_fts(path)
     index = FTS5Index(path)  # migration happens here
 
-    index.upsert(_memory(index, "m1", "t1", "p1", "c1", "a1", "s1", "authentication is enforced"))
-    index.upsert(_memory(index, "m2", "t1", "p1", "c1", "a1", "s1", "the sky is blue"))
+    index.upsert(_memory("m1", "t1", "p1", "c1", "a1", "s1", "authentication is enforced"))
+    index.upsert(_memory("m2", "t1", "p1", "c1", "a1", "s1", "the sky is blue"))
 
     from severian.domain.models import Scope
 
@@ -65,7 +65,15 @@ def test_porter_migration_makes_inflected_query_match(tmp_path: Path) -> None:
     index.close()
 
 
-def _memory(index: FTS5Index, memory_id: str, tenant: str, profile: str, collection: str, agent: str, session: str, content: str):
+def _memory(
+    memory_id: str,
+    tenant: str,
+    profile: str,
+    collection: str,
+    agent: str,
+    session: str,
+    content: str,
+):
     """Build the minimal Memory model for index.upsert."""
     from datetime import UTC, datetime
 
