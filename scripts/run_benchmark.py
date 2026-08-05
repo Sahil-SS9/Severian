@@ -109,6 +109,12 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
             try:
                 from severian.benchmarks.adapters.chroma import ChromaAdapter
 
+                # The canary build and the real build are SEPARATE adapter
+                # invocations; each must own a unique namespace (C-01 claim
+                # marker is single-use per workdir root). A build tag keeps
+                # them distinct even with the same --run-id.
+                build_tag = getattr(args, "_build_tag", "canary")
+                base_namespace = getattr(args, "run_id", None)
                 adapters[pid] = ChromaAdapter(
                     provider_id=pid,
                     workdir=(
@@ -116,7 +122,11 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
                         if args.chroma_workdir
                         else None
                     ),
-                    run_namespace=getattr(args, "run_id", None),
+                    run_namespace=(
+                        f"{base_namespace}-{build_tag}"
+                        if base_namespace
+                        else None
+                    ),
                 )
             except ImportError as exc:
                 venv_hint = ""
@@ -199,6 +209,9 @@ def main() -> None:
     canary(adapters)
 
     # Rebuild adapters (canary consumed/closed them) for the real run.
+    # The real build gets a distinct build tag so its Chroma namespace
+    # claim does not collide with the canary's (C-01 single-use marker).
+    args._build_tag = "run"
     adapters = build_adapters(manifest, args)
     runner = BenchmarkRunner(manifest=manifest, adapters=adapters, allow_missing=True)
     print("\nrunning benchmark...")

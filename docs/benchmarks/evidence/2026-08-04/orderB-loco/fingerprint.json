@@ -31,7 +31,7 @@
   },
   "commit": {
     "branch": "fix/auditor-corrections-2026-08-04",
-    "sha": "8fb5970a39044b69596309da303f9f0b5ab07a29"
+    "sha": "c8c480903af7155d775364379e5ecde6c1f32566"
   },
   "environment": {
     "chroma_venv": "/tmp/bench-compare-venv",
@@ -44,6 +44,6 @@
     "path": "/home/kensei/repos/Severian/docs/benchmarks/manifest-locomo-tier-v1.json",
     "sha256": "a2d2b422eb9ba0000279466a88abc467caee1f325aca6d068f3c689e402f2c6e"
   },
-  "run_started_at": "2026-08-04T02:41:18.252711+00:00",
+  "run_started_at": "2026-08-05T00:45:19.312907+00:00",
   "vendor_reported": []
 }

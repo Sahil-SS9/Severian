@@ -35,8 +35,7 @@ from severian.benchmarks.runner import ProviderQueryResponse
 
 _SAFE_NAMESPACE = re.compile(r"^[A-Za-z0-9._-]+$")
 _OWNERSHIP_MARKER = ".severian-bench-owned"
-# Per-process claim registry: workdir-root (resolved) -> set of claimed namespaces.
-_CLAIMED: dict[str, set[str]] = {}
+_CLAIM_MARKER = ".severian-bench-claimed"
 
 
 class ChromaAdapter:
@@ -78,25 +77,34 @@ class ChromaAdapter:
                 rf"{_SAFE_NAMESPACE.pattern} (single token, no path separators, "
                 "no '.' or '..')"
             )
-        # Safety 2: a namespace may be claimed only once per workdir root
-        # (per process). Same-namespace reuse would silently share the
-        # store between invocations — the exact contamination path the
-        # reviewer reproduced (prior run's documents visible in a new run).
+        # Safety 2: a namespace may be claimed only once per workdir root.
+        # Same-namespace reuse would silently share the store between
+        # invocations — the exact contamination path the reviewer
+        # reproduced (prior run's documents visible in a new run).
+        # The claim is a FILE marker in the namespace dir, so it holds
+        # across processes (a fresh benchmark process cannot silently
+        # reuse a namespace claimed by an earlier one) and is released
+        # by close(). Note: uv run may reuse a long-lived interpreter, so
+        # an in-memory registry would falsely persist — the file marker
+        # is authoritative.
+        self._namespace_claim: Path | None = None
         if run_namespace is not None:
-            claimed = _CLAIMED.setdefault(str(root), set())
-            if run_namespace in claimed:
+            claim_path = Path(workdir) / run_namespace / _CLAIM_MARKER
+            if claim_path.exists():
                 raise ValueError(
-                    f"run_namespace {run_namespace!r} already claimed in workdir {root}; "
+                    f"run_namespace {run_namespace!r} already claimed in workdir {workdir}; "
                     "each benchmark invocation must own a unique namespace "
                     "(same-namespace reuse would contaminate the store)"
                 )
-            claimed.add(run_namespace)
+            self._namespace_claim = claim_path
         # When BOTH workdir and run_namespace are provided, the namespace
         # is applied at the PERSISTENCE level too (workdir/<namespace>),
         # not just in collection names.
         if run_namespace:
             root = root / run_namespace
             root.mkdir(parents=True, exist_ok=True)
+            if self._namespace_claim is not None:
+                self._namespace_claim.write_text(f"claimed by {provider_id}\n")
         self._workdir = str(root)
         # Safety 3: ownership marker. reset() may ONLY delete a directory
         # that is genuinely benchmark-owned:
@@ -202,6 +210,13 @@ class ChromaAdapter:
         return ProviderQueryResponse(items=items, cost_usd=0.0)
 
     def close(self) -> None:
+        # NOTE: the namespace claim is deliberately NOT released here.
+        # A namespace in a workdir root is single-use PERMANENTLY: releasing
+        # it on close() would let a later invocation reuse the same store
+        # directory, where the prior run's documents still persist — the
+        # exact contamination the reviewer reproduced. Benchmark scripts
+        # always use fresh roots (mkdtemp default) or unique run-ids, so
+        # permanent single-use never blocks a legitimate run.
         pass
 
     def reset(self) -> None:

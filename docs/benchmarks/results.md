@@ -27,7 +27,7 @@ Gate thresholds (release contract): recall_at_10 >= 0.95, citation_precision
 unsupported_answer_rate == 0.00.
 
 **Fresh run 2026-08-04 (correction branch fix/auditor-corrections-2026-08-04,
-producing SHA 876f616):**
+producing SHA c8c4809):**
 
 | Provider | recall@10 | MRR | nDCG@10 | cit-prec | stale | temporal | leak | unsup | gate |
 |---|---|---|---|---|---|---|---|---|---|

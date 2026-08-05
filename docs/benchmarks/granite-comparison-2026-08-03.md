@@ -1,19 +1,24 @@
 # Granite R2 embedding comparison — honest measurement (2026-08-03)
 
 **Manifest:** `manifest-locomo-tier-v1.json` (30 conversation docs, 16 typed probes)
-**Run:** `--embedding granite` → `evidence/2026-08-03-locomo-granite/`
-**Baseline:** hash embeddings → `evidence/2026-08-03-locomo-tier/` (run4)
+**Run:** `--embedding granite` → `evidence/2026-08-03-locomo-granite/` (historical full-lane, NOT re-run per C-04)
+**Baseline:** hash embeddings → `evidence/2026-08-04/` (current deterministic run, producing SHA c8c4809)
 
 ## Result: Granite does NOT beat hash on this synthetic corpus
 
 | Provider | recall@10 | MRR | cit_prec | stale | unsup | temporal |
 |---|---|---|---|---|---|---|
-| severian-sqlite hash | 0.923 | 0.814 | 0.656 | 0.000 | 0.188 | 1.000 |
-| severian-postgres hash | 0.923 | 0.865 | 0.719 | 0.000 | 0.188 | 1.000 |
-| severian-sqlite granite | 0.808 | 0.788 | 0.594 | 0.000 | 0.250 | 0.500 |
-| severian-postgres granite | 0.885 | 0.810 | 0.594 | 0.000 | 0.250 | 1.000 |
-| chroma (semantic) | 0.962 | 0.744 | 0.469 | 0.100 | 0.188 | 1.000 |
+| severian-sqlite hash (current) | 0.923 | 0.885 | 0.719 | 0.000 | 0.188 | 1.000 |
+| severian-postgres hash (current) | 0.923 | 0.885 | 0.719 | 0.000 | 0.188 | 1.000 |
+| severian-sqlite granite (historical) | 0.808 | 0.788 | 0.594 | 0.000 | 0.250 | 0.500 |
+| severian-postgres granite (historical) | 0.885 | 0.810 | 0.594 | 0.000 | 0.250 | 1.000 |
+| chroma (semantic) | 0.962 | 0.833 | 0.531 | 0.144 | 0.188 | 1.000 |
 | baseline-lexical | 0.846 | 0.756 | 0.469 | 0.098 | 0.188 | 1.000 |
+
+Hash rows are the CURRENT deterministic run (c8c4809); Granite rows are the
+HISTORICAL full-lane run (75b61fc-era) — the full Granite lane was not re-run
+in the correction lane (C-04). Directional finding unchanged: Granite recall
+0.808/0.885 < hash 0.923.
 
 ## Why (honest analysis)
 
@@ -32,14 +37,14 @@
      q6 returned `[]` for both Granite lanes — the full-lane negative result
      (Granite recall 0.808/0.885 vs hash 0.923) is unchanged and internally
      consistent.
-   - Current bounded spot-check (producing SHA 876f616): Granite returned
+   - Current bounded spot-check (producing SHA c8c4809): Granite returned
      `[c27, c12, c24]` for q6, c27 at rank 1. This is a DIFFERENT evidence
      statement from the full-lane trace. The spot-check shows the semantic
      gap IS closable; it does not change the full-lane negative result.
    - The full Granite lane was not re-run in the correction lane (out of
      scope per packet C-04).
 3. **Semantic ≠ universally better**: Chroma (semantic) also shows the
-   tradeoff (recall 0.962 but stale 0.100, cit_prec 0.469). Embedding choice
+   tradeoff (recall 0.962 but stale 0.144, cit_prec 0.531). Embedding choice
    is corpus-dependent, not monotonic.
 4. **Stale-fact control is embedding-independent**: both hash and Granite
    lanes hold stale at 0.000 — Severian's correction machinery (P0-5) is the

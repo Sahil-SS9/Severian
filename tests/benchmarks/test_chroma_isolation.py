@@ -208,8 +208,9 @@ def test_same_namespace_reuse_refused() -> None:
 
     The reviewer's direct check: same workdir + same namespace returned
     ['d1', 'c01'] — prior invocation documents visible in the new run.
-    The adapter now refuses namespace reuse outright (per-process claim
-    registry), so this contamination path cannot occur.
+    The adapter now refuses namespace reuse while the first claim is
+    active (file-based claim marker, cross-process safe), so this
+    contamination path cannot occur. The claim is released by close().
     """
     import sys
 
@@ -221,6 +222,9 @@ def test_same_namespace_reuse_refused() -> None:
         a = ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="ns")
         a.ingest("d1", "annual revenue ten million", scope="t1/p1/c1/a1/s1")
         a.close()
+        # The claim is PERMANENT for the workdir root: even after close(),
+        # reuse is refused (the store dir still holds d1's documents; a
+        # later run must never see them).
         with pytest.raises(ValueError):
             ChromaAdapter(provider_id="chroma", workdir=str(workdir), run_namespace="ns")
     finally:

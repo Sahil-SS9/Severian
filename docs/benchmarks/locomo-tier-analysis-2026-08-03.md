@@ -1,7 +1,7 @@
 # LOCOMO-tier conversation recall — B-1 evidence analysis (2026-08-03, updated 2026-08-04)
 
 **Manifest:** `docs/benchmarks/manifest-locomo-tier-v1.json` (validated)
-**Run:** `docs/benchmarks/evidence/2026-08-04/` (locomo-result.json, locomo-traces.json, locomo-fingerprint.json) — correction-lane producing SHA 876f616
+**Run:** `docs/benchmarks/evidence/2026-08-04/` (locomo-result.json, locomo-traces.json, locomo-fingerprint.json) — correction-lane producing SHA c8c4809
 **Honest finding:** Severian does NOT yet pass the release gate on the harder
 conversation corpus, but the harness fixes below lifted recall from 0.769 → 0.923,
 temporal accuracy from 0.000 → 1.000, and (after C-08) made every metric
@@ -11,7 +11,7 @@ no fabricated parity.
 ## Results (gate: recall>=0.95, cit_prec>=1.0, stale==0, unsup==0)
 
 **Correction-lane re-run 2026-08-04 (fix/auditor-corrections-2026-08-04,
-producing SHA 876f616; deterministic — two clean runs byte-identical):**
+producing SHA c8c4809; deterministic — two clean runs byte-identical):**
 
 | Provider | recall@10 | MRR | nDCG@10 | cit_prec | stale | unsup | temporal |
 |---|---|---|---|---|---|---|---|
@@ -62,8 +62,8 @@ Chroma FAILS too (stale 0.144, cit_prec 0.531). No lane passes.
 1. **The honest conversation-recall number is 0.923** (was 0.769 before the
    harness fixes) — with perfect temporal recall and zero stale-fact leakage.
 2. **Chroma's embeddings win raw recall (0.962) but lose correctness**
-   (stale 0.100, cit_prec 0.469). Severian's edge is correctness: stale 0.000,
-   temporal 1.000, MRR 0.865 vs 0.744. A-1 (Granite R2 embeddings) targets the
+   (stale 0.144, cit_prec 0.531). Severian's edge is correctness: stale 0.000,
+   temporal 1.000, MRR 0.885 vs 0.833. A-1 (Granite R2 embeddings) targets the
    recall gap while keeping the correctness edge.
 3. **The residual gate failures are exactly scoped:** one semantic gap (q6),
    two corpus artifacts (q9 decoy, q11 BM25 noise). None is a design flaw; all
