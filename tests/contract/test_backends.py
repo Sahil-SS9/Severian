@@ -258,6 +258,15 @@ class _FakeRepository:
     def get_entity(self, scope: Scope, entity_id: str) -> Entity:
         raise NotFoundError("entity not found")
 
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        return []
+
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation:
+        raise NotFoundError("relation not found")
+
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        return []
+
     def add_relation(
         self,
         scope: Scope,

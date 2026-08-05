@@ -123,6 +123,17 @@ class ScopedCanonicalPort(Protocol):
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity: ...
     def get_entity(self, scope: Scope, entity_id: str) -> Entity: ...
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        """All entities in scope (active; entities are not superseded)."""
+        ...
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation: ...
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        """All relations in scope, regardless of temporal validity.
+
+        Graph traversal filters validity itself (a relation with a closed
+        valid_to window is historical, not current).
+        """
+        ...
     def add_relation(
         self,
         scope: Scope,

@@ -130,6 +130,65 @@ class RetrievalService:
             ]
         return ranked[:limit]
 
+    def search_shared(
+        self,
+        scope: Scope,
+        agent_ids: list[str],
+        query: str,
+        *,
+        limit: int = 20,
+        min_vector_score: float | None = None,
+        min_fused_score: float | None = None,
+        salience_weight: float = 0.0,
+        salience_halflife_h: float = 720.0,
+        now: datetime | None = None,
+    ) -> list[RetrievalResult]:
+        """Shared-scope retrieval across a set of agent identities (Tier 3-3).
+
+        Multi-agent shared read: queries each agent's exact 5-D scope
+        independently (preserving the isolation boundary — the projections
+        are per-scope and never crossed), then MERGES the results
+        deterministically.
+
+        Semantics:
+        - the base ``scope`` supplies tenant/profile/collection/session;
+        - ``agent_ids`` lists the agents whose private memory is shared
+          into this read (the caller's visibility rule);
+        - results are deduplicated by memory id and re-ranked by fused
+          score (tiebreak by content, deterministic);
+        - ONLY the caller's own scope + the listed agents are touched —
+          no wildcard, no cross-tenant access.
+
+        This is the explicit, opt-in shared-memory primitive the concept
+        map listed as MISSING: two agents can read each other's memories
+        WITHOUT collapsing identity, and the sharing is caller-declared
+        (the visibility rule lives at the call site, not in the store).
+        """
+        if not agent_ids:
+            raise ValueError("search_shared requires at least one agent_id")
+        all_results: dict[str, RetrievalResult] = {}
+        scopes = [scope]
+        for agent_id in agent_ids:
+            scopes.append(scope.model_copy(update={"agent_id": agent_id}))
+        for candidate_scope in scopes:
+            hits = self.search(
+                candidate_scope,
+                query,
+                limit=max(limit, 50),
+                min_vector_score=min_vector_score,
+                min_fused_score=min_fused_score,
+                salience_weight=salience_weight,
+                salience_halflife_h=salience_halflife_h,
+                now=now,
+            )
+            for hit in hits:
+                all_results.setdefault(hit.memory.id, hit)
+        ranked = sorted(
+            all_results.values(),
+            key=lambda item: (-item.fused_score, item.memory.content, item.memory.id),
+        )
+        return ranked[:limit]
+
 
 class ContextAssembler:
     def __init__(self, max_chars: int = 8_000):

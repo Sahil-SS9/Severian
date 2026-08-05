@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.application.ports import CanonicalRepository
-from severian.domain.models import Job, Observation, Scope
+from severian.domain.models import Attachment, Job, Observation, Scope
 
 # Source-identity keys probed (in order) when building the idempotency
 # identity for an observation. The identity must be STABLE across
@@ -53,7 +53,13 @@ class IngestionService:
     def __init__(self, repository: CanonicalRepository):
         self.repository = repository
 
-    def ingest(self, scope: Scope, content: str, source: dict[str, Any]) -> IngestionResult:
+    def ingest(
+        self,
+        scope: Scope,
+        content: str,
+        source: dict[str, Any],
+        attachments: list[Attachment] | None = None,
+    ) -> IngestionResult:
         # Preserve the RAW evidence exactly as received; normalisation is
         # a derived field stored alongside it. Both survive in the
         # observation so no source content is ever lost (P0-1). The
@@ -69,6 +75,7 @@ class IngestionService:
                 raw_content=raw,
                 raw_hash=raw_hash_of(raw),
                 source=dict(source),
+                attachments=list(attachments or []),
             )
         )
         return IngestionResult(observation=observation, job=job)

@@ -883,6 +883,41 @@ class SQLiteRepository:
                 raise ConflictError("relation identity conflict") from None
             return Relation.model_validate(existing)
 
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        """All entities in scope, ordered deterministically by (kind, name)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "entity", *self._scope_predicates(scope))
+            .order_by(
+                func.json_extract(records.c.payload, "$.kind"),
+                func.json_extract(records.c.payload, "$.name"),
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Entity.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation:
+        self._require_scope(scope)
+        return self._get("relation", relation_id, Relation, scope=scope)
+
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        """All relations in scope, ordered deterministically by (subject, predicate, object)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "relation", *self._scope_predicates(scope))
+            .order_by(
+                func.json_extract(records.c.payload, "$.subject_id"),
+                func.json_extract(records.c.payload, "$.predicate"),
+                func.json_extract(records.c.payload, "$.object_id"),
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Relation.model_validate(value) for value in connection.execute(query).scalars()]
+
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         self._require_scope(scope)
         identity_key = self._identity(kind, payload)

@@ -35,7 +35,7 @@ cognitive-science literature) converge on these concepts. Each is marked
 | Observation ingestion | HAVE | canonical, hashed, sourced |
 | Fact/entity/relation extraction | HAVE (derive) / PARTIAL (no graph relations yet — Entity/Relation models exist but derive doesn't populate them) | |
 | Session episode formation | HAVE (B-2) | |
-| Multi-modal input | MISSING | text only today |
+| Multi-modal input | HAVE (2026-08-05) | Attachment metadata (image/audio/video/file/transcript) on observations; reference+digest only |
 | Source provenance + confidence | HAVE | model_id, prompt_version, confidence |
 
 ### Maintenance & self-regulation (the "missing" cluster)
@@ -57,7 +57,7 @@ cognitive-science literature) converge on these concepts. Each is marked
 | Semantic embeddings | PARTIAL | Granite opt-in; not default |
 | Abstention | HAVE | 0.000 unsupported (measured) |
 | Temporal queries | HAVE | 1.000 (measured) |
-| Multi-hop / graph retrieval | MISSING | No graph traversal; Entity/Relation models unused in retrieval |
+| Multi-hop / graph retrieval | HAVE (2026-08-05) | GraphRetrievalService: BFS neighborhood + related_memories over Entity/Relation |
 | Episodic vs semantic separation | PARTIAL | episode kind exists; no semantic layer above it |
 | Rehearsal / retrieval-strengthening | MISSING | No usage-frequency feedback into ranking |
 
@@ -65,7 +65,7 @@ cognitive-science literature) converge on these concepts. Each is marked
 | Concept | Severian | Notes |
 |---|---|---|
 | Scope isolation | HAVE | 5-D, 0.000 leakage |
-| Shared memory (partial scope) | MISSING | see previous analysis |
+| Shared memory (partial scope) | HAVE (2026-08-05) | search_shared(agent_ids): opt-in multi-agent read, per-scope isolation preserved |
 | Audit trail | HAVE | immutable canonical + audit records |
 | Determinism | HAVE | byte-identical runs |
 | Offline / local-first | HAVE | |
@@ -109,8 +109,30 @@ cognitive-science literature) converge on these concepts. Each is marked
    consolidate / curate / retention / retention-archive / contradictions.
    Tests: `tests/application/test_tier2_memory.py` (12 tests).
 
-**Tier 3 (next):** graph retrieval over Entity/Relation, multi-modal
-ingestion, shared-scope visibility rules.
+**Tier 3 (THIS BRANCH — built and tested):**
+1. **Graph retrieval** — DONE. `GraphRetrievalService`
+   (`src/severian/application/graph.py`): entity-centered BFS
+   neighborhood traversal (both directions, temporal validity filtering —
+   expired/not-yet-valid relations excluded), `related_memories` scoring
+   by min graph distance. New port methods `list_entities`,
+   `list_relations`, `get_relation` on SQLite + PostgreSQL + fake.
+   Pattern: entity-linking + graph traversal (Mem0/Graphiti style).
+2. **Multi-modal ingestion** — DONE. `Attachment` domain model
+   (kind image|audio|video|file|transcript, uri, media_type, SHA-256
+   digest validated, alt_text/transcript, size); `Observation.attachments`
+   list; `IngestionService.ingest(attachments=...)`. Canonical store keeps
+   reference + digest only (text-first, deterministic); derivation/
+   retrieval operate on the text content.
+3. **Shared-scope visibility** — DONE. `RetrievalService.search_shared`
+   (opt-in): queries each agent's exact 5-D scope independently and
+   merges deterministically (dedup by memory id, fused-score re-rank).
+   Caller-declared visibility rule; no wildcard; isolation boundary
+   preserved per scope.
+   Tests: `tests/application/test_tier3_memory.py` (9 tests).
+
+**Tier 3 status: COMPLETE.** All concept-map items are now HAVE/DONE.
+Remaining future work: retrieval-time usage feedback into ranking
+(rehearsal), memory budgeting per scope, hosted API.
 
 ## 4. Design constraints (locked by existing decisions)
 

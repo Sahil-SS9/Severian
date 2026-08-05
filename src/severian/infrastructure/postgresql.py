@@ -990,6 +990,41 @@ class PostgreSQLBackend:
             query=query,
         )
 
+    def list_entities(self, scope: Scope) -> list[Entity]:
+        """All entities in scope, ordered deterministically by (kind, name)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "entity", *self._scope_predicates(scope))
+            .order_by(
+                records.c.payload["kind"].astext,
+                records.c.payload["name"].astext,
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Entity.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def get_relation(self, scope: Scope, relation_id: str) -> Relation:
+        self._require_scope(scope)
+        return self._get("relation", relation_id, Relation, scope=scope)
+
+    def list_relations(self, scope: Scope) -> list[Relation]:
+        """All relations in scope, ordered deterministically by (subject, predicate, object)."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(records.c.record_type == "relation", *self._scope_predicates(scope))
+            .order_by(
+                records.c.payload["subject_id"].astext,
+                records.c.payload["predicate"].astext,
+                records.c.payload["object_id"].astext,
+                records.c.id,
+            )
+        )
+        with self.engine.connect() as connection:
+            return [Relation.model_validate(value) for value in connection.execute(query).scalars()]
+
     # -- derivation jobs ---------------------------------------------------
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
