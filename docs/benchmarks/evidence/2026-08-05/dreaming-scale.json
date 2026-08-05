@@ -1,6 +1,6 @@
 {
   "lane": "dreaming-curation-scale",
-  "date": "2026-08-05T10:30:31.117210+00:00",
+  "date": "2026-08-05T12:01:26.359141+00:00",
   "buckets": [
     "1000",
     "10000"
@@ -9,35 +9,35 @@
     "1000": {
       "consolidation": {
         "memories": 1000,
-        "seconds": 6.281,
-        "duplicate_groups": 50,
-        "merged": 50,
-        "contradictions": 404550,
-        "memories_per_sec": 159.2
+        "seconds": 5.811,
+        "duplicate_groups": 462,
+        "merged": 462,
+        "contradictions": 16537,
+        "memories_per_sec": 172.1
       },
       "curation": {
         "memories": 1000,
-        "seconds": 2.314,
+        "seconds": 2.383,
         "scored": 1000,
-        "memories_per_sec": 432.1
+        "memories_per_sec": 419.7
       }
     },
     "10000": {
       "consolidation": {
         "memories": 10000,
-        "seconds": 437.002,
-        "duplicate_groups": 500,
-        "merged": 500,
-        "contradictions": 40495500,
-        "memories_per_sec": 22.9
+        "seconds": 131.238,
+        "duplicate_groups": 4737,
+        "merged": 4737,
+        "contradictions": 1655382,
+        "memories_per_sec": 76.2
       },
       "curation": {
         "memories": 10000,
-        "seconds": 234.909,
+        "seconds": 183.007,
         "scored": 10000,
-        "memories_per_sec": 42.6
+        "memories_per_sec": 54.6
       }
     }
   },
-  "honest_notes": "Synthetic seeded corpus; ~10% near-duplicates per bucket. Consolidation is O(n^2) pairwise \u2014 expect super-linear cost. Curation is O(n) scoring (recency + usage + confidence). Not a throughput claim; the cost curve is the finding."
+  "honest_notes": "Synthetic seeded corpus; ~10% near-duplicates per bucket. corpus_mode=dense: every doc shares a common template, so MinHash-LSH buckets collapse toward all-pairs \u2014 the adversarial worst case for the pre-filter (no win over brute force). corpus_mode=diverse: per-topic vocabularies, so LSH prunes the O(n^2) scan (the realistic win). Curation ALSO calls ConsolidationService._find_contradictions, so curation inherits the same scaling behaviour as consolidation. The scoring loop itself is O(n); the contradiction scan dominates. Not a throughput claim; the cost curve is the finding."
 }

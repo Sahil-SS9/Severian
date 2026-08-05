@@ -39,6 +39,7 @@ class SeverianAdapter:
         embedding: Any | None = None,
         min_vector_score: float | None = 0.15,
         min_fused_score: float | None = None,
+        min_coverage: float | None = None,
         reset_db: bool = False,
     ) -> None:
         from severian.composition import build_bundle
@@ -48,6 +49,7 @@ class SeverianAdapter:
         self.dsn = dsn
         self._min_vector_score = min_vector_score
         self._min_fused_score = min_fused_score
+        self._min_coverage = min_coverage
         self._embedding = embedding
         self._root = Path(workdir or tempfile.mkdtemp(prefix="severian-bench-"))
         self._root.mkdir(parents=True, exist_ok=True)
@@ -193,6 +195,7 @@ class SeverianAdapter:
             gateway=self._gateway,
             min_vector_score=self._min_vector_score,
             min_fused_score=self._min_fused_score,
+            min_coverage=self._min_coverage,
         )
         items: list[dict[str, Any]] = []
         for hit in hits:

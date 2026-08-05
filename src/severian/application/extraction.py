@@ -66,6 +66,10 @@ _STOP = {
     "old", "new", "current", "final", "one", "two", "three",
     "four", "five", "six", "seven", "eight", "nine", "ten", "is", "are",
     "was", "were", "has", "have", "had", "does", "do", "done", "being",
+    # sentence-start pronouns: "He uses the Acme tool" must not extract
+    # a junk "He" entity (would create (He, uses, Acme) relations).
+    "he", "she", "it", "they", "we", "i", "you", "his", "her",
+    "them", "us", "me", "him",
 }
 
 # articles/determiners that can precede a proper noun and are NOT part

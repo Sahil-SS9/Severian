@@ -203,6 +203,7 @@ class MemoryService:
         policy: Mapping[str, Any] | None = None,
         min_vector_score: float | None = None,
         min_fused_score: float | None = None,
+        min_coverage: float | None = None,
         salience_weight: float = 0.0,
         salience_halflife_h: float = 720.0,
         track_usage: bool = False,
@@ -226,6 +227,7 @@ class MemoryService:
             limit=limit,
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,
+            min_coverage=min_coverage,
             salience_weight=salience_weight,
             salience_halflife_h=salience_halflife_h,
         )

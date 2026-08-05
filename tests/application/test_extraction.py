@@ -191,3 +191,60 @@ def test_extraction_is_scope_bound() -> None:
         assert repo.list_relations(scope_b) == []
         # scope a has both
         assert len(repo.list_entities(scope_a)) == 2
+
+
+# --- edge-case hardening (P1c review 2026-08-05) -----------------------------
+
+
+def test_extract_entities_rejects_sentence_start_pronouns() -> None:
+    # "He"/"She" at sentence start must NOT become entities — otherwise
+    # "He uses the Acme tool" would fabricate a (He, uses, Acme) triple.
+    content = "He uses the Acme tool. She leads the Aurora Project."
+    entities = extract_entities(content)
+    names = {name.casefold() for _kind, name in entities}
+    assert "he" not in names
+    assert "she" not in names
+    # "Acme" (capitalised) is the entity; "tool" is lowercase so not
+    # part of the proper-noun phrase.
+    assert "acme" in names
+    assert "aurora project" in names
+
+
+def test_extract_relations_no_pronoun_subject() -> None:
+    content = "He uses the Acme tool."
+    entities = extract_entities(content)
+    relations = extract_relations(content, entities)
+    for subj, pred, obj in relations:
+        assert subj.casefold() not in {"he", "she", "it", "they", "we", "i"}
+        assert pred != "uses" or obj.casefold() == "acme tool"
+
+
+def test_extract_entities_kind_precedence_org_over_person() -> None:
+    # A name with both an org suffix and a person title cue classifies
+    # as org (suffix checked first — deterministic precedence).
+    content = "Mr Robot Inc announced a new product."
+    entities = extract_entities(content)
+    by_name = {name.casefold(): kind for kind, name in entities}
+    assert by_name.get("mr robot inc") == "org"
+
+
+def test_extract_relations_multi_sentence_no_bleed() -> None:
+    # Two independent sentences with the same template: the subject of
+    # the second trigger must be the entity in ITS sentence, not bleed
+    # from the first.
+    content = "Grace Hopper works at Acme Corp. Ada Lovelace works at Babbage Ltd."
+    entities = extract_entities(content)
+    relations = extract_relations(content, entities)
+    pairs = {(s.casefold(), p, o.casefold()) for s, p, o in relations}
+    assert ("grace hopper", "works_at", "acme corp") in pairs
+    assert ("ada lovelace", "works_at", "babbage ltd") in pairs
+
+
+def test_extract_relations_skips_entities_not_in_relation_position() -> None:
+    # The object of "uses" must be the entity AFTER the trigger; a
+    # subject-only sentence produces no relation (no object).
+    content = "Alice Johnson works at Acme Corp."
+    entities = extract_entities(content)
+    # "uses" trigger is absent — no uses relation
+    relations = extract_relations(content, entities)
+    assert all(pred != "uses" for _s, pred, _o in relations)

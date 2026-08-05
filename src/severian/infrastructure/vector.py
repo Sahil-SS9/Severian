@@ -11,6 +11,7 @@ from typing import Protocol
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Memory, Scope
+from severian.infrastructure.stemming import porter_stem
 
 
 @dataclass(frozen=True)
@@ -45,11 +46,17 @@ class EmbeddingProvider(Protocol):
 
 
 class HashEmbedding:
-    def __init__(self, dimension: int = 256, *, skip_stopwords: bool = True):
+    def __init__(self, dimension: int = 256, *, skip_stopwords: bool = True, stem: bool = True):
         if dimension < 8:
             raise ValueError("embedding dimension must be at least 8")
         self.dimension = dimension
         self.skip_stopwords = skip_stopwords
+        # Stemming aligns the hash tokenizer with the FTS5 porter
+        # tokenizer: "authentication"/"authenticated"/"authenticate" all
+        # hash identically, so vector and lexical projections agree on
+        # inflected queries (fixes the fused-rank gap on paraphrase
+        # probes). Deterministic; on by default.
+        self.stem = stem
 
     def encode(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
@@ -57,6 +64,8 @@ class HashEmbedding:
         for token in tokens:
             if self.skip_stopwords and token in _STOPWORDS:
                 continue
+            if self.stem:
+                token = porter_stem(token)
             digest = hashlib.sha256(token.encode()).digest()
             index = int.from_bytes(digest[:4], "big") % self.dimension
             sign = 1.0 if digest[4] & 1 else -1.0
@@ -108,7 +117,7 @@ class LocalVectorIndex:
                 memory.scope.agent_id,
                 memory.scope.session_id,
                 memory.content,
-                json.dumps(vector, separators=(",", ":")),
+                json.dumps(vector),
             ),
         )
         self.connection.commit()
@@ -142,21 +151,22 @@ class LocalVectorIndex:
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]:
         query_vector = self.embedding.encode(query)
         rows = self.connection.execute(
-            """SELECT memory_id, vector FROM memory_vectors
-               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                 AND agent_id = ? AND session_id = ?""",
+            """SELECT memory_id, vector, content FROM memory_vectors
+              WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                AND agent_id = ? AND session_id = ?""",
             tuple(scope.model_dump().values()),
         ).fetchall()
-        scored: list[tuple[VectorHit, list[float]]] = []
-        for memory_id, encoded in rows:
+        scored: list[tuple[VectorHit, list[float], str]] = []
+        for memory_id, encoded, content in rows:
             vector = json.loads(encoded)
             score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
-            scored.append((VectorHit(memory_id=memory_id, score=score), vector))
+            scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
         # Deterministic tiebreak: identical scores (identical hash vectors)
-        # resolve by the vector itself (stable across runs), never by the
-        # random memory UUID.
-        scored.sort(key=lambda pair: (-pair[0].score, tuple(pair[1])))
-        return [hit for hit, _vector in scored[:limit]]
+        # resolve by content — the stable key across runs — then by
+        # memory UUID as the final total-order safety net (never reached
+        # for distinct content post-dedupe).
+        scored.sort(key=lambda pair: (-pair[0].score, pair[2], pair[0].memory_id))
+        return [hit for hit, _vector, _content in scored[:limit]]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)

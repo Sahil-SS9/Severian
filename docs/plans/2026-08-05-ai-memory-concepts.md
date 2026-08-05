@@ -80,6 +80,10 @@ cognitive-science literature) converge on these concepts. Each is marked
    new `supersede_memory` port method, survivor keeps provenance, audit
    recorded, `consolidated` memory emitted), contradiction flags (0.6-0.8
    overlap band, report-only). Worker `dream` job kind (mode=consolidate).
+   **P1d scale fix (2026-08-05):** MinHash-LSH pre-filter (24 bands x 2
+   rows, stopword-filtered signatures) prunes the all-pairs Jaccard scan
+   — measured 10k consolidate 437s → 131s on a diverse corpus; merge
+   decision stays exact Jaccard (LSH is a candidate generator only).
 2. **Self-curation** — DONE. `CurationService`: salience scoring
    (0.4*confidence + 0.3*recency + 0.3*usage, 720h half-life), low-value
    CANDIDATES (never deleted), contradiction pairs, `curation_review`

@@ -20,6 +20,7 @@ runner = BenchmarkRunner(
             provider_id="severian-sqlite",
             backend="sqlite",
             min_fused_score=0.05,
+            min_coverage=0.4,
         ),
     },
 )

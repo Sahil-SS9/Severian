@@ -16,7 +16,11 @@ runner = BenchmarkRunner(
     manifest=manifest,
     allow_missing=True,
     adapters={
-        "severian-sqlite": SeverianAdapter(provider_id="severian-sqlite", backend="sqlite"),
+        "severian-sqlite": SeverianAdapter(
+            provider_id="severian-sqlite",
+            backend="sqlite",
+            min_coverage=0.4,
+        ),
         "baseline-lexical": LexicalBaselineAdapter(provider_id="baseline-lexical"),
     },
 )

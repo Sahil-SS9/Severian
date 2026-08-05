@@ -33,7 +33,9 @@ from severian.infrastructure.sqlite import SQLiteRepository  # noqa: E402
 BUCKETS = (1_000, 10_000)
 
 
-def _make_repo(tmp: str, size: int) -> tuple[SQLiteRepository, Scope, list[Memory]]:
+def _make_repo(
+    tmp: str, size: int, corpus_mode: str = "dense"
+) -> tuple[SQLiteRepository, Scope, list[Memory]]:
     root = Path(tmp)
     repo = SQLiteRepository(path=root / f"sev-{size}.db")
     repo.initialize()
@@ -43,12 +45,50 @@ def _make_repo(tmp: str, size: int) -> tuple[SQLiteRepository, Scope, list[Memor
     )
     memories: list[Memory] = []
     for i in range(size):
-        # ~10% near-duplicates (same fact, reworded) to give dreaming
-        # real work; the rest unique. Deterministic (seeded by index).
-        if i % 10 == 0:
-            content = f"the backup job runs every night at 02:00 utc (entry {i // 10})"
+        if corpus_mode == "dense":
+            # ~10% near-duplicates (same fact, reworded) to give dreaming
+            # real work; the rest unique but SHARING a common template
+            # ("fact number X about the scale corpus") — adversarial to
+            # LSH: every doc lands in the same buckets, so the pre-filter
+            # degenerates toward all-pairs (the honest worst case).
+            if i % 10 == 0:
+                content = f"the backup job runs every night at 02:00 utc (entry {i // 10})"
+            else:
+                content = f"fact number {i} about the scale corpus"
         else:
-            content = f"fact number {i} about the scale corpus"
+            # diverse: genuinely disjoint vocabularies per topic, so
+            # unrelated pairs share ~0 tokens (Jaccard ~0.0-0.1) and LSH
+            # buckets stay small. Near-duplicates (~10%) reuse the SAME
+            # vocabulary, giving dreaming real work.
+            topic_templates = {
+                "network latency": ("the ping between nodes is", "ms"),
+                "database index": ("the btree index depth reached", "levels"),
+                "cache hit rate": ("the redis hit ratio was", "percent"),
+                "auth token": ("the oauth token expired after", "minutes"),
+                "api quota": ("the hourly api quota reset at", "utc"),
+                "log rotation": ("the syslog rotation kept", "archives"),
+                "backup window": ("the nightly backup finished in", "minutes"),
+                "deploy region": ("the canary rollout covered", "zones"),
+                "queue depth": ("the rabbitmq queue backlog hit", "messages"),
+                "memory usage": ("the heap footprint grew to", "gigabytes"),
+                "disk iops": ("the nvme volume sustained", "iops"),
+                "tls handshake": ("the tls handshake completed in", "roundtrips"),
+                "batch job": ("the spark batch processed", "partitions"),
+                "replica lag": ("the postgres replica lag reached", "seconds"),
+                "connection pool": ("the pgbouncer pool saturated at", "connections"),
+                "rate limit": ("the gateway rate limit allowed", "requests"),
+                "schema migration": ("the prisma migration applied", "steps"),
+                "feature flag": ("the launchdarkly flag flipped for", "users"),
+                "alert rule": ("the prometheus alert fired after", "thresholds"),
+                "config drift": ("the terraform plan detected", "drifts"),
+            }
+            topics = list(topic_templates)
+            topic = topics[i % len(topics)]
+            phrase, unit = topic_templates[topic]
+            if i % 10 == 0:
+                content = f"{phrase} {i % 100} {unit} (entry {i // 10})"
+            else:
+                content = f"{phrase} {i % 50} {unit} observed at {i % 24:02d}:00"
         obs = repo.add_observation(
             Observation(
                 scope=scope, content=content, raw_content=content,
@@ -69,6 +109,12 @@ def _make_repo(tmp: str, size: int) -> tuple[SQLiteRepository, Scope, list[Memor
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-bucket", type=int, default=10_000)
+    parser.add_argument(
+        "--corpus-mode",
+        choices=("dense", "diverse"),
+        default="dense",
+        help="dense = adversarial to LSH (shared template); diverse = real-world-ish",
+    )
     args = parser.parse_args()
     buckets = [b for b in BUCKETS if b <= args.max_bucket]
 
@@ -84,18 +130,22 @@ def main() -> None:
             "results": r,
             "honest_notes": (
                 "Synthetic seeded corpus; ~10% near-duplicates per bucket. "
-                "Consolidation is O(n^2) pairwise — expect super-linear cost. "
-                "Curation ALSO calls ConsolidationService._find_contradictions "
-                "(O(n^2) pairwise), so curation is O(n^2) too, not O(n) — "
-                "measured: 102x slower at 10k vs 1k. The scoring loop itself "
-                "is O(n); the contradiction reuse dominates. Not a throughput "
-                "claim; the cost curve is the finding."
+                "corpus_mode=dense: every doc shares a common template, so "
+                "MinHash-LSH buckets collapse toward all-pairs — the "
+                "adversarial worst case for the pre-filter (no win over "
+                "brute force). corpus_mode=diverse: per-topic vocabularies, "
+                "so LSH prunes the O(n^2) scan (the realistic win). "
+                "Curation ALSO calls ConsolidationService._find_contradictions, "
+                "so curation inherits the same scaling behaviour as "
+                "consolidation. The scoring loop itself is O(n); the "
+                "contradiction scan dominates. Not a throughput claim; the "
+                "cost curve is the finding."
             ),
         }
 
     for size in buckets:
         with tempfile.TemporaryDirectory() as tmp:
-            repo, scope, _ = _make_repo(tmp, size)
+            repo, scope, _ = _make_repo(tmp, size, args.corpus_mode)
 
             # -- consolidation ---------------------------------------------
             consolidation = ConsolidationService(repo)

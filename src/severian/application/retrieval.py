@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -7,6 +8,45 @@ from severian.application.ports import CanonicalRepository
 from severian.application.projections import VectorProjection
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.fts import FTS5Index
+from severian.infrastructure.vector import _STOPWORDS
+
+# Tokenize exactly like the hash embedding (and thus the FTS porter
+# tokenizer) so coverage is computed on the same token space.
+_TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
+
+
+def query_tokens(text: str) -> list[str]:
+    """Lowercase, stopword-filtered, porter-stemmed tokens.
+
+    Mirrors HashEmbedding.encode's tokenization so coverage is computed
+    in the same space the vector and FTS projections match on.
+    """
+    from severian.infrastructure.stemming import porter_stem
+
+    tokens: list[str] = []
+    for token in _TOKEN_RE.findall(text.casefold()):
+        if token in _STOPWORDS:
+            continue
+        tokens.append(porter_stem(token))
+    return tokens
+
+
+def query_coverage(query: str, content: str) -> float:
+    """Fraction of query tokens present in content (0.0..1.0).
+
+    Genuine evidence shares 2+ meaningful (stemmed) tokens with the
+    query; lexical-overlap decoys share 1 or none (e.g. 'new' in
+    'the new CFO'). Used as the abstention signal: a top hit with
+    coverage below the floor has no real support and the query should
+    abstain (return no evidence) rather than answer from noise.
+    """
+    q_tokens = query_tokens(query)
+    if not q_tokens:
+        return 0.0
+    c_tokens = set(query_tokens(content))
+    if not c_tokens:
+        return 0.0
+    return sum(1 for token in q_tokens if token in c_tokens) / len(q_tokens)
 
 
 @dataclass(frozen=True)
@@ -32,6 +72,7 @@ class RetrievalService:
         limit: int = 20,
         min_vector_score: float | None = None,
         min_fused_score: float | None = None,
+        min_coverage: float | None = None,
         salience_weight: float = 0.0,
         salience_halflife_h: float = 720.0,
         now: datetime | None = None,
@@ -59,6 +100,16 @@ class RetrievalService:
         vector_hits = self.vector.search(scope, query, limit=max(limit, 50))
         lexical_by_id = {hit.memory_id: hit for hit in lexical_hits}
         vector_by_id = {hit.memory_id: hit for hit in vector_hits}
+        # Dedupe by content: the correction/derive path can leave TWO
+        # memories with IDENTICAL content (the revision memory + the
+        # re-derived memory from the superseding observation). They tie
+        # on every content-based key (FTS rank, vector score, content),
+        # so their relative order falls to the random memory UUID —
+        # which differs across fresh adapters and makes fused RANKS
+        # (and therefore fused scores) non-deterministic. Since the
+        # duplicates are the same fact, keep one per content (the
+        # lowest memory_id — content-identical, so any pick is
+        # semantically equal and the choice does not affect scores).
         ids = set(lexical_by_id) | set(vector_by_id)
         ranked: list[RetrievalResult] = []
         for memory_id in ids:
@@ -95,7 +146,10 @@ class RetrievalService:
                     fused_score=fused,
                 )
             )
-        ranked.sort(key=lambda item: (-item.fused_score, item.memory.content))
+        # Total-order tiebreak: identical fused scores resolve by content
+        # (the stable key across runs), then by memory UUID as the final
+        # total-order safety net. Content is unique for distinct facts.
+        ranked.sort(key=lambda item: (-item.fused_score, item.memory.content, item.memory.id))
         # Salience-weighted ranking (Tier 2, opt-in): when salience_weight
         # > 0, boost memories that are recent and/or frequently used. The
         # salience factor is deterministic (computed from created_at +
@@ -128,6 +182,26 @@ class RetrievalService:
                 for item in ranked
                 if item.lexical_score > 0.0 or item.fused_score >= min_fused_score
             ]
+        # Query-coverage abstention: when enabled, EVERY returned hit must
+        # cover a minimum fraction of the query's meaningful (stemmed,
+        # non-stopword) tokens. A lexical decoy can share 1 generic token
+        # with the query ("project" in "Project Chrysalis" vs a stale
+        # "project lead" doc) yet have zero real support; a genuine hit
+        # shares 2+ query tokens. If the best candidate fails the floor
+        # the query ABSTAINS entirely (returns no evidence); weaker
+        # candidates that fail the floor are dropped individually. This
+        # is the principled replacement for an absolute fused-score
+        # threshold, which cannot separate decoys from genuine weak
+        # matches (their fused-score ranges overlap).
+        if min_coverage is not None:
+            filtered: list[RetrievalResult] = []
+            for item in ranked:
+                if query_coverage(query, item.memory.content) >= min_coverage:
+                    filtered.append(item)
+            if filtered != ranked:
+                ranked = filtered
+            if not ranked:
+                return []
         return ranked[:limit]
 
     def search_shared(

@@ -34,7 +34,52 @@ class FTS5Index:
                 session_id UNINDEXED,
                 content,
                 kind,
-                source_ids UNINDEXED
+                source_ids UNINDEXED,
+                tokenize = 'porter unicode61'
+            )"""
+        )
+        # Schema migration (FTS-2): tables created before the porter
+        # tokenizer existed (pre-2026-08-05) use the default unicode61
+        # tokenizer, which does NOT stem — "authentication" never matched
+        # "authenticated", silently crippling recall on inflected queries.
+        # Detect by reading the FTS5 config rank/tokenizer row and rebuild
+        # the (derived, rebuildable) projection table if it lacks porter.
+        self._ensure_porter_tokenizer()
+        self.connection.commit()
+
+    def _ensure_porter_tokenizer(self) -> None:
+        """Recreate memory_fts with the porter tokenizer if it is missing.
+
+        FTS5 persists its tokenizer choice in the table's CREATE
+        statement (sqlite_master.sql). Tables created before the porter
+        tokenizer existed (pre-2026-08-05) use the default unicode61
+        tokenizer, which does NOT stem — "authentication" never matched
+        "authenticated", silently crippling recall on inflected queries.
+        The projection is derived and rebuildable (P0-1), so dropping
+        the table is safe — the canonical store is the source of truth.
+        """
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_fts'"
+        ).fetchone()
+        ddl = (row[0] if row else "") or ""
+        if "porter" in ddl.casefold():
+            return  # already correct
+        # Recreate with the porter tokenizer. FTS5 cannot ALTER its
+        # tokenizer; drop + recreate the virtual table. Any existing
+        # projection content is dropped (rebuild from canonical).
+        self.connection.execute("DROP TABLE IF EXISTS memory_fts")
+        self.connection.execute(
+            """CREATE VIRTUAL TABLE memory_fts USING fts5(
+                memory_id UNINDEXED,
+                tenant_id UNINDEXED,
+                profile_id UNINDEXED,
+                collection_id UNINDEXED,
+                agent_id UNINDEXED,
+                session_id UNINDEXED,
+                content,
+                kind,
+                source_ids UNINDEXED,
+                tokenize = 'porter unicode61'
             )"""
         )
         self.connection.commit()
