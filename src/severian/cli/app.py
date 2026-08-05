@@ -98,6 +98,16 @@ def _emit(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True, default=str))
 
 
+def _system_scope() -> Scope:
+    """Reserved all-sentinel scope for store-wide administrative actions.
+
+    Export/import/backup are store-wide operations with no tenant context;
+    their audit trail lives under this sentinel scope (SEC-02: admin
+    operations must be auditable).
+    """
+    return Scope(tenant_id="_system", profile_id="_", collection_id="_", agent_id="_", session_id="_")
+
+
 @cli.command("ingest")
 def ingest(
     database: Path = typer.Option(..., "--database", help="SQLite canonical store path."),
@@ -278,6 +288,13 @@ def export(
         # never leave it world-readable (default umask 0644).
         os.chmod(temporary, 0o600)
         os.replace(temporary, safe_output)
+        # SEC-02: record the admin action in the audit trail.
+        try:
+            bundle.repository.append_audit(
+                _system_scope(), "store.export", str(safe_output), {"bytes": len(payload.encode("utf-8"))}
+            )
+        except Exception:
+            pass  # audit failure must not fail the export itself
         _emit({"format": "severian-v1", "output": str(safe_output), "bytes": len(payload.encode("utf-8"))})
     finally:
         bundle.close()
@@ -347,6 +364,16 @@ def import_(
                 )
                 coordinator.rebuild(scope)
                 touched_scopes.append(scope)
+        # SEC-02: record the admin action in the audit trail.
+        try:
+            bundle.repository.append_audit(
+                _system_scope(),
+                "store.import",
+                str(safe_input),
+                {"rebuilt_scopes": len(touched_scopes)},
+            )
+        except Exception:
+            pass  # audit failure must not fail the import itself
         _emit(
             {
                 "format": "severian-v1",

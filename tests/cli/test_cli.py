@@ -257,3 +257,43 @@ def test_export_refuses_symlink_destination(data_root: Path):
     # No stray temp files left behind.
     leftovers = [p.name for p in data_root.iterdir() if p.name.endswith(".tmp")]
     assert leftovers == []
+
+
+def test_export_import_records_admin_audit(data_root: Path):
+    """SEC-02: export and import must be recorded in the audit trail
+    under the reserved system scope."""
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    snapshot = data_root / "snapshot.json"
+
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    assert runner.invoke(
+        cli, ["ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+              "--content", "Ada founded a company", "--source", "{}"]
+    ).exit_code == 0
+
+    export_result = runner.invoke(
+        cli, ["export", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--output", str(snapshot)]
+    )
+    assert export_result.exit_code == 0, export_result.output
+    assert snapshot.exists()
+
+    import_result = runner.invoke(
+        cli, ["import", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--input", str(snapshot)]
+    )
+    assert import_result.exit_code == 0, import_result.output
+
+    # Inspect the audit trail under the system scope directly.
+    from severian.domain.models import Scope
+    from severian.infrastructure.sqlite import SQLiteRepository
+
+    repo = SQLiteRepository(db)
+    repo.initialize()
+    actions = [a.action for a in repo.list_audit(
+        Scope(tenant_id="_system", profile_id="_", collection_id="_", agent_id="_", session_id="_")
+    )]
+    repo.close()
+    assert "store.export" in actions
+    assert "store.import" in actions
