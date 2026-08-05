@@ -243,7 +243,27 @@ class SeverianAdapter:
                             "observation_id": observation.id,
                         }
                     )
-            items = sorted(history_items, key=lambda item: (-item["score"], item["document_id"])) + items
+            if history_items:
+                # Past-oriented temporal queries ("what WAS the old X?",
+                # "previously", "before", "used to") ask for the historical
+                # fact, which lives at the observation layer (the active
+                # head is tombstoned by the revision, P0-5). Present- or
+                # state-oriented temporal queries ("current", "today",
+                # "now", "how are X stored today") ask for the ACTIVE head
+                # — history should only break ties, never outrank it.
+                past_markers = ("old", "was", "were", "before", "previously", "used to", "past", "earlier")
+                present_oriented = not any(marker in query.casefold() for marker in past_markers)
+                if present_oriented:
+                    # Rank active-head items first; append history items
+                    # only after, so current state wins when it matches.
+                    history_items.sort(key=lambda item: (-item["score"], item["document_id"]))
+                    # Only append history docs NOT already in the active list.
+                    active_doc_ids = {item["document_id"] for item in items}
+                    items = items + [
+                        item for item in history_items if item["document_id"] not in active_doc_ids
+                    ]
+                else:
+                    items = sorted(history_items, key=lambda item: (-item["score"], item["document_id"])) + items
         # De-duplicate by document_id preserving order.
         seen: set[str] = set()
         deduped: list[dict[str, Any]] = []

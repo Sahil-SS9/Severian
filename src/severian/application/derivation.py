@@ -65,6 +65,13 @@ class DerivationService:
         policy: dict[str, object] | None = None,
     ) -> list[Memory]:
         observation = self.repository.get_observation(scope, observation_id)
+        # A superseded observation must never produce a NEW active memory
+        # (P0-5 correction propagation). The correction path tombstones
+        # memories already derived from it; the guard here prevents the
+        # queued derive job for the old head from resurrecting it after
+        # the revision lands (a stale-fact gate failure otherwise).
+        if observation.superseded_by_id is not None:
+            return []
         effective = self._effective_policy(scope, dict(policy or {}))
         if getattr(gateway, "is_cloud", False) and effective.get("cloud_allowed") is not True:
             raise CloudPolicyError("cloud derivation is forbidden by collection policy")

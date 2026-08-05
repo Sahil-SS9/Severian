@@ -44,6 +44,33 @@ Evidence: `result.json` in the evidence directory. Every number is computed
 from raw per-query traces (`traces.json`), never substituted with constants.
 The producing commit is recorded in `fingerprint.json` (commit field).
 
+### cit_prec fix (2026-08-05) — manifest-v1 gate now passes
+
+**Root cause:** the q5 temporal probe ("How are secrets stored by the
+password manager today?") is present-oriented — it asks about the CURRENT
+state. The adapter's temporal fallback prepended the history lexical match
+unconditionally, so the stale document (d11, "old password manager...
+plain text", marked `is_stale` and superseded by d12) outranked the active
+head (d12, "current... scrypt hashing").
+
+**Fix:** the temporal branch now distinguishes past-oriented queries
+("old", "was", "before", "previously", "used to", "past", "earlier") from
+present/state-oriented ones ("current", "today", "now"). Present-oriented
+queries keep the active-head ranking first and append history items only
+after (deduped); past-oriented queries keep the history-first behaviour.
+
+**Fresh focused lane (severian-sqlite, same manifest, same runner):**
+
+| Provider | recall@10 | MRR | cit-prec | stale | leak | unsup |
+|---|---|---|---|---|---|---|
+| **Severian SQLite** | **1.000** | **1.000** | **1.000** | **0.000** | **0.000** | **0.000** |
+
+q4 ("current role") and q5 ("stored today") both return the expected
+evidence at rank 1. The only remaining gate failure in a focused lane is
+the manifest-level `external_provider_count` (requires the Chroma lane —
+run the full benchmark to satisfy it). Full-lane re-run with Chroma + PG
+is recorded as the canonical fresh evidence.
+
 ### What the failures mean
 
 - **ChromaDB stale_fact_rate 0.179**: Chroma has no correction/supersession
