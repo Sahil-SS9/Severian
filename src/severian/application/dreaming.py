@@ -34,7 +34,7 @@ from typing import Any
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.vector import _STOPWORDS
+from severian.domain.text import STOPWORDS
 
 _TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
 
@@ -336,7 +336,7 @@ def _lsh_candidates(memories: list[Memory]) -> list[tuple[int, int]]:
         # present in every doc, so their min-hashes dominate and all
         # docs land in the same buckets. The meaningful vocabulary is
         # what distinguishes documents, so the signature uses only it.
-        tokens = {tok for tok in _tokens(memory.content) if tok not in _STOPWORDS}
+        tokens = {tok for tok in _tokens(memory.content) if tok not in STOPWORDS}
         if not tokens:
             # Preserve exact-duplicate detection for content whose only
             # tokens are stopwords. The filtered set is empty, so use the

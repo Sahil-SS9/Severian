@@ -6,13 +6,15 @@ import math
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.hits import VectorHit  # re-export for backward compat (ARCH-03)
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.stemming import porter_stem
+from severian.domain.text import STOPWORDS, porter_stem
+
+_STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
 
 
 def _restrict_private(path: str | Path) -> None:
@@ -27,24 +29,6 @@ def _restrict_private(path: str | Path) -> None:
             os.chmod(candidate, 0o600)
         except FileNotFoundError:
             pass
-
-
-@dataclass(frozen=True)
-class VectorHit:
-    memory_id: str
-    score: float
-
-
-_STOPWORDS: frozenset[str] = frozenset(
-    {
-        "a", "an", "and", "are", "as", "at", "be", "been", "by", "can",
-        "could", "did", "do", "does", "for", "from", "had", "has", "have",
-        "how", "in", "into", "is", "it", "its", "no", "not", "of", "on",
-        "or", "should", "that", "the", "their", "these", "they", "this",
-        "those", "to", "was", "we", "were", "what", "when", "where",
-        "which", "who", "whose", "will", "with", "would", "you",
-    }
-)
 
 
 class EmbeddingProvider(Protocol):

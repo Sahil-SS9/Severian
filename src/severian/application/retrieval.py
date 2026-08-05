@@ -4,11 +4,10 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from severian.application.ports import CanonicalRepository
+from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.vector import _STOPWORDS
+from severian.domain.text import STOPWORDS, porter_stem
 
 # Tokenize exactly like the hash embedding (and thus the FTS porter
 # tokenizer) so coverage is computed on the same token space.
@@ -21,11 +20,9 @@ def query_tokens(text: str) -> list[str]:
     Mirrors HashEmbedding.encode's tokenization so coverage is computed
     in the same space the vector and FTS projections match on.
     """
-    from severian.infrastructure.stemming import porter_stem
-
     tokens: list[str] = []
     for token in _TOKEN_RE.findall(text.casefold()):
-        if token in _STOPWORDS:
+        if token in STOPWORDS:
             continue
         tokens.append(porter_stem(token))
     return tokens
@@ -59,7 +56,7 @@ class RetrievalResult:
 
 
 class RetrievalService:
-    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: VectorProjection):
+    def __init__(self, repository: CanonicalRepository, lexical: LexicalIndex, vector: VectorProjection):
         self.repository = repository
         self.lexical = lexical
         self.vector = vector
@@ -94,7 +91,7 @@ class RetrievalService:
                 )
                 for memory in memories
             ][:limit]
-        if not FTS5Index.is_searchable(query):
+        if not self.lexical.is_searchable(query):
             return []
         lexical_hits = self.lexical.search(scope, query, limit=max(limit, 50))
         vector_hits = self.vector.search(scope, query, limit=max(limit, 50))

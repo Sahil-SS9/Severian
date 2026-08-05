@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.hits import FTSHit  # re-export for backward compat (ARCH-03)
 from severian.domain.models import Memory, Scope
 from severian.infrastructure.vector import _STOPWORDS
 
@@ -25,13 +25,6 @@ def _restrict_private(path: str | Path) -> None:
             os.chmod(candidate, 0o600)
         except FileNotFoundError:
             pass
-
-
-@dataclass(frozen=True)
-class FTSHit:
-    memory_id: str
-    score: float
-    snippet: str
 
 
 class FTS5Index:

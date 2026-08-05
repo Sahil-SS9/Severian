@@ -4,10 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from severian.application.ports import CanonicalRepository
+from severian.application.ports import CanonicalRepository, LexicalIndex
+from severian.domain.hits import VectorHit
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.vector import VectorHit
 
 
 @runtime_checkable
@@ -51,7 +50,7 @@ class ProjectionStatus:
 
 
 class ProjectionCoordinator:
-    def __init__(self, repository: CanonicalRepository, lexical: FTS5Index, vector: VectorProjection):
+    def __init__(self, repository: CanonicalRepository, lexical: LexicalIndex, vector: VectorProjection):
         self.repository = repository
         self.lexical = lexical
         self.vector = vector

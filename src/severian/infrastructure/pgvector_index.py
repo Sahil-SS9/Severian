@@ -22,8 +22,9 @@ from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, fu
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.hits import VectorHit
 from severian.domain.models import Memory, Scope
-from severian.infrastructure.vector import EmbeddingProvider, HashEmbedding, VectorHit
+from severian.infrastructure.vector import EmbeddingProvider, HashEmbedding
 
 # Default vector dimension (hash embeddings). The table is built by
 # :func:`_build_memory_vectors` so a semantic embedding with a different

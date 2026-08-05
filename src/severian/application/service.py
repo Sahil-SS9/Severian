@@ -18,12 +18,11 @@ from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.ingestion import IngestionResult, IngestionService
-from severian.application.ports import CanonicalRepository
+from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Memory, Observation, Scope
-from severian.infrastructure.fts import FTS5Index
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,7 @@ class MemoryService:
         derivation: DerivationService,
         context: ContextAssembler,
         *,
-        lexical: FTS5Index | None = None,
+        lexical: LexicalIndex | None = None,
     ) -> None:
         self._repository = repository
         self._ingestion = ingestion
