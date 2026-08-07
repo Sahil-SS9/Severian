@@ -104,23 +104,47 @@ def _encode_tool_result(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, default=str, allow_nan=False)
 
 
+def _resolve_embedding() -> Any:
+    """Select the embedding provider from ``SEVERIAN_EMBEDDING``.
+
+    ``SEVERIAN_EMBEDDING=granite`` selects the Granite R2 neural
+    embedding (384-dim). ``or_hash()`` guarantees a working provider:
+    the neural model when loadable, otherwise the deterministic
+    :class:`HashEmbedding` at the same dimension (safe fallback). Any
+    other value (or unset) keeps the default deterministic
+    :class:`HashEmbedding` at 256-dim.
+    """
+    import os
+
+    from severian.infrastructure.granite_embedding import GraniteR2Embedding
+
+    if os.environ.get("SEVERIAN_EMBEDDING", "").strip().lower() == "granite":
+        return GraniteR2Embedding().or_hash()
+    from severian.infrastructure.vector import HashEmbedding
+
+    return HashEmbedding(dimension=256)
+
+
 def _build_default_service_from_env() -> MemoryService:
     """Build a service bundle from environment configuration.
 
     P1-4: enables zero-arg provider construction by the real Hermes
     loader. ``SEVERIAN_DSN`` selects PostgreSQL; otherwise SQLite
     storage is used with ``SEVERIAN_STORAGE`` (default: a temp dir).
-    The returned service is owned by the caller (the provider), which
-    must call ``shutdown()`` to release bundle resources.
+    ``SEVERIAN_EMBEDDING=granite`` selects the Granite R2 semantic
+    embedding (fallback-safe). The returned service is owned by the
+    caller (the provider), which must call ``shutdown()`` to release
+    bundle resources.
     """
     import os
     import tempfile
 
     from severian.composition import build_bundle
 
+    embedding = _resolve_embedding()
     dsn = os.environ.get("SEVERIAN_DSN", "").strip()
     if dsn:
-        bundle = build_bundle(backend="postgresql", dsn=dsn)
+        bundle = build_bundle(backend="postgresql", dsn=dsn, embedding=embedding)
     else:
         storage = os.environ.get("SEVERIAN_STORAGE", "").strip()
         if storage:
@@ -132,6 +156,7 @@ def _build_default_service_from_env() -> MemoryService:
             database=root / "severian.db",
             fts=root / "severian.fts",
             vectors=root / "severian.vec",
+            embedding=embedding,
         )
     # Keep the bundle reachable so shutdown() can release it.
     provider_bundles.append(bundle)
@@ -158,7 +183,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     """
 
     PROVIDER_NAME = "severian"
-    PROVIDER_VERSION = "0.1.0"
+    PROVIDER_VERSION = "0.2.0"
 
     def __init__(
         self,

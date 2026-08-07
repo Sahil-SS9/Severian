@@ -420,3 +420,55 @@ def test_register_entry_point_hands_provider_to_context(tmp_path, monkeypatch):
     assert collector.provider is not None
     assert collector.provider.name == "severian"
     collector.provider.shutdown()
+
+
+def test_resolve_embedding_default_is_hash(monkeypatch):
+    # P1: with SEVERIAN_EMBEDDING unset (or any non-granite value), the
+    # zero-arg env path must keep the deterministic hash embedding.
+    from severian.infrastructure.vector import HashEmbedding
+    from severian.integrations.hermes import _resolve_embedding
+
+    monkeypatch.delenv("SEVERIAN_EMBEDDING", raising=False)
+    assert isinstance(_resolve_embedding(), HashEmbedding)
+
+    monkeypatch.setenv("SEVERIAN_EMBEDDING", "some-other-backend")
+    assert isinstance(_resolve_embedding(), HashEmbedding)
+
+
+def test_resolve_embedding_granite_selects_neural_or_hash(monkeypatch):
+    # P1: SEVERIAN_EMBEDDING=granite must select the Granite provider
+    # (dimension 384), degrading safely to hash when the neural deps /
+    # model are unavailable in this environment.
+    from severian.infrastructure.granite_embedding import GraniteR2Embedding
+    from severian.infrastructure.vector import HashEmbedding
+    from severian.integrations.hermes import _resolve_embedding
+
+    monkeypatch.setenv("SEVERIAN_EMBEDDING", "granite")
+    embedding = _resolve_embedding()
+    # or_hash() returns the neural provider when loaded, else hash at
+    # the same dimension. Either way it must expose dimension == 384.
+    assert isinstance(embedding, (GraniteR2Embedding, HashEmbedding))
+    assert embedding.dimension == 384
+
+
+def test_build_from_env_selects_embedding_from_env(tmp_path, monkeypatch):
+    # P1 end-to-end: _build_default_service_from_env wires the env-selected
+    # embedding into the constructed bundle's vector index.
+    from severian.infrastructure.vector import HashEmbedding
+    from severian.integrations.hermes import (
+        _build_default_service_from_env,
+        provider_bundles,
+    )
+
+    monkeypatch.setenv("SEVERIAN_STORAGE", str(tmp_path))
+    monkeypatch.delenv("SEVERIAN_DSN", raising=False)
+    monkeypatch.delenv("SEVERIAN_EMBEDDING", raising=False)
+
+    before = len(provider_bundles)
+    service = _build_default_service_from_env()
+    try:
+        assert isinstance(provider_bundles[-1].vector.embedding, HashEmbedding)
+        assert provider_bundles[-1].service is service
+    finally:
+        provider_bundles[-1].close()
+        del provider_bundles[before:]
