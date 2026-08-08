@@ -45,6 +45,7 @@ class GraniteR2Embedding:
         self.model_name = model_name
         self.dimension = 384  # Granite Embedding 107M output dim
         self._model: Any = None
+        self._announced_failure = False
 
     @property
     def loaded(self) -> bool:
@@ -78,9 +79,13 @@ class GraniteR2Embedding:
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
+            print(f"✅ Granite R2 embeddings loaded (dim={self.dimension})")
             return True
         except Exception as exc:  # pragma: no cover - env-dependent
             logger.warning("Granite embedding load failed (%s); falling back to hash", exc)
+            if not self._announced_failure:
+                print("⚠️ Granite R2 embeddings unavailable — using hash fallback")
+                self._announced_failure = True
             return False
 
     def encode(self, text: str) -> list[float]:
