@@ -73,8 +73,12 @@ class GraniteR2Embedding:
             )
             if model_cache.is_dir():
                 os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            # Silence tqdm progress bars from model loading.
-            os.environ.setdefault("TQDM_DISABLE", "1")
+            # Silence tqdm progress bars — model LOADING and per-query
+            # ENCODE both emit "Batches: ..." bars from sentence-transformers.
+            # Set unconditionally (not setdefault) so a caller's own
+            # TQDM_DISABLE=1 (fleet .env) can never be re-enabled here, and a
+            # standalone script that never loaded the .env still gets silence.
+            os.environ["TQDM_DISABLE"] = "1"
 
             from sentence_transformers import SentenceTransformer
 
