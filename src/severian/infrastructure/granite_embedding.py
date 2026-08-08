@@ -55,6 +55,26 @@ class GraniteR2Embedding:
         if self._model is not None:
             return True
         try:
+            import os
+            from pathlib import Path
+
+            # The model is downloaded once and cached locally. When the cache
+            # exists, load OFFLINE: no network request means no
+            # "unauthenticated requests to the HF Hub" warning and no
+            # download chatter on every session start. First-time installs
+            # (no cache) keep online mode so the initial download works.
+            model_cache = (
+                Path.home()
+                / ".cache"
+                / "huggingface"
+                / "hub"
+                / "models--ibm-granite--granite-embedding-107m-multilingual"
+            )
+            if model_cache.is_dir():
+                os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            # Silence tqdm progress bars from model loading.
+            os.environ.setdefault("TQDM_DISABLE", "1")
+
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
@@ -68,7 +88,9 @@ class GraniteR2Embedding:
             if not self.load():
                 raise RuntimeError("Granite embedding not loaded; call load() or use or_hash()")
         assert self._model is not None
-        vector = self._model.encode(text, normalize_embeddings=True)
+        vector = self._model.encode(
+            text, normalize_embeddings=True, show_progress_bar=False
+        )
         return [float(value) for value in vector]
 
     def or_hash(self) -> HashEmbedding:
