@@ -17,6 +17,8 @@ any query executes (same fail-closed rule as the canonical backend).
 """
 from __future__ import annotations
 
+import json
+
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,6 +26,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from severian.application.ports import CanonicalRepository
 from severian.domain.hits import VectorHit
 from severian.domain.models import Memory, Scope
+from severian.infrastructure.embedding_metadata import (
+    EmbeddingMetadata,
+    EmbeddingSpaceMismatchError,
+    metadata_from_dict,
+)
+from severian.infrastructure.embedding_registry import resolve_embedding_metadata
 from severian.infrastructure.vector import EmbeddingProvider, HashEmbedding
 
 # Default vector dimension (hash embeddings). The table is built by
@@ -58,6 +66,17 @@ def _build_memory_vectors(dimension: int) -> Table:
     return table
 
 
+def _build_vector_space_meta() -> Table:
+    """Key/value table holding the embedding-space identity."""
+    meta = MetaData()
+    return Table(
+        "vector_space_meta",
+        meta,
+        Column("key", String, primary_key=True),
+        Column("value", String, nullable=False),
+    )
+
+
 memory_vectors = _build_memory_vectors(DEFAULT_VECTOR_DIMENSION)
 
 
@@ -79,16 +98,61 @@ class PGVectorIndex:
         self.embedding = embedding or HashEmbedding()
         self._dimension = int(getattr(self.embedding, "dimension", DEFAULT_VECTOR_DIMENSION))
         self._table = _build_memory_vectors(self._dimension)
+        self._meta = _build_vector_space_meta()
+        self._metadata = resolve_embedding_metadata(self.embedding)
         self.engine = create_engine(self.dsn, pool_pre_ping=True)
 
     def initialize(self) -> None:
         with self.engine.begin() as connection:
             connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
             self._table.metadata.create_all(connection)
+            self._meta.metadata.create_all(connection)
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_memory_vectors_scope "
                 "ON memory_vectors (tenant_id, profile_id, collection_id, agent_id, session_id)"
             )
+        self._stamp_or_verify_space()
+
+    def _stamp_or_verify_space(self) -> None:
+        """Stamp an empty PG index; verify a non-empty one (see LocalVectorIndex)."""
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(self._meta.c.value).where(self._meta.c.key == "embedding_metadata")
+            ).scalar_one_or_none()
+            count = int(connection.execute(
+                select(func.count()).select_from(self._table)
+            ).scalar_one())
+            if row is None:
+                if count > 0:
+                    raise EmbeddingSpaceMismatchError(
+                        stored=EmbeddingMetadata(
+                            provider="unknown", model_id="unknown", revision="unknown",
+                            dimension=0, normalize=False, pooling="unknown",
+                            prompt_contract="", runtime="unknown"),
+                        active=self._metadata,
+                        path_or_dsn=self.dsn,
+                    )
+                connection.execute(
+                    self._meta.insert().values(
+                        key="embedding_metadata",
+                        value=json.dumps(self._metadata.to_dict(), sort_keys=True),
+                    )
+                )
+                return
+            stored = metadata_from_dict(json.loads(row))
+            if stored.fingerprint != self._metadata.fingerprint:
+                if count == 0:
+                    # Empty index: no data at risk — restamp with the
+                    # active space (see LocalVectorIndex).
+                    connection.execute(
+                        self._meta.update().where(self._meta.c.key == "embedding_metadata").values(
+                            value=json.dumps(self._metadata.to_dict(), sort_keys=True),
+                        )
+                    )
+                    return
+                raise EmbeddingSpaceMismatchError(
+                    stored=stored, active=self._metadata, path_or_dsn=self.dsn
+                )
 
     def reset(self) -> None:
         with self.engine.begin() as connection:

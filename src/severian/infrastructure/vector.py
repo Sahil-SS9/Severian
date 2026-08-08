@@ -13,8 +13,18 @@ from severian.application.ports import CanonicalRepository
 from severian.domain.hits import VectorHit  # re-export for backward compat (ARCH-03)
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS, porter_stem
+from severian.infrastructure.embedding_metadata import (
+    EmbeddingMetadata,
+    EmbeddingSpaceMismatchError,
+    metadata_from_dict,
+)
+from severian.infrastructure.embedding_registry import resolve_embedding_metadata
 
 _STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
+
+
+def _meta_json(metadata: EmbeddingMetadata) -> str:
+    return json.dumps(metadata.to_dict(), sort_keys=True)
 
 
 def _restrict_private(path: str | Path) -> None:
@@ -83,6 +93,12 @@ class LocalVectorIndex:
         self.connection.execute("PRAGMA busy_timeout=30000")
         _restrict_private(self.path)
         self.connection.execute(
+            """CREATE TABLE IF NOT EXISTS vector_space_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )"""
+        )
+        self.connection.execute(
             """CREATE TABLE IF NOT EXISTS memory_vectors (
                 memory_id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL,
@@ -94,7 +110,52 @@ class LocalVectorIndex:
                 vector TEXT NOT NULL
             )"""
         )
+        self._metadata = resolve_embedding_metadata(embedding)
+        self._stamp_or_verify_space()
         self.connection.commit()
+
+    def _stamp_or_verify_space(self) -> None:
+        """Stamp an empty index with the active identity; verify a non-empty one.
+
+        Non-empty index + different fingerprint → EmbeddingSpaceMismatchError
+        with rebuild guidance. An index that has rows but NO stored identity
+        (pre-identity store) is treated as unknown space and must be rebuilt
+        explicitly — opening it for writes would silently mix spaces.
+        """
+        row = self.connection.execute(
+            "SELECT value FROM vector_space_meta WHERE key = 'embedding_metadata'"
+        ).fetchone()
+        count = int(self.connection.execute(
+            "SELECT COUNT(*) FROM memory_vectors"
+        ).fetchone()[0])
+        if row is None:
+            if count > 0:
+                raise EmbeddingSpaceMismatchError(
+                    stored=EmbeddingMetadata(
+                        provider="unknown", model_id="unknown", revision="unknown",
+                        dimension=0, normalize=False, pooling="unknown",
+                        prompt_contract="", runtime="unknown"),
+                    active=self._metadata,
+                    path_or_dsn=str(self.path),
+                )
+            self.connection.execute(
+                "INSERT INTO vector_space_meta (key, value) VALUES ('embedding_metadata', ?)",
+                (_meta_json(self._metadata),),
+            )
+            return
+        stored = metadata_from_dict(json.loads(row[0]))
+        if stored.fingerprint != self._metadata.fingerprint:
+            if count == 0:
+                # Empty index: no data at risk — restamp with the active
+                # space so a new embedding can initialise it.
+                self.connection.execute(
+                    "UPDATE vector_space_meta SET value = ? WHERE key = 'embedding_metadata'",
+                    (_meta_json(self._metadata),),
+                )
+                return
+            raise EmbeddingSpaceMismatchError(
+                stored=stored, active=self._metadata, path_or_dsn=str(self.path)
+            )
 
     def close(self) -> None:
         self.connection.close()
