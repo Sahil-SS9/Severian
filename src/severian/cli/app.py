@@ -462,6 +462,71 @@ def import_(
         bundle.close()
 
 
+@cli.command("rebuild-vectors")
+def rebuild_vectors(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    keep_rollback: bool = typer.Option(
+        True,
+        "--keep-rollback/--no-keep-rollback",
+        help="Keep the pre-swap index as rollback until explicit cleanup.",
+    ),
+) -> None:
+    """Rebuild vector projections side-by-side, verify, then swap atomically.
+
+    The live index is never rebuilt in place. A candidate is built next
+    to it (new file for sqlite, new table for PG), verified (count,
+    digest, dimension/fingerprint, retrieval canaries, deterministic
+    ranking), then swapped atomically. The pre-swap index is kept as
+    rollback until cleanup. Honours SEVERIAN_EMBEDDING via the central
+    resolver — the rebuilt space always matches the gateways'.
+    """
+    from severian.infrastructure.embedding_resolver import embedding_from_env
+    from severian.infrastructure.rebuild import rebuild_pg_vectors, rebuild_sqlite_vectors
+
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
+        embedding = embedding_from_env()
+        if dsn:
+            result = rebuild_pg_vectors(dsn, bundle.repository, scope, embedding, keep_rollback=keep_rollback)
+        else:
+            result = rebuild_sqlite_vectors(vectors, bundle.repository, scope, embedding, keep_rollback=keep_rollback)
+        payload: dict[str, object] = {
+            "format": "severian-v1",
+            "status": result.status,
+            "provider_id": result.provider_id,
+            "scope": str(scope),
+        }
+        if result.verification is not None:
+            payload["verification"] = {
+                "canonical_count": result.verification.canonical_count,
+                "vector_count": result.verification.vector_count,
+                "digest_match": result.verification.digest_match,
+                "dimension": result.verification.dimension,
+                "fingerprint": result.verification.fingerprint,
+                "canary_hits": result.verification.canary_hits,
+                "canary_total": result.verification.canary_total,
+                "deterministic": result.verification.deterministic,
+            }
+        if result.rollback_path:
+            payload["rollback_path"] = result.rollback_path
+        if result.error:
+            payload["error"] = result.error
+        _emit(payload)
+        if result.status != "swapped":
+            raise typer.Exit(code=1)
+    finally:
+        bundle.close()
+
+
 @cli.command("rollback")
 def rollback(
     database: Path = typer.Option(..., "--database"),

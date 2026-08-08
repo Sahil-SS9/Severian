@@ -40,11 +40,11 @@ from severian.infrastructure.vector import EmbeddingProvider, HashEmbedding
 DEFAULT_VECTOR_DIMENSION = 256
 
 
-def _build_memory_vectors(dimension: int) -> Table:
-    """Build the ``memory_vectors`` table for a specific vector dimension."""
+def _build_memory_vectors(dimension: int, *, name: str = "memory_vectors") -> Table:
+    """Build a ``memory_vectors``-shaped table for a vector dimension."""
     meta = MetaData()
     table = Table(
-        "memory_vectors",
+        name,
         meta,
         Column("memory_id", String, primary_key=True),
         Column("tenant_id", String, nullable=False),
@@ -66,11 +66,11 @@ def _build_memory_vectors(dimension: int) -> Table:
     return table
 
 
-def _build_vector_space_meta() -> Table:
+def _build_vector_space_meta(*, name: str = "vector_space_meta") -> Table:
     """Key/value table holding the embedding-space identity."""
     meta = MetaData()
     return Table(
-        "vector_space_meta",
+        name,
         meta,
         Column("key", String, primary_key=True),
         Column("value", String, nullable=False),
@@ -89,7 +89,13 @@ class PGVectorIndex:
     schema instead of colliding with the hash schema.
     """
 
-    def __init__(self, dsn: str, embedding: EmbeddingProvider | None = None):
+    def __init__(
+        self,
+        dsn: str,
+        embedding: EmbeddingProvider | None = None,
+        *,
+        table_name: str = "memory_vectors",
+    ):
         if not dsn or not dsn.strip():
             raise ValueError("PGVectorIndex requires a non-empty DSN")
         self.dsn = dsn.strip()
@@ -97,8 +103,9 @@ class PGVectorIndex:
             self.dsn = self.dsn.replace("postgresql://", "postgresql+psycopg://", 1)
         self.embedding = embedding or HashEmbedding()
         self._dimension = int(getattr(self.embedding, "dimension", DEFAULT_VECTOR_DIMENSION))
-        self._table = _build_memory_vectors(self._dimension)
-        self._meta = _build_vector_space_meta()
+        self.table_name = table_name
+        self._table = _build_memory_vectors(self._dimension, name=table_name)
+        self._meta = _build_vector_space_meta(name=f"{table_name}_meta")
         self._metadata = resolve_embedding_metadata(self.embedding)
         self.engine = create_engine(self.dsn, pool_pre_ping=True)
 
@@ -109,7 +116,7 @@ class PGVectorIndex:
             self._meta.metadata.create_all(connection)
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_memory_vectors_scope "
-                "ON memory_vectors (tenant_id, profile_id, collection_id, agent_id, session_id)"
+                f"ON {self.table_name} (tenant_id, profile_id, collection_id, agent_id, session_id)"
             )
         self._stamp_or_verify_space()
 
