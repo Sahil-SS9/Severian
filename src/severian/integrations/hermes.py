@@ -183,7 +183,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     """
 
     PROVIDER_NAME = "severian"
-    PROVIDER_VERSION = "0.2.0"
+    PROVIDER_VERSION = "0.3.0"
 
     def __init__(
         self,
@@ -486,6 +486,30 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                     ["observation_id"],
                 ),
             },
+            {
+                "name": "severian_search_shared",
+                "description": (
+                    "Read across a set of agent identities sharing the caller's "
+                    "team/task profile or collection scope (the governed shared seam). "
+                    "Queries each listed agent's exact scope independently and merges "
+                    "results deterministically. No wildcard: only the caller's own scope "
+                    "and the explicitly listed agent_ids are touched. Use for team/task "
+                    "shared memory reads."
+                ),
+                "parameters": schema(
+                    {
+                        "agent_ids": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                            "description": "Agent identities whose memory to share into this read.",
+                        },
+                        "query": {"type": "string", "minLength": 1},
+                        "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200},
+                    },
+                    ["agent_ids", "query"],
+                ),
+            },
         ]
 
     def handle_tool_call(
@@ -573,6 +597,46 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 "content": observation.content,
                 "content_hash": observation.content_hash,
                 "created_at": observation.created_at.isoformat(),
+            })
+
+        if tool_name == "severian_search_shared":
+            if set(arguments) - {*_SCOPE_DIMS, "agent_ids", "query", "limit"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            agent_ids = arguments.get("agent_ids")
+            query = arguments.get("query")
+            if not isinstance(agent_ids, list) or not agent_ids:
+                return _encode_tool_result({"error": "agent_ids must be a non-empty list"})
+            if not all(isinstance(a, str) and a.strip() for a in agent_ids):
+                return _encode_tool_result({"error": "agent_ids must be non-empty strings"})
+            if not isinstance(query, str) or not query.strip():
+                return _encode_tool_result({"error": "query must not be empty"})
+            try:
+                limit = self._validated_limit(arguments.get("limit", 10))
+            except ValueError:
+                return _encode_tool_result({"error": "invalid limit"})
+            # The tool args carry the caller's explicit scope (validated above
+            # against the active scope). search_shared reuses that scope as the
+            # base and swaps only agent_id per listed identity — preserving the
+            # isolation boundary. No wildcard, no cross-tenant access.
+            base_scope = _ProviderScope.model_validate(
+                {dimension: arguments[dimension] for dimension in _SCOPE_DIMS}
+            ).to_domain()
+            shared_hits = self._service._retrieval.search_shared(
+                base_scope,
+                agent_ids=agent_ids,
+                query=query,
+                limit=limit,
+            )
+            return _encode_tool_result({
+                "hits": [
+                    {
+                        "memory_id": hit.memory.id,
+                        "content": hit.memory.content,
+                        "source_observation_ids": list(hit.source_observation_ids),
+                        "fused_score": hit.fused_score,
+                    }
+                    for hit in shared_hits
+                ]
             })
 
         return _encode_tool_result({"error": "unknown tool"})

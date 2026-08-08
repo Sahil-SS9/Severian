@@ -17,7 +17,7 @@ from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService
-from severian.domain.models import Collection
+from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
@@ -239,11 +239,16 @@ def test_sync_turn_without_scope_fails_closed(service_and_provider):
 
 # -- tools ---------------------------------------------------------------
 
-def test_get_tool_schemas_returns_three_tools(service_and_provider):
+def test_get_tool_schemas_returns_four_tools(service_and_provider):
     _, provider, _ = service_and_provider
     schemas = provider.get_tool_schemas()
     names = {s["name"] for s in schemas}
-    assert names == {"severian_search", "severian_ingest", "severian_get_observation"}
+    assert names == {
+        "severian_search",
+        "severian_ingest",
+        "severian_get_observation",
+        "severian_search_shared",
+    }
     for schema in schemas:
         assert "parameters" in schema
         assert set(schema["parameters"].get("required", [])) >= {
@@ -264,6 +269,55 @@ def test_handle_tool_call_search(service_and_provider):
     ))
     assert "hits" in result
     assert isinstance(result["hits"], list)
+
+
+def test_tool_schemas_include_search_shared(service_and_provider):
+    _, provider, _ = service_and_provider
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    names = {t["name"] for t in provider.get_tool_schemas()}
+    assert "severian_search_shared" in names
+    # The shared tool must require agent_ids.
+    shared = next(t for t in provider.get_tool_schemas() if t["name"] == "severian_search_shared")
+    assert "agent_ids" in shared["parameters"]["required"]
+
+
+def test_handle_tool_call_search_shared(service_and_provider):
+    # Two agents in the same profile/collection share memory via the seam.
+    # In the fleet each profile runs its own provider with its own scope; the
+    # shared read surfaces another agent's memory when explicitly asked.
+    service, provider, _ = service_and_provider
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    provider.sync_turn("agent-a1 planning docs", "")
+
+    # Seed agent a2's memory directly through the service (the tool surface
+    # correctly refuses to cross scope, so a2 is populated out-of-band).
+    a2_scope = Scope(
+        tenant_id="t1", profile_id="p1", collection_id="c1",
+        agent_id="a2", session_id="s1",
+    )
+    service.ingest_observation(a2_scope, content="agent-a2 status update",
+                               source={"uri": "test://a2"})
+    service.search(a2_scope, query="agent-a2", limit=5, derive=True,
+                   gateway=FakeGateway())
+
+    result = json.loads(provider.handle_tool_call(
+        "severian_search_shared",
+        {**_tool_scope_args(), "agent_ids": ["a2"], "query": "agent-a2", "limit": 5},
+    ))
+    assert "hits" in result
+    contents = [h["content"] for h in result["hits"]]
+    assert any("agent-a2 status update" in c for c in contents)
+
+
+def test_handle_tool_call_search_shared_rejects_empty_agent_ids(service_and_provider):
+    _, provider, _ = service_and_provider
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    result = json.loads(provider.handle_tool_call(
+        "severian_search_shared",
+        {**_tool_scope_args(), "agent_ids": [], "query": "anything"},
+    ))
+    assert "error" in result
+    assert "non-empty" in result["error"]
 
 
 def test_handle_tool_call_ingest(service_and_provider):
