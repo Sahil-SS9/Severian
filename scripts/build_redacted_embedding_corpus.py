@@ -39,21 +39,24 @@ from typing import Any
 # --- redaction patterns ---------------------------------------------------
 
 _REDACTIONS: list[tuple[str, str]] = [
-    # API keys / tokens (common prefixes first, then generic long tokens)
-    (r"sk-live-[A-Za-z0-9_-]{8,}", "[REDACTED-API-KEY]"),
-    (r"sk-[A-Za-z0-9_-]{16,}", "[REDACTED-API-KEY]"),
+    # API keys / tokens (common prefixes first, then generic long tokens).
+    # ALL credential patterns are case-insensitive: config dumps and logs
+    # use API_KEY / ApiKey / api-key / api_key interchangeably, and a
+    # case-sensitive pattern silently leaks every uppercase variant.
+    (r"(?i)sk-live-[A-Za-z0-9_-]{8,}", "[REDACTED-API-KEY]"),
+    (r"(?i)sk-[A-Za-z0-9_-]{16,}", "[REDACTED-API-KEY]"),
     (r"ghp_[A-Za-z0-9]{20,}", "[REDACTED-GITHUB-TOKEN]"),
     (r"gho_[A-Za-z0-9]{20,}", "[REDACTED-GITHUB-TOKEN]"),
-    (r"xox[baprs]-[A-Za-z0-9-]{10,}", "[REDACTED-SLACK-TOKEN]"),
+    (r"(?i)xox[baprs]-[A-Za-z0-9-]{10,}", "[REDACTED-SLACK-TOKEN]"),
     (r"AKIA[0-9A-Z]{16}", "[REDACTED-AWS-KEY]"),
-    (r"Bearer\s+[A-Za-z0-9._~+/=-]{16,}", "[REDACTED-BEARER]"),
-    (r"token[=: ]+[A-Za-z0-9._-]{12,}", "[REDACTED-TOKEN]"),
-    (r"secret[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-SECRET]"),
-    (r"password[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-PASSWORD]"),
+    (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{16,}", "[REDACTED-BEARER]"),
+    (r"(?i)token[=: ]+[A-Za-z0-9._-]{12,}", "[REDACTED-TOKEN]"),
+    (r"(?i)secret[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-SECRET]"),
+    (r"(?i)password[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-PASSWORD]"),
     (r"(?i)\bpassword\s+is\s+[A-Za-z0-9._!@#$%^&*-]{4,}", "[REDACTED-PASSWORD]"),
-    (r"api[_-]?key[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-API-KEY]"),
+    (r"(?i)api[_-]?key[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-API-KEY]"),
     # Email + phone
-    (r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED-EMAIL]"),
+    (r"(?i)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED-EMAIL]"),
     (r"\+?\d[\d\s().-]{7,}\d", "[REDACTED-PHONE]"),
     # Home paths and private URLs (label may contain the hint, e.g. my-vpn)
     (r"/home/[A-Za-z0-9._-]+", "[REDACTED-HOME-PATH]"),
@@ -66,8 +69,9 @@ _REDACTIONS: list[tuple[str, str]] = [
 # closed. These are deliberately narrow to avoid false fails on scrubbed
 # text — they target raw credential shapes that redaction must have removed.
 _DETECTORS: list[tuple[str, re.Pattern[str]]] = [
-    ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("api-key", re.compile(r"sk-live-[A-Za-z0-9_-]{8,}")),
+    ("email", re.compile(r"(?i)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
+    ("api-key", re.compile(r"(?i)sk-live-[A-Za-z0-9_-]{8,}")),
+    ("api-key-label", re.compile(r"(?i)api[_-]?key[=: ]+[A-Za-z0-9._-]{8,}")),
     ("github-token", re.compile(r"gh[opu]_[A-Za-z0-9]{20,}")),
     ("aws-key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("home-path", re.compile(r"/home/[A-Za-z0-9._-]+")),
@@ -162,7 +166,11 @@ def _read_source(source_db: str) -> list[tuple[str, str, str]]:
     try:
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")]
-        table = next((t for t in tables if t in ("messages", "conversations", "sessions")), None)
+        # Priority order is authoritative: a DB may list its tables in
+        # any order, and `sessions` (metadata, no session_id column)
+        # must never shadow `messages` (the actual conversation rows).
+        table = next((t for t in ("messages", "conversations", "sessions")
+                      if t in tables), None)
         if table is None:
             raise SystemExit(f"no known session table in {source_db}: {tables}")
         rows = conn.execute(

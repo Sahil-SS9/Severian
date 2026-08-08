@@ -135,6 +135,54 @@ def test_email_and_phone_are_redacted(tmp_path: Path) -> None:
     assert "hunter2" not in corpus_text
 
 
+def test_uppercase_credential_labels_are_redacted(tmp_path: Path) -> None:
+    """UPPERCASE credential labels must be redacted (regression).
+
+    Found in the first real corpus build (2026-08-09): OLLAMA_API_KEY=...,
+    GOOGLE_AI_API_KEY: ... leaked because every credential pattern was
+    case-sensitive — API_KEY=/ApiKey: bypassed api[_-]?key=. All
+    credential patterns are now case-insensitive; the fail-closed
+    detector additionally catches any surviving label+value form.
+    """
+    rows = _sample_rows() + [
+        ("sess-9", "assistant", "export OLLAMA_API_KEY=11f311abc9hbi"),
+        ("sess-9", "assistant", "GOOGLE_AI_API_KEY: AIzaSyDnSAMPLEKEY0123456789"),
+        ("sess-9", "assistant", "ApiKey=abcdefghijklmnop12345678"),
+    ]
+    src = tmp_path / "src.db"
+    _make_source_db(src, rows)
+    out = exporter.build(source_db=str(src), out_root=str(tmp_path / "owned-6"),
+                         query_pairs=20, seed=1)
+    corpus_text = " ".join(o.content for o in out.observations)
+    assert "11f311" not in corpus_text
+    assert "AIzaSy" not in corpus_text
+    assert "abcdefghijklmnop" not in corpus_text
+    assert "[REDACTED-API-KEY]" in corpus_text
+
+
+def test_table_priority_prefers_messages_over_sessions(tmp_path: Path) -> None:
+    """A DB listing `sessions` BEFORE `messages` must still read messages.
+
+    Regression: _read_source iterated the DB's own table order, so a
+    store whose sqlite_master lists sessions first (e.g. hermes state.db)
+    picked `sessions` (metadata, no session_id column) and crashed.
+    """
+    import build_redacted_embedding_corpus as exp
+
+    db = tmp_path / "tables.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT)")
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT)")
+    conn.execute("INSERT INTO messages (session_id, role, content) VALUES ('s1','user','hello world')")
+    conn.commit()
+    conn.close()
+
+    rows = exp._read_source(str(db))  # noqa: SLF001
+    assert len(rows) == 1
+    assert rows[0][0] == "s1"
+    assert rows[0][2] == "hello world"
+
+
 def test_source_db_is_unchanged(tmp_path: Path) -> None:
     src = tmp_path / "src.db"
     _make_source_db(src, _sample_rows())
