@@ -33,6 +33,7 @@ from severian.benchmarks.adapters.baseline import LexicalBaselineAdapter  # noqa
 from severian.benchmarks.adapters.severian import SeverianAdapter  # noqa: E402
 
 BUCKETS = (1_000, 10_000, 100_000)
+QUERY_REPETITIONS = 3  # hot-query repetitions for p50/p95/p99 (quality rule 4)
 QUERY_SET = [
     "What is the current office address?",
     "Who founded the company?",
@@ -226,6 +227,16 @@ def run_lane(
             else:
                 adapter.query(query, limit=5, scope=QUERY_SCOPE)
             result.query_latencies_ms.append((time.perf_counter() - t1) * 1000.0)
+        # Repeated hot queries make p50/p95/p99 statistically meaningful
+        # (quality rule 4: repetitions are recorded, not implied).
+        for _ in range(max(1, QUERY_REPETITIONS - 1)):
+            for query in QUERY_SET:
+                t1 = time.perf_counter()
+                if pid.startswith("severian"):
+                    adapter.query(query, limit=5, scope=QUERY_SCOPE, derive=False)
+                else:
+                    adapter.query(query, limit=5, scope=QUERY_SCOPE)
+                result.query_latencies_ms.append((time.perf_counter() - t1) * 1000.0)
     finally:
         adapter.close()
     return result
@@ -253,6 +264,61 @@ def monotonicity_report(results: list[LaneResult]) -> dict[str, dict[str, Any]]:
             "throughput_series": [round(v, 1) for v in throughput],
         }
     return report
+
+
+def _collect_provenance(command: list[str], max_bucket: int = max(BUCKETS)) -> dict[str, Any]:
+    """Collect the full provenance record required by quality rule 4.
+
+    Returns candidate SHA, dirty-patch identity, corpus hash, model
+    revision, runtime versions, hardware fingerprint, command, seed.
+    """
+    import platform
+
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    ).stdout.strip()
+    cpu_model = "unknown"
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    runtime: dict[str, str] = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+    }
+    try:
+        import sqlite3
+
+        runtime["sqlite"] = sqlite3.sqlite_version
+    except Exception:
+        pass
+    for mod in ("psycopg", "pgvector", "onnxruntime", "sentence_transformers", "numpy"):
+        try:
+            m = __import__(mod)
+            runtime[mod] = getattr(m, "__version__", "unknown")
+        except Exception:
+            runtime[mod] = "unavailable"
+    return {
+        "git_sha": subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
+        ).stdout.strip(),
+        "dirty_patch": dirty if dirty else "clean",
+        "generated_corpus_sha256": hashlib.sha256(
+            json.dumps([c for c in generate_corpus(max_bucket)], sort_keys=True).encode()
+        ).hexdigest(),
+        "model_revision": "n/a (hash embedding baseline)",
+        "runtime_versions": runtime,
+        "hardware": {"cpu": cpu_model, "cores": os.cpu_count()},
+        "command": command,
+        "seed": _SEED,
+    }
 
 
 def main() -> None:
@@ -293,14 +359,8 @@ def main() -> None:
             "monotonicity": monotonicity_report(all_results),
             "run_started_at": run_started_at,
             "run_state": "complete" if len(all_results) + len(skipped) >= len(buckets) * len(lanes) else "partial",
-            "repro": {
-                "git_sha": subprocess.run(
-                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
-                ).stdout.strip(),
-                "generated_corpus_sha256": hashlib.sha256(
-                    json.dumps([c for c in generate_corpus(max(buckets))], sort_keys=True).encode()
-                ).hexdigest(),
-            },
+            "repro": _collect_provenance(sys.argv, max(buckets)),
+            "repetitions": QUERY_REPETITIONS,
         }
         scale_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
