@@ -46,7 +46,10 @@ select = ["E", "F", "I", "UP", "B"]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Path", "fastapi.Query", "typer.Option", "typer.Argument"]
 
 [tool.mypy]
-python_version = "3.11"
+# The worktree venv is Python 3.12.3; the 3.11 pin was stale and breaks
+# on modern stub files (numpy 2.5 pyi uses PEP 695 `type` statements,
+# which need a 3.12 target).
+python_version = "3.12"
 strict = true
 packages = ["severian"]
 
@@ -54,7 +57,14 @@ packages = ["severian"]
 # are imported lazily and only present when Granite R2 is installed. Without
 # stubs they fail strict import checking; the provider degrades to the
 # deterministic hash embedding when they are absent, so a missing stub is
-# expected and safe.
+# expected and safe. numpy is a transitive runtime dep of sentence-transformers
+# (not a Severian direct dependency); its 2.x pyi files use `type` statements
+# that mypy's python_version=3.11 parser rejects, so it gets the same
+# treat-as-optional treatment.
 [[tool.mypy.overrides]]
-module = ["sentence_transformers", "sentence_transformers.*", "onnxruntime", "onnxruntime.*"]
+module = [
+    "sentence_transformers", "sentence_transformers.*",
+    "onnxruntime", "onnxruntime.*",
+    "numpy", "numpy.*",
+]
 ignore_missing_imports = true

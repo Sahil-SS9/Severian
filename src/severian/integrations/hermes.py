@@ -107,22 +107,14 @@ def _encode_tool_result(payload: dict[str, Any]) -> str:
 def _resolve_embedding() -> Any:
     """Select the embedding provider from ``SEVERIAN_EMBEDDING``.
 
-    ``SEVERIAN_EMBEDDING=granite`` selects the Granite R2 neural
-    embedding (384-dim). ``or_hash()`` guarantees a working provider:
-    the neural model when loadable, otherwise the deterministic
-    :class:`HashEmbedding` at the same dimension (safe fallback). Any
-    other value (or unset) keeps the default deterministic
-    :class:`HashEmbedding` at 256-dim.
+    Delegates to the single central resolver (zero-debt plan 2.2) — no
+    environment parsing and NO silent hash substitution here. Granite
+    load failure surfaces visibly at encode time (never swapped for
+    hash vectors under a semantic identity).
     """
-    import os
+    from severian.infrastructure.embedding_resolver import embedding_from_env
 
-    from severian.infrastructure.granite_embedding import GraniteR2Embedding
-
-    if os.environ.get("SEVERIAN_EMBEDDING", "").strip().lower() == "granite":
-        return GraniteR2Embedding().or_hash()
-    from severian.infrastructure.vector import HashEmbedding
-
-    return HashEmbedding(dimension=256)
+    return embedding_from_env()
 
 
 def _build_default_service_from_env() -> MemoryService:

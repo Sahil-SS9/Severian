@@ -31,7 +31,7 @@ from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
 from severian.infrastructure.fts import FTS5Index
-from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
+from severian.infrastructure.vector import LocalVectorIndex
 
 
 @dataclass
@@ -155,7 +155,9 @@ def _build_sqlite(
     repository = SQLiteRepository(database)
     repository.initialize()
     lexical = FTS5Index(fts)
-    vector = LocalVectorIndex(vectors, embedding or HashEmbedding(dimension=256))
+    from severian.infrastructure.embedding_resolver import resolve_embedding
+
+    vector = LocalVectorIndex(vectors, embedding or resolve_embedding("hash"))
     return _compose(repository=repository, lexical=lexical, vector=vector, gateway=gateway, backend="sqlite")
 
 

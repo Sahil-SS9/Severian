@@ -62,20 +62,17 @@ def build_default_service(
 def _embedding_from_env() -> Any:
     """Honor the same SEVERIAN_EMBEDDING contract as the Hermes adapter.
 
-    The CLI runs ``severian work`` which REBUILDS vector projections for
-    touched scopes. If the CLI ignored the env and used the default hash
-    embedding while gateways run Granite, a drain would silently rewrite
-    every vector at the wrong dimension (256 vs 384) — the exact silent
-    dimension mixing the fleet audit flagged. Imported lazily so the CLI
-    stays fast and dependency-light when Granite is not configured.
+    Delegates to the single central resolver (zero-debt plan 2.2) — the
+    CLI runs ``severian work`` which REBUILDS vector projections for
+    touched scopes, so the selected space MUST match the gateways'.
+    The resolver returns the hash embedding explicitly when unset (no
+    None + composition default split-brain), and Granite R2 when
+    selected — with NO silent hash substitution. Imported lazily so the
+    CLI stays fast and dependency-light when Granite is not configured.
     """
-    import os
+    from severian.infrastructure.embedding_resolver import embedding_from_env
 
-    if os.environ.get("SEVERIAN_EMBEDDING", "").strip().lower() == "granite":
-        from severian.infrastructure.granite_embedding import GraniteR2Embedding
-
-        return GraniteR2Embedding()
-    return None
+    return embedding_from_env()
 
 
 @dataclass
