@@ -45,6 +45,12 @@ QUERY_SET = [
 ]
 QUERY_SCOPE = "t1/p1/c1/a1/s1"
 
+# 100k warmup budget: the 50-cap derive loop is super-linear (~2000
+# passes, each re-scanning the scope). Bounded so the lane records an
+# honest PARTIAL warmup (warmed_memories + warmup_complete=false)
+# instead of a fake full-warm number or a multi-hundred-hour wait.
+WARMUP_BUDGET_100K = 900.0  # seconds (15 min) per backend
+
 _TEMPLATES = [
     "The {project} project reached milestone {n} in quarter {q} of {year}.",
     "Engineer {name} documented the {area} subsystem on {month} {day}, {year}.",
@@ -120,6 +126,7 @@ class LaneResult:
     query_latencies_ms: list[float] = field(default_factory=list)
     cold_query_ms: float = 0.0
     warmed_memories: int = 0
+    warmup_complete: bool = False
 
     @property
     def p50(self) -> float:
@@ -147,6 +154,7 @@ class LaneResult:
             "docs_per_sec": round(self.docs_per_sec, 1),
             "cold_first_query_ms": round(self.cold_query_ms, 2),
             "warmed_memories": self.warmed_memories,
+            "warmup_complete": self.warmup_complete,
             "query_p50_ms": round(self.p50, 2),
             "query_p95_ms": round(self.p95, 2),
             "query_p99_ms": round(self.p99, 2),
@@ -224,13 +232,24 @@ def run_lane(
         # capped at 50 NEW memories (derive_max_observations=50), so a
         # single cold query does NOT warm a 10k/100k index — hot timing
         # would measure a ~50-row index instead of the real bucket
-        # (empty-index trap in disguise). The lane now warms to
-        # stability via adapter.warmup() and records the derived count
-        # so the evidence proves the index was actually full.
+        # (empty-index trap in disguise). The lane warms via
+        # adapter.warmup() and records the derived count so the evidence
+        # proves how much of the bucket was actually indexed.
+        #
+        # Warmup budget: the 50-cap loop is super-linear (~200 passes at
+        # 10k, ~2000 at 100k, each pass re-scanning the whole scope).
+        # 1k/10k warm to FULL stability; 100k is bounded (WARMUP_BUDGET_100K)
+        # and recorded as a PARTIAL warmup — an honest partial number
+        # beats a fake full one or a 750h wait (measured live 2026-08-09:
+        # 10k full warmup exceeded 60 min).
         if pid.startswith("severian"):
             t1 = time.perf_counter()
-            result.warmed_memories = adapter.warmup(scope=QUERY_SCOPE)
+            max_warm = None if bucket <= 10_000 else WARMUP_BUDGET_100K
+            result.warmed_memories = adapter.warmup(
+                scope=QUERY_SCOPE, max_seconds=max_warm
+            )
             result.cold_query_ms = (time.perf_counter() - t1) * 1000.0
+            result.warmup_complete = result.warmed_memories >= bucket
 
         for query in QUERY_SET:
             t1 = time.perf_counter()

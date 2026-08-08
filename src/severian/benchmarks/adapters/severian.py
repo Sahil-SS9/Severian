@@ -168,15 +168,25 @@ class SeverianAdapter:
                 # Already superseded by an earlier ingest; idempotent.
                 continue
 
-    def warmup(self, *, scope: str) -> int:
-        """Fully derive the scope by looping until memory count stabilises.
+    def warmup(self, *, scope: str, max_seconds: float | None = None) -> int:
+        """Derive the scope by looping until stable or a time budget is spent.
 
         A single ``search(derive=True)`` is capped at 50 new memories per
         call, so one cold query does NOT warm a large index. The scale
-        lane must warm to stability BEFORE timing hot queries, otherwise
-        hot p95 measures a ~50-row index instead of the real bucket
-        (empty-index trap in disguise). Returns the derived memory count.
+        lane must warm BEFORE timing hot queries, otherwise hot p95
+        measures a ~50-row index instead of the real bucket (empty-index
+        trap in disguise).
+
+        Returns the derived memory count — whether that equals the full
+        bucket is recorded by the caller as evidence (a partial warmup
+        is honest if reported; pretending a ~50-row index is the bucket
+        is not). ``max_seconds`` bounds the warmup so 10k/100k lanes
+        produce verifiable partial-warm numbers instead of dying in a
+        timeout (the 50-cap loop is super-linear: ~200 passes at 10k,
+        ~2000 at 100k, each pass re-scanning everything).
         """
+        import time
+
         from severian.domain.models import Scope as ModelScope
 
         parts = parse_scope(scope)
@@ -184,8 +194,12 @@ class SeverianAdapter:
             tenant_id=parts[0], profile_id=parts[1], collection_id=parts[2],
             agent_id=parts[3], session_id=parts[4],
         )
+        deadline = time.monotonic() + max_seconds if max_seconds else None
         prev = -1
+        cur = 0
         for _ in range(5000):
+            if deadline is not None and time.monotonic() >= deadline:
+                return cur
             self._bundle.service.search(
                 scoped, query="facts", limit=5, derive=True, gateway=self._gateway,
             )
@@ -193,7 +207,7 @@ class SeverianAdapter:
             if cur == prev:
                 return cur
             prev = cur
-        return prev
+        return cur
 
     def query(
         self,
