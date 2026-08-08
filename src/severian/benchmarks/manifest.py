@@ -74,7 +74,10 @@ class QuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    kind: Literal["fact", "paraphrase", "multi_source", "correction", "temporal", "negative", "adversarial"]
+    kind: Literal[
+        "fact", "paraphrase", "multi_source", "correction", "temporal",
+        "negative", "adversarial", "code", "crosslang", "long",
+    ]
     query: str
     scope: str
     answerable: bool = True

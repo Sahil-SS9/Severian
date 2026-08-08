@@ -199,7 +199,7 @@ def _build_pairs(observations: list[CorpusObservation], n: int) -> list[QueryEvi
     """
     pairs: list[QueryEvidencePair] = []
     kinds = ["fact", "paraphrase", "correction", "temporal", "negative",
-             "code", "crosslang", "long"]
+             "code", "crosslang", "long", "adversarial"]
     step = max(1, len(observations) // max(1, n))
     for i in range(min(n, len(observations))):
         obs = observations[(i * step) % len(observations)]

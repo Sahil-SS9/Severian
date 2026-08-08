@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "manifest_id": "embedding-bakeoff-v1",
+  "name": "Severian embedding tier bake-off v1",
+  "corpus": {
+    "id": "real-data-redacted-v1",
+    "version": "0.1.0",
+    "seed": 20260808,
+    "documents": [
+      {
+        "id": "template-placeholder",
+        "content": "TEMPLATE PLACEHOLDER — inject a redacted corpus with --corpus",
+        "scope": "template:placeholder"
+      }
+    ]
+  },
+  "queries": [
+    {
+      "id": "template-placeholder-q",
+      "kind": "fact",
+      "query": "TEMPLATE PLACEHOLDER",
+      "scope": "template:placeholder",
+      "answerable": true,
+      "expected_evidence": [{"document_id": "template-placeholder", "weight": 1.0}]
+    },
+    {
+      "id": "template-placeholder-temporal",
+      "kind": "temporal",
+      "query": "TEMPLATE PLACEHOLDER temporal",
+      "scope": "template:placeholder",
+      "answerable": true,
+      "expected_evidence": [{"document_id": "template-placeholder", "weight": 1.0}]
+    },
+    {
+      "id": "template-placeholder-negative",
+      "kind": "negative",
+      "query": "TEMPLATE PLACEHOLDER negative",
+      "scope": "template:placeholder",
+      "answerable": false,
+      "expected_evidence": []
+    },
+    {
+      "id": "template-placeholder-adversarial",
+      "kind": "adversarial",
+      "query": "TEMPLATE PLACEHOLDER adversarial",
+      "scope": "template:placeholder",
+      "answerable": false,
+      "expected_evidence": []
+    }
+  ],
+  "providers": [
+    {
+      "id": "hash",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "hash", "prompt_version": "hash-v1"},
+      "config": {
+        "dimension": 256,
+        "normalize": true,
+        "runtime": "pure-python",
+        "quantisation": "none",
+        "revision": "n/a",
+        "model_dir": null,
+        "note": "Baseline. No model, no dependency. Explicit in telemetry (locked decision D6)."
+      }
+    },
+    {
+      "id": "granite-107m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-107m-multilingual", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-107m-multilingual",
+        "note": "Current production control (historical/current comparison only)."
+      }
+    },
+    {
+      "id": "granite-97m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-97m-multilingual-r2", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-97m-multilingual-r2",
+        "note": "Balanced DEFAULT candidate."
+      }
+    },
+    {
+      "id": "gemma-300m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "google/embeddinggemma-300m", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 768,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--google--embeddinggemma-300m",
+        "note": "Balanced candidate. RECORD Gemma terms / gated acquisition before any production use."
+      }
+    },
+    {
+      "id": "qwen-0.6b",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "qwen-retrieval-instruction-v1"},
+      "config": {
+        "dimension": 1024,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "prompt": "Given a web search query, retrieve relevant passages that answer the query",
+        "note": "High-tier candidate. Run with query instruction AND no-instruction control."
+      }
+    },
+    {
+      "id": "granite-311m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-311m-multilingual-r2", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 768,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
+        "note": "High-tier candidate. Test 768 and 384 Matryoshka if the published artefact supports it."
+      }
+    },
+    {
+      "id": "bekko-a8m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "hotchpotch/bekko-embedding-v1-a8m", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "int8",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--hotchpotch--bekko-embedding-v1-a8m",
+        "note": "Lite multilingual candidate."
+      }
+    },
+    {
+      "id": "granite-small-en",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-small-english-r2", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "unknown-pin-at-run",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-small-english-r2",
+        "note": "English-only control. CANNOT win the multilingual default (plan 1.2)."
+      }
+    },
+    {
+      "id": "jina-v4",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "jinaai/jina-embeddings-v4", "prompt_version": "n/a"},
+      "vendor_reported_only": true,
+      "config": {
+        "reference_url": "https://huggingface.co/jinaai/jina-embeddings-v4",
+        "exclusion_reason": "3.8B params, ~7.87 GB BF16 weights, multimodal overkill for agent memory; downloaded weights under non-commercial research terms. EXCLUDED — do not download or run without separate licence approval (plan 1.2 matrix)."
+      }
+    }
+  ],
+  "release_gate": {
+    "min_recall_at_10": 0.9,
+    "min_citation_precision": 0.8,
+    "max_stale_fact_rate": 0.0,
+    "max_cross_scope_leakage": 0.0,
+    "max_unsupported_answer_rate": 0.1,
+    "require_external_providers": 0
+  },
+  "metrics": [
+    "recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
+    "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
+    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"
+  ]
+}
