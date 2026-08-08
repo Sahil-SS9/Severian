@@ -184,9 +184,12 @@ class EmbeddingBakeoffRunner:
             encode_elapsed = time.perf_counter() - t0
             encode_tps = len(encode_texts) / encode_elapsed if encode_elapsed > 0 else 0.0
 
-            # Quality + query latency via the shared scorer.
+            # Quality + query latency via the shared scorer. allow_missing:
+            # the bake-off runs ONE lane at a time — the other manifest
+            # providers legitimately have no adapter registered.
             runner = BenchmarkRunner(manifest=self._manifest,
-                                     adapters={provider_id: built})
+                                     adapters={provider_id: built},
+                                     allow_missing=True)
             quality = runner._run_provider(provider_id)  # noqa: SLF001 — reuse scoring
             latencies = [float(raw["elapsed_ms"]) for raw in quality.raw]
             p50, p95, p99 = self._percentiles(latencies)

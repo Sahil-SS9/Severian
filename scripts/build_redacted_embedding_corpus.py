@@ -119,15 +119,16 @@ class Corpus:
 def _opaque_scope(session_id: str, salt: str) -> str:
     """Map a live session id to a five-dimensional opaque scope.
 
-    tenant:profile:collection:agent:session — each dimension a stable
+    tenant/profile/collection/agent/session — each dimension a stable
     deterministic digest prefix so the same live id always maps to the
-    same opaque id, but no real name survives.
+    same opaque id, but no real name survives. Slash-separated to match
+    the benchmark adapters' t/p/c/a/s contract (scope.py).
     """
     def dim(label: str) -> str:
         digest = hashlib.sha256(f"{salt}:{label}:{session_id}".encode()).hexdigest()
         return f"t{digest[:8]}"
 
-    return ":".join([dim("tenant"), dim("profile"), dim("collection"),
+    return "/".join([dim("tenant"), dim("profile"), dim("collection"),
                      dim("agent"), dim("session")])
 
 
@@ -236,6 +237,10 @@ def build(source_db: str, out_root: str, query_pairs: int = 120,
     salt = f"severian-corpus-{seed}"
 
     rows = _read_source(source_db)
+    # Tool/empty stubs carry no embedding signal — drop them BEFORE the
+    # count check so a source with many empty rows still yields a valid
+    # corpus, and no empty-content document ever reaches the manifest.
+    rows = [row for row in rows if row[2].strip()]
     rows = rows[:max_observations]
     if len(rows) < 500:
         raise SystemExit(
@@ -247,12 +252,20 @@ def build(source_db: str, out_root: str, query_pairs: int = 120,
     try:
         # 1. map + redact --------------------------------------------------
         observations: list[CorpusObservation] = []
-        for session_id, _role, content in rows:
+        for index, (session_id, _role, content) in enumerate(rows):
             scrubbed = _redact(content)
+            # Content-addressed IDs collide: empty/duplicate content maps
+            # to the same digest (918 empty-content rows all became
+            # sha256("") = e3b0c442...). IDs must be UNIQUE (manifest
+            # requirement) — mix in session + row index. Still
+            # deterministic, still opaque, no live names.
+            opaque_id = hashlib.sha256(
+                f"{salt}:{session_id}:{index}:{scrubbed}".encode()
+            ).hexdigest()[:16]
             observations.append(CorpusObservation(
                 scope=_opaque_scope(session_id, salt),
                 content=scrubbed,
-                opaque_id=hashlib.sha256(scrubbed.encode()).hexdigest()[:16],
+                opaque_id=opaque_id,
             ))
 
         # 2. query/evidence pairs -----------------------------------------

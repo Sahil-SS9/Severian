@@ -160,6 +160,26 @@ def test_uppercase_credential_labels_are_redacted(tmp_path: Path) -> None:
     assert "[REDACTED-API-KEY]" in corpus_text
 
 
+def test_empty_content_rows_are_skipped_and_ids_unique(tmp_path: Path) -> None:
+    """Empty tool stubs are dropped; remaining IDs are unique (regression).
+
+    Two fixes: (1) content-addressed IDs made empty-content rows hash to
+    the same digest (918 of 5000 in the real corpus) — IDs now mix in
+    session + row index; (2) empty rows are skipped outright — they carry
+    no embedding signal and violate the manifest's non-empty content.
+    """
+    rows = _sample_rows() * 60 + [("sess-9", "tool", "")] * 200
+    src = tmp_path / "src.db"
+    _make_source_db(src, rows, min_rows=600)
+    out = exporter.build(source_db=str(src), out_root=str(tmp_path / "owned-7"),
+                         query_pairs=20, seed=1)
+    ids = [o.opaque_id for o in out.observations]
+    assert len(ids) == len(set(ids)), "opaque IDs must be unique"
+    assert all(o.content.strip() for o in out.observations), "no empty content"
+    # 60 cycles × 10 sample rows = 600 non-empty survive the 200 empty stubs
+    assert len(ids) == 600
+
+
 def test_table_priority_prefers_messages_over_sessions(tmp_path: Path) -> None:
     """A DB listing `sessions` BEFORE `messages` must still read messages.
 
@@ -206,7 +226,7 @@ def test_corpus_has_required_shape(tmp_path: Path) -> None:
     out = exporter.build(source_db=str(src), out_root=str(tmp_path / "owned-5"), query_pairs=120, seed=7)
     scopes = out.scopes
     assert len(scopes) == 5, "exactly five synthetic benchmark scopes"
-    assert all(len(s.split(":")) == 5 for s in scopes), "five-dimensional scope ids"
+    assert all(len(s.split("/")) == 5 for s in scopes), "five-dimensional scope ids"
     assert 100 <= len(out.query_pairs) <= 200, "100-200 query/evidence pairs"
     assert len(out.observations) >= 500, "500-5000 observations expected"
     assert out.corpus_sha256, "corpus hash required"

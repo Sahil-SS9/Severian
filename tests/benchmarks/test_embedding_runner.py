@@ -149,9 +149,9 @@ def test_inject_corpus_merges_observations_and_pairs(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path, n_docs=1, n_queries=1)
     corpus_data = {
         "observations": [
-            {"scope": "t1:p1:c1:a1:s1", "opaque_id": "oid-1",
+            {"scope": "t1/p1/c1/a1/s1", "opaque_id": "oid-1",
              "content": "the backup job runs at 02:00 utc"},
-            {"scope": "t1:p1:c1:a1:s2", "opaque_id": "oid-2",
+            {"scope": "t1/p1/c1/a1/s2", "opaque_id": "oid-2",
              "content": "the queue depth reached 42 messages"},
         ],
         "query_pairs": [
@@ -171,7 +171,7 @@ def test_inject_corpus_merges_observations_and_pairs(tmp_path: Path) -> None:
     assert len(merged.queries) == 4
     assert merged.queries[0].answerable is True
     assert merged.queries[0].expected_evidence[0].document_id == "oid-1"
-    assert merged.queries[0].scope == "t1:p1:c1:a1:s1"
+    assert merged.queries[0].scope == "t1/p1/c1/a1/s1"
     assert merged.queries[1].answerable is False
     assert merged.queries[1].expected_evidence == []
 

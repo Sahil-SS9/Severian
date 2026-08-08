@@ -30,7 +30,7 @@ from severian.benchmarks.manifest import BenchmarkManifest  # noqa: E402
 
 
 def _make_severian_adapter(provider_id: str, backend: str, dsn: str | None,
-                           dimension: int, embedding: object):
+                           dimension: int, embedding: object, *, workdir: str | None = None):
     from severian.benchmarks.adapters.severian import SeverianAdapter
 
     return SeverianAdapter(
@@ -39,7 +39,8 @@ def _make_severian_adapter(provider_id: str, backend: str, dsn: str | None,
         dsn=dsn,
         dimension=dimension,
         embedding=embedding,
-        reset_db=True,
+        reset_db=(backend == "postgresql"),
+        workdir=workdir,
     )
 
 
