@@ -35,7 +35,7 @@ testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/applica
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -49,3 +49,12 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Path", "fastapi.Query", "t
 python_version = "3.11"
 strict = true
 packages = ["severian"]
+
+# Optional neural-embedding dependency: sentence_transformers / onnxruntime
+# are imported lazily and only present when Granite R2 is installed. Without
+# stubs they fail strict import checking; the provider degrades to the
+# deterministic hash embedding when they are absent, so a missing stub is
+# expected and safe.
+[[tool.mypy.overrides]]
+module = ["sentence_transformers", "sentence_transformers.*", "onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
