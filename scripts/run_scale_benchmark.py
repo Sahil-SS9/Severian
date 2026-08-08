@@ -18,7 +18,6 @@ import itertools
 import json
 import os
 import statistics
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -31,6 +30,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from severian.benchmarks.adapters.baseline import LexicalBaselineAdapter  # noqa: E402
 from severian.benchmarks.adapters.severian import SeverianAdapter  # noqa: E402
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from bench_provenance import collect_provenance, corpus_hash  # noqa: E402
 
 BUCKETS = (1_000, 10_000, 100_000)
 QUERY_REPETITIONS = 3  # hot-query repetitions for p50/p95/p99 (quality rule 4)
@@ -117,6 +119,7 @@ class LaneResult:
     docs_per_sec: float
     query_latencies_ms: list[float] = field(default_factory=list)
     cold_query_ms: float = 0.0
+    warmed_memories: int = 0
 
     @property
     def p50(self) -> float:
@@ -143,6 +146,7 @@ class LaneResult:
             "ingest_seconds": round(self.ingest_seconds, 3),
             "docs_per_sec": round(self.docs_per_sec, 1),
             "cold_first_query_ms": round(self.cold_query_ms, 2),
+            "warmed_memories": self.warmed_memories,
             "query_p50_ms": round(self.p50, 2),
             "query_p95_ms": round(self.p95, 2),
             "query_p99_ms": round(self.p99, 2),
@@ -215,9 +219,17 @@ def run_lane(
         # which is what production serves after the worker derives.
         # Only the Severian adapter has a derive toggle; competitors
         # are measured on their natural path.
+        #
+        # NOTE (zero-debt, 2026-08-08): one search(derive=True) call is
+        # capped at 50 NEW memories (derive_max_observations=50), so a
+        # single cold query does NOT warm a 10k/100k index — hot timing
+        # would measure a ~50-row index instead of the real bucket
+        # (empty-index trap in disguise). The lane now warms to
+        # stability via adapter.warmup() and records the derived count
+        # so the evidence proves the index was actually full.
         if pid.startswith("severian"):
             t1 = time.perf_counter()
-            adapter.query(QUERY_SET[0], limit=5, scope=QUERY_SCOPE)
+            result.warmed_memories = adapter.warmup(scope=QUERY_SCOPE)
             result.cold_query_ms = (time.perf_counter() - t1) * 1000.0
 
         for query in QUERY_SET:
@@ -266,61 +278,6 @@ def monotonicity_report(results: list[LaneResult]) -> dict[str, dict[str, Any]]:
     return report
 
 
-def _collect_provenance(command: list[str], max_bucket: int = max(BUCKETS)) -> dict[str, Any]:
-    """Collect the full provenance record required by quality rule 4.
-
-    Returns candidate SHA, dirty-patch identity, corpus hash, model
-    revision, runtime versions, hardware fingerprint, command, seed.
-    """
-    import platform
-
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    ).stdout.strip()
-    cpu_model = "unknown"
-    try:
-        with open("/proc/cpuinfo", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("model name"):
-                    cpu_model = line.split(":", 1)[1].strip()
-                    break
-    except OSError:
-        pass
-    runtime: dict[str, str] = {
-        "python": platform.python_version(),
-        "platform": platform.platform(),
-    }
-    try:
-        import sqlite3
-
-        runtime["sqlite"] = sqlite3.sqlite_version
-    except Exception:
-        pass
-    for mod in ("psycopg", "pgvector", "onnxruntime", "sentence_transformers", "numpy"):
-        try:
-            m = __import__(mod)
-            runtime[mod] = getattr(m, "__version__", "unknown")
-        except Exception:
-            runtime[mod] = "unavailable"
-    return {
-        "git_sha": subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
-        ).stdout.strip(),
-        "dirty_patch": dirty if dirty else "clean",
-        "generated_corpus_sha256": hashlib.sha256(
-            json.dumps([c for c in generate_corpus(max_bucket)], sort_keys=True).encode()
-        ).hexdigest(),
-        "model_revision": "n/a (hash embedding baseline)",
-        "runtime_versions": runtime,
-        "hardware": {"cpu": cpu_model, "cores": os.cpu_count()},
-        "command": command,
-        "seed": _SEED,
-    }
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chroma-venv", type=Path)
@@ -359,7 +316,12 @@ def main() -> None:
             "monotonicity": monotonicity_report(all_results),
             "run_started_at": run_started_at,
             "run_state": "complete" if len(all_results) + len(skipped) >= len(buckets) * len(lanes) else "partial",
-            "repro": _collect_provenance(sys.argv, max(buckets)),
+            "repro": collect_provenance(
+                REPO_ROOT,
+                sys.argv,
+                seed=_SEED,
+                corpus_fingerprint=lambda: corpus_hash(generate_corpus, max(buckets)),
+            ),
             "repetitions": QUERY_REPETITIONS,
         }
         scale_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

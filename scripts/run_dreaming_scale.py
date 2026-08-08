@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -27,6 +28,9 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from bench_provenance import collect_provenance  # noqa: E402
 
 from severian.application.dreaming import ConsolidationService, CurationService  # noqa: E402
 from severian.domain.models import Collection, Memory, Observation, Scope  # noqa: E402
@@ -35,33 +39,16 @@ from severian.infrastructure.sqlite import SQLiteRepository  # noqa: E402
 BUCKETS = (1_000, 10_000)
 
 
-def _make_repo(
-    tmp: str, size: int, corpus_mode: str = "dense"
-) -> tuple[SQLiteRepository, Scope, list[Memory]]:
-    root = Path(tmp)
-    repo = SQLiteRepository(path=root / f"sev-{size}.db")
-    repo.initialize()
-    repo.create_collection(Collection(id="c1", tenant_id="t1", name="scale"))
-    scope = Scope(
-        tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1"
-    )
-    memories: list[Memory] = []
+def _corpus_content(size: int, corpus_mode: str) -> list[str]:
+    """Deterministic content list for a bucket — used for the corpus hash."""
+    contents: list[str] = []
     for i in range(size):
         if corpus_mode == "dense":
-            # ~10% near-duplicates (same fact, reworded) to give dreaming
-            # real work; the rest unique but SHARING a common template
-            # ("fact number X about the scale corpus") — adversarial to
-            # LSH: every doc lands in the same buckets, so the pre-filter
-            # degenerates toward all-pairs (the honest worst case).
             if i % 10 == 0:
-                content = f"the backup job runs every night at 02:00 utc (entry {i // 10})"
+                contents.append(f"the backup job runs every night at 02:00 utc (entry {i // 10})")
             else:
-                content = f"fact number {i} about the scale corpus"
+                contents.append(f"fact number {i} about the scale corpus")
         else:
-            # diverse: genuinely disjoint vocabularies per topic, so
-            # unrelated pairs share ~0 tokens (Jaccard ~0.0-0.1) and LSH
-            # buckets stay small. Near-duplicates (~10%) reuse the SAME
-            # vocabulary, giving dreaming real work.
             topic_templates = {
                 "network latency": ("the ping between nodes is", "ms"),
                 "database index": ("the btree index depth reached", "levels"),
@@ -88,9 +75,24 @@ def _make_repo(
             topic = topics[i % len(topics)]
             phrase, unit = topic_templates[topic]
             if i % 10 == 0:
-                content = f"{phrase} {i % 100} {unit} (entry {i // 10})"
+                contents.append(f"{phrase} {i % 100} {unit} (entry {i // 10})")
             else:
-                content = f"{phrase} {i % 50} {unit} observed at {i % 24:02d}:00"
+                contents.append(f"{phrase} {i % 50} {unit} observed at {i % 24:02d}:00")
+    return contents
+
+
+def _make_repo(
+    tmp: str, size: int, corpus_mode: str = "dense"
+) -> tuple[SQLiteRepository, Scope, list[Memory]]:
+    root = Path(tmp)
+    repo = SQLiteRepository(path=root / f"sev-{size}.db")
+    repo.initialize()
+    repo.create_collection(Collection(id="c1", tenant_id="t1", name="scale"))
+    scope = Scope(
+        tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1"
+    )
+    memories: list[Memory] = []
+    for i, content in enumerate(_corpus_content(size, corpus_mode)):
         obs = repo.add_observation(
             Observation(
                 scope=scope, content=content, raw_content=content,
@@ -117,11 +119,12 @@ def main() -> None:
         default="dense",
         help="dense = adversarial to LSH (shared template); diverse = real-world-ish",
     )
+    parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     buckets = [b for b in BUCKETS if b <= args.max_bucket]
 
     results: dict[str, Any] = {}
-    out_path = Path("docs/benchmarks/evidence/2026-08-05/dreaming-scale.json")
+    out_path = args.out or Path("docs/benchmarks/evidence/2026-08-05/dreaming-scale.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def git_head() -> str:
@@ -149,6 +152,18 @@ def main() -> None:
             # EVID-06: provenance — every evidence artifact must be
             # traceable to the exact commit + corpus that produced it.
             "commit": {"sha": git_head(), "branch": git_branch()},
+            "repro": collect_provenance(
+                REPO_ROOT,
+                sys.argv,
+                seed="deterministic template",
+                model_revision="n/a (hash embedding baseline)",
+                corpus_fingerprint=lambda: hashlib.sha256(
+                    json.dumps(
+                        {mode: _corpus_content(max(buckets), mode) for mode in ("dense", "diverse")},
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest(),
+            ),
             "corpus": {
                 "mode": args.corpus_mode,
                 "buckets": [str(b) for b in buckets],

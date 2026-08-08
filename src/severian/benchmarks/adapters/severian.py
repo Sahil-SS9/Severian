@@ -168,6 +168,33 @@ class SeverianAdapter:
                 # Already superseded by an earlier ingest; idempotent.
                 continue
 
+    def warmup(self, *, scope: str) -> int:
+        """Fully derive the scope by looping until memory count stabilises.
+
+        A single ``search(derive=True)`` is capped at 50 new memories per
+        call, so one cold query does NOT warm a large index. The scale
+        lane must warm to stability BEFORE timing hot queries, otherwise
+        hot p95 measures a ~50-row index instead of the real bucket
+        (empty-index trap in disguise). Returns the derived memory count.
+        """
+        from severian.domain.models import Scope as ModelScope
+
+        parts = parse_scope(scope)
+        scoped = ModelScope(
+            tenant_id=parts[0], profile_id=parts[1], collection_id=parts[2],
+            agent_id=parts[3], session_id=parts[4],
+        )
+        prev = -1
+        for _ in range(5000):
+            self._bundle.service.search(
+                scoped, query="facts", limit=5, derive=True, gateway=self._gateway,
+            )
+            cur = len(self._bundle.repository.list_memories(scoped))
+            if cur == prev:
+                return cur
+            prev = cur
+        return prev
+
     def query(
         self,
         query: str,

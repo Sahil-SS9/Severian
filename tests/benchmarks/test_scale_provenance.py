@@ -7,7 +7,8 @@ repetitions and skipped lanes.
 
 Current state: scripts/run_scale_benchmark.py records git_sha, corpus
 hash and seed only. This test proves the missing fields before the
-script is extended.
+script is extended. The same requirement applies to the dreaming scale
+lane (scripts/run_dreaming_scale.py).
 """
 from __future__ import annotations
 
@@ -66,6 +67,30 @@ def _run_tiny_scale(out_dir: Path) -> dict:
     return payload
 
 
+def _run_tiny_dreaming(out_dir: Path) -> dict:
+    """Run the dreaming scale script at the minimum bucket."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "run_dreaming_scale.py"),
+            "--max-bucket",
+            "1000",
+            "--out",
+            str(out_dir / "dreaming-scale.json"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=600,
+    )
+    assert result.returncode == 0, (
+        f"dreaming script failed rc={result.returncode}\n"
+        f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
+    )
+    payload = json.loads((out_dir / "dreaming-scale.json").read_text())
+    return payload
+
+
 def test_evidence_records_all_required_provenance(tmp_path: Path) -> None:
     payload = _run_tiny_scale(tmp_path / "out")
 
@@ -95,3 +120,19 @@ def test_evidence_records_all_required_provenance(tmp_path: Path) -> None:
     assert payload["repro"]["command"], "command empty"
     assert payload["repro"]["model_revision"], "model_revision empty"
     assert payload["repetitions"] >= 1, "repetitions must be >= 1"
+
+
+def test_dreaming_evidence_records_all_required_provenance(tmp_path: Path) -> None:
+    payload = _run_tiny_dreaming(tmp_path / "dream")
+
+    missing = sorted(
+        key
+        for key in REQUIRED_PROVENANCE["repro"]
+        if key not in payload.get("repro", {})
+    )
+    assert not missing, f"dreaming repro provenance fields missing: {missing}"
+
+    assert payload["repro"]["runtime_versions"], "runtime_versions empty"
+    assert payload["repro"]["hardware"], "hardware empty"
+    assert payload["repro"]["command"], "command empty"
+    assert payload["repro"]["model_revision"], "model_revision empty"
