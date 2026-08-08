@@ -48,13 +48,34 @@ def build_default_service(
             database=database,
             fts=fts,
             vectors=vectors,
+            embedding=_embedding_from_env(),
         )
     return build_bundle(
         backend="sqlite",
         database=database,
         fts=fts,
         vectors=vectors,
+        embedding=_embedding_from_env(),
     )
+
+
+def _embedding_from_env() -> Any:
+    """Honor the same SEVERIAN_EMBEDDING contract as the Hermes adapter.
+
+    The CLI runs ``severian work`` which REBUILDS vector projections for
+    touched scopes. If the CLI ignored the env and used the default hash
+    embedding while gateways run Granite, a drain would silently rewrite
+    every vector at the wrong dimension (256 vs 384) — the exact silent
+    dimension mixing the fleet audit flagged. Imported lazily so the CLI
+    stays fast and dependency-light when Granite is not configured.
+    """
+    import os
+
+    if os.environ.get("SEVERIAN_EMBEDDING", "").strip().lower() == "granite":
+        from severian.infrastructure.granite_embedding import GraniteR2Embedding
+
+        return GraniteR2Embedding()
+    return None
 
 
 @dataclass
