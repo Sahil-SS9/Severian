@@ -71,11 +71,11 @@ def _manifest(tmp_path: Path, n_docs: int = 30, n_queries: int = 8) -> Benchmark
     return BenchmarkManifest.model_validate(payload)
 
 
-def _hash_factory() -> object:
+def _hash_factory(workdir: Path) -> object:
     return SeverianAdapter(
         provider_id="hash", backend="sqlite", dimension=256,
         embedding=HashEmbedding(dimension=256), reset_db=False,
-        workdir="/tmp/embedding-contract-hash",
+        workdir=str(workdir),
     )
 
 
@@ -114,7 +114,7 @@ def test_hash_lane_runs_and_records_model_tier(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     runner = EmbeddingBakeoffRunner(
         manifest=manifest,
-        lane_factory={"hash": _hash_factory},
+        lane_factory={"hash": lambda: _hash_factory(tmp_path)},
     )
     result = runner.run()
     assert len(result.lanes) == 1
@@ -180,7 +180,7 @@ def test_result_to_dict_is_jsonable(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     runner = EmbeddingBakeoffRunner(
         manifest=manifest,
-        lane_factory={"hash": _hash_factory},
+        lane_factory={"hash": lambda: _hash_factory(tmp_path)},
     )
     result = runner.run()
     payload = result.to_dict()

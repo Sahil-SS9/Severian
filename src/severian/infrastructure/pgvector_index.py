@@ -211,6 +211,41 @@ class PGVectorIndex:
                 )
             )
 
+    def upsert_many(self, memories: list[Memory]) -> None:
+        """Bulk upsert in ONE transaction (zero-debt 3.3).
+
+        The rebuild/batch path must not commit per row — one transaction
+        for the whole batch via a single multi-row INSERT .. ON CONFLICT.
+        Atomicity: any failure rolls back the batch.
+        """
+        if not memories:
+            return
+        rows = []
+        for memory in memories:
+            rows.append(
+                {
+                    "memory_id": memory.id,
+                    **memory.scope.model_dump(),
+                    "content": memory.content,
+                    "vector": self.embedding.encode(memory.content),
+                }
+            )
+        statement = pg_insert(self._table).values(rows)
+        statement = statement.on_conflict_do_update(
+            index_elements=["memory_id"],
+            set_={
+                "tenant_id": statement.excluded.tenant_id,
+                "profile_id": statement.excluded.profile_id,
+                "collection_id": statement.excluded.collection_id,
+                "agent_id": statement.excluded.agent_id,
+                "session_id": statement.excluded.session_id,
+                "content": statement.excluded.content,
+                "vector": statement.excluded.vector,
+            },
+        )
+        with self.engine.begin() as connection:
+            connection.execute(statement)
+
     def delete(self, memory_id: str) -> None:
         with self.engine.begin() as connection:
             connection.execute(self._table.delete().where(self._table.c.memory_id == memory_id))
@@ -256,8 +291,7 @@ class PGVectorIndex:
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)
-        for memory in repository.list_memories(scope):
-            self.upsert(memory)
+        self.upsert_many(list(repository.list_memories(scope)))
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""

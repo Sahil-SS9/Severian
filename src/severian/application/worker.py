@@ -147,13 +147,15 @@ class DerivationWorker:
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
         # OPS-01: the outbox projector. Ack only events whose projections
-        # converged above. Ack is idempotent — a crash between apply and
-        # ack leaves the event pending and the next pass re-processes it.
-        for event in applied_events:
+        # converged above — ONE transaction via ack_outbox_many (zero-debt
+        # 3.3; the drain must not commit per event). Ack is idempotent —
+        # a crash between apply and ack leaves the event pending and the
+        # next pass re-processes it.
+        if applied_events:
             try:
-                self._repository.ack_outbox(event.id)
+                self._repository.ack_outbox_many([e.id for e in applied_events])
             except Exception:
-                logger.warning("failed to ack outbox event %s", event.id, exc_info=True)
+                logger.warning("failed to ack outbox batch", exc_info=True)
         return WorkerSummary(
             processed=processed,
             failed=failed,

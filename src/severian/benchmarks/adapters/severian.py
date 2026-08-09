@@ -108,11 +108,48 @@ class SeverianAdapter:
         *,
         scope: str,
     ) -> None:
-        # No vectorized batch path on the canonical store yet — the
-        # per-doc protocol path IS the measured production path (roadmap
-        # A-4 compares this against Chroma's batch override).
-        for document_id, content in documents:
-            self.ingest(document_id, content, scope=scope)
+        """Vectorized batch ingest through the canonical batch contract.
+
+        zero-debt 3.3: ``add_observations_and_enqueue_batch`` commits
+        every observation, outbox event, audit row and derive job in
+        ONE transaction (never per row). Identity dedupe, provenance
+        validation and P0-4 atomicity are the repository contract's,
+        not re-implemented here.
+        """
+        from severian.domain.models import Collection, Observation, Scope
+
+        parts = parse_scope(scope)
+        scoped = Scope(
+            tenant_id=parts[0],
+            profile_id=parts[1],
+            collection_id=parts[2],
+            agent_id=parts[3],
+            session_id=parts[4],
+        )
+        collection_key = f"{scoped.tenant_id}/{scoped.collection_id}"
+        if collection_key not in self._collections:
+            try:
+                self._bundle.repository.create_collection(
+                    Collection(id=scoped.collection_id, tenant_id=scoped.tenant_id, name="bench")
+                )
+            except Exception:
+                pass  # already exists
+            self._collections.add(collection_key)
+
+        docs = list(documents)
+        observations = [
+            Observation(
+                scope=scoped,
+                content=content,
+                raw_content=content,
+                source={"bench_document_id": doc_id, "uri": f"bench://{doc_id}"},
+            )
+            for doc_id, content in docs
+        ]
+        pairs = self._bundle.repository.add_observations_and_enqueue_batch(observations)
+        assert len(pairs) == len(docs), "batch ingest must return one pair per document"
+        for (doc_id, _content), (observation, _job) in zip(docs, pairs, strict=True):
+            self._obs_to_doc[observation.id] = doc_id
 
     def _ingest_observation(
         self, document_id: str, content: str, scope: str, supersedes: Iterable[str]

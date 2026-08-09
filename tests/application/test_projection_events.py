@@ -71,6 +71,10 @@ class _RecordingVector(LocalVectorIndex):
         self.upsert_calls += 1
         super().upsert(memory)
 
+    def upsert_many(self, memories: list[Memory]) -> None:
+        self.upsert_calls += len(memories)
+        super().upsert_many(memories)
+
     def delete(self, memory_id: str) -> None:
         self.delete_calls += 1
         super().delete(memory_id)
@@ -159,7 +163,7 @@ def test_failure_after_fts_before_vector_is_retryable(env) -> None:
 
     # First apply: FTS succeeds, vector raises mid-upsert.
     class _BoomVector(_RecordingVector):
-        def upsert(self, memory: Memory) -> None:
+        def upsert_many(self, memories: list[Memory]) -> None:
             raise RuntimeError("crash after FTS")
 
     # Swap in the crashing vector on the SAME underlying db path.

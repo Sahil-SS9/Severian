@@ -234,6 +234,10 @@ class _FakeRepository:
     def ack_outbox(self, event_id: str) -> None:
         raise NotFoundError("outbox event not found or already acked")
 
+    def ack_outbox_many(self, event_ids: list[str]) -> None:
+        for event_id in event_ids:
+            self.ack_outbox(event_id)
+
     def add_observation_and_enqueue(
         self, observation: Observation, job_kind: str = "derive"
     ) -> tuple[Observation, Job]:
@@ -241,6 +245,11 @@ class _FakeRepository:
             observation,
             Job(scope=observation.scope, kind=job_kind, payload={"observation_id": observation.id}),
         )
+
+    def add_observations_and_enqueue_batch(
+        self, observations: list[Observation], job_kind: str = "derive"
+    ) -> list[tuple[Observation, Job]]:
+        return [self.add_observation_and_enqueue(o, job_kind) for o in observations]
 
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
         return [self.add_memory(memory) for memory in memories]

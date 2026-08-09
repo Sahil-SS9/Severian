@@ -293,6 +293,42 @@ def test_outbox_and_audit_append(backend: Any) -> None:
         assert any(item.id == audit.id for item in listed)
 
 
+def test_batch_ingest_and_ack_many(backend: Any) -> None:
+    """Live parity: batch ingest + batch ack behave like the singles."""
+    scope = _unique_scope()
+    observations = [
+        Observation(scope=scope, content=f"batch live {i}", source={"uri": "live"})
+        for i in range(15)
+    ]
+    pairs = backend.add_observations_and_enqueue_batch(observations)
+    assert len(pairs) == 15
+    assert len(backend.list_observations(scope)) == 15
+    assert all(job.kind == "derive" for _, job in pairs)
+
+    # Re-ingest idempotent: same ids returned, no dupes.
+    again = backend.add_observations_and_enqueue_batch(observations)
+    assert [o.id for o, _ in again] == [o.id for o, _ in pairs]
+    assert len(backend.list_observations(scope)) == 15
+
+    # Batch ack: all outbox events for the batch acked in one call.
+    pending = backend.pending_outbox()
+    created = [e for e in pending if e.kind == "observation.created"]
+    assert len(created) == 15
+    backend.ack_outbox_many([e.id for e in created])
+    remaining = [e for e in backend.pending_outbox() if e.kind == "observation.created"]
+    assert remaining == []
+
+
+def test_batch_ingest_rolls_back_on_conflict(backend: Any) -> None:
+    """Live parity: a mid-batch conflict must not half-commit (P0-4)."""
+    scope = _unique_scope()
+    dup = Observation(scope=scope, content="dup", id="dup-id-live")
+    observations = [Observation(scope=scope, content=f"rollback {i}") for i in range(5)] + [dup, dup]
+    with pytest.raises(Exception):
+        backend.add_observations_and_enqueue_batch(observations)
+    assert len(backend.list_observations(scope)) == 0  # atomic rollback
+
+
 # -- export / import -------------------------------------------------------
 
 

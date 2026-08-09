@@ -455,6 +455,31 @@ class PostgreSQLBackend:
         self._require_scope(scope)
         return self._get("observation", observation_id, Observation, scope=scope)
 
+    def _prepare_observation_enqueue(
+        self, observation: Observation, job_kind: str
+    ) -> tuple[Observation, str, Job, str, str]:
+        """Pure prep shared by single and batch observation ingest.
+
+        Computes the content digest, identity key, candidate model and
+        derive job — identical semantics for both paths so the batch
+        never drifts from the canonical contract (zero-debt 3.3).
+        """
+        digest = hashlib.sha256(observation.content.encode()).hexdigest()
+        raw = observation.raw_content or observation.content
+        raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
+        candidate = observation.model_copy(
+            update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash}
+        )
+        identity_parts: tuple[object, ...] = (digest,)
+        source = source_identity(candidate.source)
+        if source:
+            identity_parts = (digest, source)
+        observation_identity = self._identity(*identity_parts)
+        job_payload = {"observation_id": candidate.id}
+        job = Job(scope=candidate.scope, kind=job_kind, payload=job_payload)
+        job_identity = self._identity(job_kind, job_payload)
+        return candidate, observation_identity, job, job_identity, digest
+
     def add_observation_and_enqueue(
         self, observation: Observation, job_kind: str = "derive"
     ) -> tuple[Observation, Job]:
@@ -464,18 +489,10 @@ class PostgreSQLBackend:
         transaction. Identity semantics match ``add_observation`` +
         ``enqueue_job`` so re-ingests stay idempotent.
         """
-        digest = hashlib.sha256(observation.content.encode()).hexdigest()
-        raw = observation.raw_content or observation.content
-        raw_hash = observation.raw_hash or hashlib.sha256(raw.encode()).hexdigest()
-        candidate = observation.model_copy(update={"content_hash": digest, "raw_content": raw, "raw_hash": raw_hash})
-        identity_parts: tuple[object, ...] = (digest,)
-        source = source_identity(candidate.source)
-        if source:
-            identity_parts = (digest, source)
-        observation_identity = self._identity(*identity_parts)
-        job_payload = {"observation_id": candidate.id}
-        job_identity = self._identity(job_kind, job_payload)
-
+        candidate, observation_identity, job, job_identity, digest = self._prepare_observation_enqueue(
+            observation, job_kind
+        )
+        job_payload = job.payload
         observation_query = select(records.c.payload).where(
             records.c.record_type == "observation",
             *self._scope_predicates(candidate.scope),
@@ -536,6 +553,88 @@ class PostgreSQLBackend:
                 records.insert().values(**self._record_values("job", job, identity_key=job_identity, status="pending"))
             )
         return candidate, job
+
+    def add_observations_and_enqueue_batch(
+        self, observations: list[Observation], job_kind: str = "derive"
+    ) -> list[tuple[Observation, Job]]:
+        """Batch observation ingest in ONE transaction (zero-debt 3.3).
+
+        Same canonical contract as ``add_observation_and_enqueue``
+        (identity dedupe, provenance, event emission, P0-4 atomicity)
+        but every new observation, outbox event, audit row and derive
+        job commits in a single transaction — never per row. Already
+        ingested observations return their stored pair (idempotent).
+        """
+        prepared = [self._prepare_observation_enqueue(o, job_kind) for o in observations]
+        results: list[tuple[Observation, Job]] = []
+        fresh: list[tuple[Observation, str, Job, str, str]] = []
+        for candidate, observation_identity, job, job_identity, digest in prepared:
+            observation_query = select(records.c.payload).where(
+                records.c.record_type == "observation",
+                *self._scope_predicates(candidate.scope),
+                records.c.identity_key == observation_identity,
+            )
+            with self.engine.connect() as connection:
+                existing_obs = connection.execute(observation_query).scalar_one_or_none()
+            if existing_obs is None:
+                fresh.append((candidate, observation_identity, job, job_identity, digest))
+                continue
+            # Re-ingest: return the stored observation + its derive job.
+            stored = Observation.model_validate(existing_obs)
+            job_payload = {"observation_id": stored.id}
+            job_identity2 = self._identity(job_kind, job_payload)
+            job_query = select(records.c.payload).where(
+                records.c.record_type == "job",
+                *self._scope_predicates(stored.scope),
+                records.c.identity_key == job_identity2,
+            )
+            with self.engine.connect() as connection:
+                existing_job = connection.execute(job_query).scalar_one_or_none()
+            if existing_job is not None:
+                results.append((stored, Job.model_validate(existing_job)))
+                continue
+            job2 = Job(scope=stored.scope, kind=job_kind, payload=job_payload)
+            try:
+                results.append(
+                    (
+                        stored,
+                        self._insert_if_absent(
+                            "job", job2, identity_key=job_identity2, status="pending", query=job_query
+                        ),
+                    )
+                )
+            except IntegrityError:
+                with self.engine.connect() as connection:
+                    existing_job = connection.execute(job_query).scalar_one_or_none()
+                if existing_job is None:
+                    raise ConflictError("job identity conflict") from None
+                results.append((stored, Job.model_validate(existing_job)))
+
+        if not fresh:
+            return results
+        with self.engine.begin() as connection:
+            for candidate, observation_identity, job, job_identity, digest in fresh:
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values(
+                            "observation",
+                            candidate,
+                            content_hash=digest,
+                            identity_key=observation_identity,
+                        )
+                    )
+                )
+                if (events := self._event_models("observation", candidate)) is not None:
+                    event, audit = events
+                    connection.execute(records.insert().values(**self._record_values("outbox", event, status="pending")))
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values("job", job, identity_key=job_identity, status="pending")
+                    )
+                )
+                results.append((candidate, job))
+        return results
 
     def list_observations(self, scope: Scope) -> list[Observation]:
         """All observations in scope, including superseded revisions.
@@ -1471,6 +1570,26 @@ class PostgreSQLBackend:
             )
             if result.rowcount != 1:
                 raise NotFoundError("outbox event not found or already acked")
+
+    def ack_outbox_many(self, event_ids: list[str]) -> None:
+        """Ack a batch of outbox events in ONE transaction (zero-debt 3.3).
+
+        Missing/already-acked ids are ignored (idempotent) — a crash
+        between apply and ack leaves events pending; re-acking a batch
+        that partially landed must not raise.
+        """
+        if not event_ids:
+            return
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(
+                    records.c.id.in_(event_ids),
+                    records.c.record_type == "outbox",
+                    records.c.status == "pending",
+                )
+                .values(status="acked")
+            )
 
     def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: Mapping[str, Any]) -> AuditEvent:
         self._require_scope(scope)

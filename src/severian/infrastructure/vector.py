@@ -183,6 +183,45 @@ class LocalVectorIndex:
         )
         self.connection.commit()
 
+    def upsert_many(self, memories: list[Memory]) -> None:
+        """Bulk upsert in ONE transaction (zero-debt 3.3).
+
+        The rebuild/batch path must not commit per row — one commit for
+        the whole batch. Atomicity: any failure rolls back the batch.
+        """
+        if not memories:
+            return
+        rows = []
+        for memory in memories:
+            vector = self.embedding.encode(memory.content)
+            rows.append(
+                (
+                    memory.id,
+                    memory.scope.tenant_id,
+                    memory.scope.profile_id,
+                    memory.scope.collection_id,
+                    memory.scope.agent_id,
+                    memory.scope.session_id,
+                    memory.content,
+                    json.dumps(vector),
+                )
+            )
+        try:
+            self.connection.executemany(
+                """INSERT INTO memory_vectors
+                (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_id) DO UPDATE SET
+                    tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
+                    collection_id=excluded.collection_id, agent_id=excluded.agent_id,
+                    session_id=excluded.session_id, content=excluded.content, vector=excluded.vector""",
+                rows,
+            )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def delete(self, memory_id: str) -> None:
         self.connection.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
         self.connection.commit()
@@ -231,8 +270,7 @@ class LocalVectorIndex:
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)
-        for memory in repository.list_memories(scope):
-            self.upsert(memory)
+        self.upsert_many(list(repository.list_memories(scope)))
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""

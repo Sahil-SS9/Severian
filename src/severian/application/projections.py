@@ -14,6 +14,10 @@ class VectorProjection(Protocol):
     """Duck-typed vector projection surface (LocalVectorIndex or PGVectorIndex)."""
 
     def upsert(self, memory: Memory) -> None: ...
+    def upsert_many(self, memories: list[Memory]) -> None:
+        """Bulk upsert in ONE transaction (zero-debt 3.3)."""
+        for memory in memories:
+            self.upsert(memory)
     def delete(self, memory_id: str) -> None: ...
     def count(self, scope: Scope) -> int: ...
     def clear(self, scope: Scope | None = None) -> None: ...
@@ -65,7 +69,7 @@ class ProjectionCoordinator:
         self.vector.delete(memory_id)
 
     def apply(self, events: list[Event]) -> None:
-        """Project outbox events incrementally (zero-debt 3.2).
+        """Project outbox events incrementally (zero-debt 3.2/3.3).
 
         The outbox is the projection delta contract. Each event names
         the memory it affects; applying it touches ONLY that memory's
@@ -87,36 +91,35 @@ class ProjectionCoordinator:
           demoted head (the memory whose ``superseded_by_id`` points at
           the restored id)
         - anything else          → ignored (no projection impact)
+
+        zero-debt 3.3: all upserts in the batch are collected and
+        committed via ``upsert_many`` — ONE transaction, never per
+        event.
         """
+        upserts: list[Memory] = []
+        deletes: list[str] = []
         for event in events:
             if event.kind == "memory.created":
-                self._upsert_from_event(event)
+                upserts.append(self.repository.get_memory(event.scope, str(event.payload["id"])))
             elif event.kind == "memory.revised":
-                self._upsert_from_event(event)
-                self._delete_superseded_head(event)
+                memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+                upserts.append(memory)
+                if memory.revision_of_id is not None:
+                    deletes.append(memory.revision_of_id)
             elif event.kind == "memory.rolled_back":
-                self._upsert_from_event(event)
-                self._delete_demoted_head(event)
-
-    def _upsert_from_event(self, event: Event) -> None:
-        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
-        self.lexical.upsert(memory)
-        self.vector.upsert(memory)
-
-    def _delete_superseded_head(self, event: Event) -> None:
-        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
-        if memory.revision_of_id is not None:
-            self.lexical.delete(memory.revision_of_id)
-            self.vector.delete(memory.revision_of_id)
-
-    def _delete_demoted_head(self, event: Event) -> None:
-        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
-        # The demoted head is now SUPERSEDED, so it is invisible to
-        # list_memories (active-only) — scan the full history.
-        for candidate in self.repository.list_memories_history(event.scope):
-            if candidate.superseded_by_id == memory.id:
-                self.lexical.delete(candidate.id)
-                self.vector.delete(candidate.id)
+                memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+                upserts.append(memory)
+                # The demoted head is now SUPERSEDED, so it is invisible
+                # to list_memories (active-only) — scan the full history.
+                for candidate in self.repository.list_memories_history(event.scope):
+                    if candidate.superseded_by_id == memory.id:
+                        deletes.append(candidate.id)
+        if upserts:
+            self.lexical.upsert_many(upserts)
+            self.vector.upsert_many(upserts)
+        for memory_id in deletes:
+            self.lexical.delete(memory_id)
+            self.vector.delete(memory_id)
 
     def rebuild(self, scope: Scope) -> None:
         # Idempotent skip: if the canonical store is unchanged since the

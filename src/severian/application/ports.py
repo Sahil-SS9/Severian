@@ -64,6 +64,17 @@ class ScopedCanonicalPort(Protocol):
     def add_observation_and_enqueue(
         self, observation: Observation, job_kind: str = "derive"
     ) -> tuple[Observation, Job]: ...
+    def add_observations_and_enqueue_batch(
+        self, observations: list[Observation], job_kind: str = "derive"
+    ) -> list[tuple[Observation, Job]]:
+        """Batch observation ingest in ONE transaction (zero-debt 3.3).
+
+        Same canonical contract as ``add_observation_and_enqueue``.
+        The default loops the single method so any implementer that
+        does not override stays correct; real backends override with a
+        single-transaction batch.
+        """
+        return [self.add_observation_and_enqueue(o, job_kind) for o in observations]
     def get_observation(self, scope: Scope, observation_id: str) -> Observation: ...
     def list_observations(self, scope: Scope) -> list[Observation]: ...
     def list_pending_observations(self, scope: Scope, *, limit: int) -> list[Observation]:
@@ -210,6 +221,8 @@ class OutboxPort(Protocol):
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event: ...
     def pending_outbox(self) -> list[Event]: ...
     def ack_outbox(self, event_id: str) -> None: ...
+    def ack_outbox_many(self, event_ids: list[str]) -> None:
+        """Ack a batch in ONE transaction (zero-debt 3.3); idempotent."""
 
 
 @runtime_checkable
@@ -230,6 +243,15 @@ class LexicalIndex(Protocol):
     """
 
     def upsert(self, memory: Memory) -> None: ...
+    def upsert_many(self, memories: list[Memory]) -> None:
+        """Bulk upsert in ONE transaction (zero-debt 3.3).
+
+        The default loops single upserts so any implementer that does
+        not override stays correct; real indexes override with a
+        transaction-bounded batch (never one commit per row).
+        """
+        for memory in memories:
+            self.upsert(memory)
     def delete(self, memory_id: str) -> None: ...
     def count(self, scope: Scope) -> int: ...
     def clear(self, scope: Scope | None = None) -> None: ...

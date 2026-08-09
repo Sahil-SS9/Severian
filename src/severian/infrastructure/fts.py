@@ -118,6 +118,38 @@ class FTS5Index:
         )
         self.connection.commit()
 
+    def upsert_many(self, memories: list[Memory]) -> None:
+        """Bulk upsert in ONE transaction (zero-debt 3.3).
+
+        The rebuild/batch path must not commit per row — one commit for
+        the whole batch. Atomicity: any failure rolls back the batch.
+        """
+        if not memories:
+            return
+        try:
+            for memory in memories:
+                self.connection.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory.id,))
+                self.connection.execute(
+                    """INSERT INTO memory_fts
+                    (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, kind, source_ids)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        memory.id,
+                        memory.scope.tenant_id,
+                        memory.scope.profile_id,
+                        memory.scope.collection_id,
+                        memory.scope.agent_id,
+                        memory.scope.session_id,
+                        memory.content,
+                        memory.kind,
+                        " ".join(memory.source_observation_ids),
+                    ),
+                )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def delete(self, memory_id: str) -> None:
         self.connection.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
         self.connection.commit()
@@ -180,8 +212,7 @@ class FTS5Index:
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)
-        for memory in repository.list_memories(scope):
-            self.upsert(memory)
+        self.upsert_many(list(repository.list_memories(scope)))
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""
