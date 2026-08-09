@@ -528,6 +528,17 @@ class SQLiteRepository:
         self._require_scope(scope)
         sql = text(
             """
+            WITH covered_obs AS (
+                SELECT DISTINCT je.value AS obs_id
+                FROM records m, json_each(m.payload, '$.source_observation_ids') je
+                WHERE m.record_type = 'memory'
+                  AND m.tenant_id = :tenant_id
+                  AND m.profile_id = :profile_id
+                  AND m.collection_id = :collection_id
+                  AND m.agent_id = :agent_id
+                  AND m.session_id = :session_id
+                  AND je.value IS NOT NULL
+            )
             SELECT o.payload FROM records o
             WHERE o.record_type = 'observation'
               AND o.tenant_id = :tenant_id
@@ -536,17 +547,7 @@ class SQLiteRepository:
               AND o.agent_id = :agent_id
               AND o.session_id = :session_id
               AND json_extract(o.payload, '$.superseded_by_id') IS NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM records m, json_each(m.payload, '$.source_observation_ids') je
-                  WHERE m.record_type = 'memory'
-                    AND m.tenant_id = o.tenant_id
-                    AND m.profile_id = o.profile_id
-                    AND m.collection_id = o.collection_id
-                    AND m.agent_id = o.agent_id
-                    AND m.session_id = o.session_id
-                    AND je.value = o.id
-              )
+              AND o.id NOT IN (SELECT obs_id FROM covered_obs)
             ORDER BY o.id
             LIMIT :limit
             """
