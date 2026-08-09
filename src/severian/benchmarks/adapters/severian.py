@@ -214,13 +214,17 @@ class SeverianAdapter:
         measures a ~50-row index instead of the real bucket (empty-index
         trap in disguise).
 
+        zero-debt P0.3: this loop uses ``derive_pending`` — the derive
+        step only, no retrieval, cheap COUNT progress — so 10k/100k
+        warmup is linear in the bucket instead of super-linear (the old
+        path re-ran the full query + full memory list per 50-doc pass).
+
         Returns the derived memory count — whether that equals the full
         bucket is recorded by the caller as evidence (a partial warmup
         is honest if reported; pretending a ~50-row index is the bucket
-        is not). ``max_seconds`` bounds the warmup so 10k/100k lanes
-        produce verifiable partial-warm numbers instead of dying in a
-        timeout (the 50-cap loop is super-linear: ~200 passes at 10k,
-        ~2000 at 100k, each pass re-scanning everything).
+        is not). ``max_seconds`` bounds the warmup so even a huge bucket
+        produces a verifiable partial-warm number instead of dying in a
+        timeout.
         """
         import time
 
@@ -237,10 +241,10 @@ class SeverianAdapter:
         for _ in range(5000):
             if deadline is not None and time.monotonic() >= deadline:
                 return cur
-            self._bundle.service.search(
-                scoped, query="facts", limit=5, derive=True, gateway=self._gateway,
+            self._bundle.service.derive_pending(
+                scoped, gateway=self._gateway, max_observations=500,
             )
-            cur = len(self._bundle.repository.list_memories(scoped))
+            cur = int(self._bundle.repository.count_memories(scoped))
             if cur == prev:
                 return cur
             prev = cur

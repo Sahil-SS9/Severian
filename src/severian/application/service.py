@@ -277,6 +277,52 @@ class MemoryService:
         self._projection.rebuild(scope)
         return restored
 
+    def derive_pending(
+        self,
+        scope: Scope,
+        gateway: DerivationGateway,
+        *,
+        max_observations: int = 50,
+        policy: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Derive pending observations into memories WITHOUT retrieving.
+
+        The benchmark warmup path (zero-debt P0.3): a scale lane must
+        warm the index to the bucket size BEFORE timing hot queries, but
+        ``search(derive=True)`` re-runs the full retrieval + projection
+        pass per call — super-linear across 10k/100k. This method loops
+        ONLY the derive step (bounded per call by ``max_observations``,
+        same OPS-03 cap semantics), projects the outbox delta once, and
+        returns the number of fresh memories derived. Retrieval is
+        never executed; counting uses the cheap repository COUNT.
+        """
+        if gateway is None:
+            raise ValueError("derive_pending requires a derivation gateway")
+        pending = self._repository.list_pending_observations(
+            scope, limit=max_observations
+        )
+        derived = 0
+        for observation in pending:
+            produced = self._derivation.derive_observation(
+                scope, observation.id, gateway, policy=dict(policy or {})
+            )
+            if produced:
+                derived += 1
+                if derived >= max_observations:
+                    break
+        if derived:
+            pending_events = [
+                e for e in self._repository.pending_outbox()
+                if e.scope == scope
+            ]
+            if pending_events:
+                self._projection.apply(pending_events)
+                try:
+                    self._repository.ack_outbox_many([e.id for e in pending_events])
+                except Exception:  # noqa: BLE001 - idempotent; next pass retries
+                    pass
+        return derived
+
     def search(
         self,
         scope: Scope,

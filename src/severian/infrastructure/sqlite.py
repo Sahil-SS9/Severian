@@ -903,6 +903,21 @@ class SQLiteRepository:
                 return self.get_memory(scope, memory_id)
         return self.get_memory(scope, memory_id)
 
+    def count_memories(self, scope: Scope) -> int:
+        """Count ACTIVE memories in scope (cheap COUNT, no payload load)."""
+        self._require_scope(scope)
+        query = (
+            select(func.count())
+            .select_from(records)
+            .where(
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+            )
+        )
+        with self.engine.connect() as connection:
+            return int(connection.execute(query).scalar_one())
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded.
 

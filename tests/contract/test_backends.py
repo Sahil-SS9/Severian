@@ -160,6 +160,9 @@ class _FakeRepository:
         self._memories[key] = updated
         return updated
 
+    def count_memories(self, scope: Scope) -> int:
+        return len(self.list_memories(scope))
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [
             m
