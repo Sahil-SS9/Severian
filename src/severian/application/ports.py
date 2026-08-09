@@ -66,6 +66,16 @@ class ScopedCanonicalPort(Protocol):
     ) -> tuple[Observation, Job]: ...
     def get_observation(self, scope: Scope, observation_id: str) -> Observation: ...
     def list_observations(self, scope: Scope) -> list[Observation]: ...
+    def list_pending_observations(self, scope: Scope, *, limit: int) -> list[Observation]:
+        """Active observations with NO derived active memory yet.
+
+        O(1)/indexed pending-work lookup for the synchronous derive
+        path (zero-debt 3.1): derive must not scan every historical
+        observation nor count the whole scope per observation. The
+        store answers with a bounded SQL query; observations that
+        already produced a memory are excluded server-side.
+        """
+        ...
 
     def list_observations_history(self, scope: Scope) -> list[Observation]:
         """All observations in scope, INCLUDING superseded revisions.

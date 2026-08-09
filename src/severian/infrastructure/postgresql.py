@@ -555,6 +555,48 @@ class PostgreSQLBackend:
         with self.engine.connect() as connection:
             return [Observation.model_validate(value) for value in connection.execute(query).scalars()]
 
+    def list_pending_observations(self, scope: Scope, *, limit: int) -> list[Observation]:
+        """Active observations with NO derived active memory yet.
+
+        Bounded SQL lookup (zero-debt 3.1): a single query answers
+        pending work for the scope without scanning every observation
+        or counting memories. JSONB containment checks whether any
+        active memory in the scope references the observation as a
+        source. Oldest-first ordering matches the derive pass contract.
+        """
+        self._require_scope(scope)
+        sql = sa_text(
+            """
+            SELECT o.payload FROM records o
+            WHERE o.record_type = 'observation'
+              AND o.tenant_id = :tenant_id
+              AND o.profile_id = :profile_id
+              AND o.collection_id = :collection_id
+              AND o.agent_id = :agent_id
+              AND o.session_id = :session_id
+              AND o.payload->>'superseded_by_id' IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM records m
+                  WHERE m.record_type = 'memory'
+                    AND m.tenant_id = o.tenant_id
+                    AND m.profile_id = o.profile_id
+                    AND m.collection_id = o.collection_id
+                    AND m.agent_id = o.agent_id
+                    AND m.session_id = o.session_id
+                    AND m.payload->'source_observation_ids' @> to_jsonb(o.id::text)
+              )
+            ORDER BY o.id
+            LIMIT :limit
+            """
+        )
+        params = {**scope.model_dump(), "limit": limit}
+        with self.engine.connect() as connection:
+            return [
+                Observation.model_validate(value)
+                for value in connection.execute(sql, params).scalars()
+            ]
+
     def list_observations_history(self, scope: Scope) -> list[Observation]:
         """All observations in scope INCLUDING superseded revisions.
 

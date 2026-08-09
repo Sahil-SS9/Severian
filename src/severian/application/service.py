@@ -308,20 +308,32 @@ class MemoryService:
             # dedupe) do NOT count against the bound — only fresh work
             # does. Anything beyond the bound must go through the durable
             # worker (enqueue + drain).
+            #
+            # zero-debt 3.1: pending work is answered by a bounded SQL
+            # query, NOT by scanning every observation and counting the
+            # whole scope per item. On a fully derived scope this is a
+            # single indexed lookup that derives zero and stays close to
+            # derive=False; each returned observation is fresh by
+            # construction (no memory references it yet).
+            pending = self._repository.list_pending_observations(
+                scope, limit=derive_max_observations
+            )
             derived = 0
-            for observation in self._repository.list_observations(scope):
-                if observation.superseded_by_id is not None:
-                    continue
-                if derived >= derive_max_observations:
-                    break
-                before = len(self._repository.list_memories(scope))
-                self._derivation.derive_observation(
+            for observation in pending:
+                produced = self._derivation.derive_observation(
                     scope, observation.id, gateway, policy=dict(policy or {})  # type: ignore[arg-type]
                 )
-                after = len(self._repository.list_memories(scope))
-                if after > before:  # fresh work only counts against the bound
+                # Only observations that produced memories count against
+                # the bound (OPS-03: fresh work only). A revision
+                # observation whose content is already covered (C-08)
+                # derives zero and does NOT consume a slot — preserving
+                # the pre-3.1 semantics without a full-scope count.
+                if produced:
                     derived += 1
-            self._projection.rebuild(scope)
+                    if derived >= derive_max_observations:
+                        break
+            if derived:
+                self._projection.rebuild(scope)
         results = self._retrieval.search(
             scope,
             query,

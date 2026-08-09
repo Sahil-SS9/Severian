@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, TypeVar
 
-from sqlalchemy import JSON, Column, Index, MetaData, String, Table, create_engine, func, or_, select, update
+from sqlalchemy import JSON, Column, Index, MetaData, String, Table, create_engine, func, or_, select, text, update
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -422,6 +422,47 @@ class SQLiteRepository:
         )
         with self.engine.connect() as connection:
             return [Observation.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def list_pending_observations(self, scope: Scope, *, limit: int) -> list[Observation]:
+        """Active observations with NO derived active memory yet.
+
+        Bounded SQL lookup (zero-debt 3.1): a single query answers
+        pending work for the scope without scanning every observation
+        or counting memories. SQLite JSON1 ``json_each`` checks whether
+        any active memory in the scope references the observation as a
+        source. Oldest-first ordering matches the derive pass contract.
+        """
+        self._require_scope(scope)
+        sql = text(
+            """
+            SELECT o.payload FROM records o
+            WHERE o.record_type = 'observation'
+              AND o.tenant_id = :tenant_id
+              AND o.profile_id = :profile_id
+              AND o.collection_id = :collection_id
+              AND o.agent_id = :agent_id
+              AND o.session_id = :session_id
+              AND json_extract(o.payload, '$.superseded_by_id') IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM records m, json_each(m.payload, '$.source_observation_ids') je
+                  WHERE m.record_type = 'memory'
+                    AND m.tenant_id = o.tenant_id
+                    AND m.profile_id = o.profile_id
+                    AND m.collection_id = o.collection_id
+                    AND m.agent_id = o.agent_id
+                    AND m.session_id = o.session_id
+                    AND je.value = o.id
+              )
+            ORDER BY o.id
+            LIMIT :limit
+            """
+        )
+        params = {**scope.model_dump(), "limit": limit}
+        with self.engine.connect() as connection:
+            rows = connection.execute(sql, params).scalars()
+            # Raw SQL bypasses SQLAlchemy JSON deserialization.
+            return [Observation.model_validate(json.loads(value)) for value in rows]
 
     def list_observations_history(self, scope: Scope) -> list[Observation]:
         """All observations in scope INCLUDING superseded revisions.

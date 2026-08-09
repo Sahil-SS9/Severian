@@ -108,6 +108,22 @@ class _FakeRepository:
     def list_observations(self, scope: Scope) -> list[Observation]:
         return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
 
+    def list_pending_observations(self, scope: Scope, *, limit: int) -> list[Observation]:
+        """Active observations with no memory yet (fake parity, 3.1)."""
+        scope_tuple = tuple(scope.model_dump().values())
+        derived_sources: set[str] = set()
+        for (rid, *s), memory in self._memories.items():
+            if tuple(s) == scope_tuple:
+                derived_sources.update(memory.source_observation_ids)
+        pending = [
+            o for (rid, *s), o in self._observations.items()
+            if tuple(s) == scope_tuple
+            and o.superseded_by_id is None
+            and o.id not in derived_sources
+        ]
+        pending.sort(key=lambda o: o.id)
+        return pending[:limit]
+
     def list_observations_history(self, scope: Scope) -> list[Observation]:
         # The fake retains every observation (revisions are added, the
         # original is left untouched) — history == full list here.
