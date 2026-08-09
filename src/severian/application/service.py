@@ -333,7 +333,16 @@ class MemoryService:
                     if derived >= derive_max_observations:
                         break
             if derived:
-                self._projection.rebuild(scope)
+                # zero-debt 3.2: project the outbox delta incrementally —
+                # the memories just created appended their events; apply
+                # ONLY those (bounded upsert/delete), never a scope-wide
+                # clear+reinsert. rebuild() remains the repair/admin path.
+                pending_events = [
+                    e for e in self._repository.pending_outbox()
+                    if e.scope == scope
+                ]
+                if pending_events:
+                    self._projection.apply(pending_events)
         results = self._retrieval.search(
             scope,
             query,

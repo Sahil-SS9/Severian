@@ -42,7 +42,7 @@ from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.domain.errors import NotFoundError
-from severian.domain.models import Job, Scope
+from severian.domain.models import Event, Job, Scope
 
 logger = logging.getLogger(__name__)
 
@@ -139,40 +139,45 @@ class DerivationWorker:
                     logger.warning("failed to mark job %s as failed: %s", job.id, exc, exc_info=True)
                 failed += 1
         # Converge projections for every touched scope BEFORE any
-        # completed job becomes durable.
-        for scope in touched.values():
-            self._projection.rebuild(scope)
+        # completed job becomes durable. zero-debt 3.2: project the
+        # outbox delta INCREMENTALLY (apply), never a scope-wide
+        # clear+reinsert — the outbox is the projection delta contract
+        # and every canonical write already appended its event.
+        applied_events = self._project_outbox(touched)
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
-        # OPS-01: the outbox projector. Every canonical write appended an
-        # outbox event; the projection rebuild above satisfies them for
-        # the touched scopes, so ack those events now. Pending events for
-        # untouched scopes stay pending (a later pass that touches them
-        # will ack). Ack is idempotent — a crash between rebuild and ack
-        # leaves the event pending and the next pass re-processes it.
-        try:
-            self._project_outbox(touched)
-        except Exception:
-            logger.warning("outbox projection failed at drain end", exc_info=True)
+        # OPS-01: the outbox projector. Ack only events whose projections
+        # converged above. Ack is idempotent — a crash between apply and
+        # ack leaves the event pending and the next pass re-processes it.
+        for event in applied_events:
+            try:
+                self._repository.ack_outbox(event.id)
+            except Exception:
+                logger.warning("failed to ack outbox event %s", event.id, exc_info=True)
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
         )
 
-    def _project_outbox(self, touched: dict[str, Scope]) -> None:
-        """Ack pending outbox events whose scope was touched this pass.
+    def _project_outbox(self, touched: dict[str, Scope]) -> list[Event]:
+        """Apply pending outbox events for touched scopes incrementally.
 
-        The outbox is append-only and written on every canonical write;
-        the projection rebuild for a touched scope makes those writes
-        visible to retrieval, which satisfies the corresponding outbox
-        events. Acking only touched scopes keeps the log honest — events
-        for scopes we did not rebuild remain pending and unacked.
+        The outbox is the projection delta contract (zero-debt 3.2):
+        each pending event is applied as a bounded upsert/delete, never
+        a scope-wide clear+reinsert. Events for scopes NOT touched this
+        pass remain pending (a later pass that touches them will apply
+        them). Returns the applied events so the caller can ack them
+        only after the projections converged (crash between apply and
+        ack → event stays pending → next pass re-applies, idempotent).
         """
+        if not touched:
+            return []
         touched_set = set(touched.keys())
-        for event in self._repository.pending_outbox():
-            if event.scope.model_dump_json() in touched_set:
-                self._repository.ack_outbox(event.id)
+        pending = [e for e in self._repository.pending_outbox() if e.scope.model_dump_json() in touched_set]
+        if pending:
+            self._projection.apply(pending)
+        return pending
 
     def _derive(
         self,

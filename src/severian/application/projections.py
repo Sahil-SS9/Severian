@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.domain.hits import VectorHit
-from severian.domain.models import Memory, Scope
+from severian.domain.models import Event, Memory, Scope
 
 
 @runtime_checkable
@@ -63,6 +63,60 @@ class ProjectionCoordinator:
     def remove_memory(self, memory_id: str) -> None:
         self.lexical.delete(memory_id)
         self.vector.delete(memory_id)
+
+    def apply(self, events: list[Event]) -> None:
+        """Project outbox events incrementally (zero-debt 3.2).
+
+        The outbox is the projection delta contract. Each event names
+        the memory it affects; applying it touches ONLY that memory's
+        rows — never a scope-wide clear+reinsert — so a one-memory
+        update costs bounded writes independent of scope size.
+
+        Idempotent by construction: upsert is an ON CONFLICT UPDATE and
+        delete of a missing id is a no-op, so repeated application,
+        duplicate delivery, out-of-order delivery, and crash-retry all
+        converge to the same projection state. Scope isolation holds
+        because every event carries its own scope and we address rows
+        by memory id.
+
+        Event semantics:
+        - ``memory.created``     → upsert the named memory
+        - ``memory.revised``     → upsert revision, delete old head
+          (``revision_of_id`` — superseded rows must leave projections)
+        - ``memory.rolled_back`` → upsert restored memory, delete the
+          demoted head (the memory whose ``superseded_by_id`` points at
+          the restored id)
+        - anything else          → ignored (no projection impact)
+        """
+        for event in events:
+            if event.kind == "memory.created":
+                self._upsert_from_event(event)
+            elif event.kind == "memory.revised":
+                self._upsert_from_event(event)
+                self._delete_superseded_head(event)
+            elif event.kind == "memory.rolled_back":
+                self._upsert_from_event(event)
+                self._delete_demoted_head(event)
+
+    def _upsert_from_event(self, event: Event) -> None:
+        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+        self.lexical.upsert(memory)
+        self.vector.upsert(memory)
+
+    def _delete_superseded_head(self, event: Event) -> None:
+        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+        if memory.revision_of_id is not None:
+            self.lexical.delete(memory.revision_of_id)
+            self.vector.delete(memory.revision_of_id)
+
+    def _delete_demoted_head(self, event: Event) -> None:
+        memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+        # The demoted head is now SUPERSEDED, so it is invisible to
+        # list_memories (active-only) — scan the full history.
+        for candidate in self.repository.list_memories_history(event.scope):
+            if candidate.superseded_by_id == memory.id:
+                self.lexical.delete(candidate.id)
+                self.vector.delete(candidate.id)
 
     def rebuild(self, scope: Scope) -> None:
         # Idempotent skip: if the canonical store is unchanged since the
