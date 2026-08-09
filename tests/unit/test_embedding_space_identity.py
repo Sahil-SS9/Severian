@@ -182,7 +182,15 @@ def test_empty_index_can_be_reopened_with_different_space(tmp_path: Path) -> Non
 
 
 def test_legacy_nonempty_index_without_meta_raises(tmp_path: Path) -> None:
-    """Rows but no vector_space_meta → unknown space → must fail."""
+    """Rows but no vector_space_meta → legacy JSON format → must fail.
+
+    zero-debt 4.1: an unversioned index with rows is a legacy JSON
+    store; it is refused with rebuild guidance (VectorFormatError) —
+    never mutated in place. Same dimension ≠ compatible: unknown space
+    must never silently mix.
+    """
+    from severian.domain.errors import VectorFormatError
+
     path = tmp_path / "vectors.db"
     # Build a legacy-shaped index WITHOUT the meta table.
     import sqlite3
@@ -200,7 +208,7 @@ def test_legacy_nonempty_index_without_meta_raises(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    with pytest.raises(EmbeddingSpaceMismatchError):
+    with pytest.raises(VectorFormatError, match="rebuild"):
         LocalVectorIndex(path, HashEmbedding(dimension=256))
 
 

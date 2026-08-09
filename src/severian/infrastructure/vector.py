@@ -6,10 +6,12 @@ import math
 import os
 import re
 import sqlite3
+import struct
 from pathlib import Path
 from typing import Protocol
 
 from severian.application.ports import CanonicalRepository
+from severian.domain.errors import VectorFormatError
 from severian.domain.hits import VectorHit  # re-export for backward compat (ARCH-03)
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS, porter_stem
@@ -21,6 +23,42 @@ from severian.infrastructure.embedding_metadata import (
 from severian.infrastructure.embedding_registry import resolve_embedding_metadata
 
 _STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
+
+# zero-debt 4.1: the ONLY supported vector storage format is packed
+# little-endian float32 BLOB. Legacy JSON-text rows are never mutated
+# in place — a legacy index is refused at open with rebuild guidance.
+VECTOR_STORAGE_FORMAT = "blob_f32le"
+_FORMAT_KEY = "vector_storage_format"
+
+
+def _pack_vector(vector: list[float]) -> bytes:
+    """Pack floats as little-endian float32 BLOB (zero-debt 4.1).
+
+    Rejects NaN/Inf: a non-finite component silently corrupts every
+    downstream distance comparison, so it must fail at write time.
+    """
+    for component in vector:
+        if not math.isfinite(component):
+            raise ValueError("embedding produced a non-finite component")
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def _unpack_vector(blob: bytes, dimension: int) -> list[float]:
+    """Unpack a little-endian float32 BLOB, validating its dimension.
+
+    Malformed length or a non-finite payload raises VectorFormatError:
+    the projection is disposable — rebuild, never trust the file.
+    """
+    expected = dimension * struct.calcsize("<f")
+    if len(blob) != expected:
+        raise VectorFormatError(
+            f"malformed vector blob: {len(blob)} bytes, expected {expected} "
+            f"for dimension {dimension}"
+        )
+    values = list(struct.unpack(f"<{dimension}f", blob))
+    if any(not math.isfinite(value) for value in values):
+        raise VectorFormatError("vector blob contains non-finite components")
+    return values
 
 
 def _meta_json(metadata: EmbeddingMetadata) -> str:
@@ -121,6 +159,11 @@ class LocalVectorIndex:
         with rebuild guidance. An index that has rows but NO stored identity
         (pre-identity store) is treated as unknown space and must be rebuilt
         explicitly — opening it for writes would silently mix spaces.
+
+        zero-debt 4.1: the storage format is verified/stamped in the SAME
+        meta table. A legacy JSON-format index (or an unversioned one with
+        rows) is REFUSED — never mutated in place; rebuild guidance is the
+        only path (the projection is disposable).
         """
         row = self.connection.execute(
             "SELECT value FROM vector_space_meta WHERE key = 'embedding_metadata'"
@@ -128,6 +171,30 @@ class LocalVectorIndex:
         count = int(self.connection.execute(
             "SELECT COUNT(*) FROM memory_vectors"
         ).fetchone()[0])
+
+        format_row = self.connection.execute(
+            "SELECT value FROM vector_space_meta WHERE key = ?", (_FORMAT_KEY,)
+        ).fetchone()
+        if format_row is None:
+            if count > 0:
+                raise VectorFormatError(
+                    f"vector index at {self.path} uses an unversioned/legacy "
+                    f"JSON storage format; rebuild it from canonical memories "
+                    f"(severian rebuild-vectors) — the projection is "
+                    f"disposable and is never migrated in place"
+                )
+            self.connection.execute(
+                "INSERT INTO vector_space_meta (key, value) VALUES (?, ?)",
+                (_FORMAT_KEY, VECTOR_STORAGE_FORMAT),
+            )
+        elif format_row[0] != VECTOR_STORAGE_FORMAT:
+            raise VectorFormatError(
+                f"vector index at {self.path} uses storage format "
+                f"'{format_row[0]}' but this build only supports "
+                f"'{VECTOR_STORAGE_FORMAT}'; rebuild it from canonical "
+                f"memories (severian rebuild-vectors)"
+            )
+
         if row is None:
             if count > 0:
                 raise EmbeddingSpaceMismatchError(
@@ -178,7 +245,7 @@ class LocalVectorIndex:
                 memory.scope.agent_id,
                 memory.scope.session_id,
                 memory.content,
-                json.dumps(vector),
+                _pack_vector(vector),
             ),
         )
         self.connection.commit()
@@ -203,7 +270,7 @@ class LocalVectorIndex:
                     memory.scope.agent_id,
                     memory.scope.session_id,
                     memory.content,
-                    json.dumps(vector),
+                    _pack_vector(vector),
                 )
             )
         try:
@@ -258,7 +325,7 @@ class LocalVectorIndex:
         ).fetchall()
         scored: list[tuple[VectorHit, list[float], str]] = []
         for memory_id, encoded, content in rows:
-            vector = json.loads(encoded)
+            vector = _unpack_vector(encoded, self.embedding.dimension)
             score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
             scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
         # Deterministic tiebreak: identical scores (identical hash vectors)

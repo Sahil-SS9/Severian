@@ -324,7 +324,7 @@ def test_batch_ingest_rolls_back_on_conflict(backend: Any) -> None:
     scope = _unique_scope()
     dup = Observation(scope=scope, content="dup", id="dup-id-live")
     observations = [Observation(scope=scope, content=f"rollback {i}") for i in range(5)] + [dup, dup]
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r"IntegrityError|UNIQUE|conflict|duplicate key"):
         backend.add_observations_and_enqueue_batch(observations)
     assert len(backend.list_observations(scope)) == 0  # atomic rollback
 

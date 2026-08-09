@@ -20,6 +20,17 @@ class NotFoundError(LookupError):
     pass
 
 
+class VectorFormatError(RuntimeError):
+    """The vector projection uses an unsupported/legacy storage format.
+
+    Raised when a legacy JSON-vector index is opened for writes: the
+    projection is disposable — rebuild from canonical memories instead
+    of migrating rows in place (zero-debt 4.1).
+    """
+
+    pass
+
+
 class ConflictError(RuntimeError):
     pass
 

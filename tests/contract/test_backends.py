@@ -112,11 +112,11 @@ class _FakeRepository:
         """Active observations with no memory yet (fake parity, 3.1)."""
         scope_tuple = tuple(scope.model_dump().values())
         derived_sources: set[str] = set()
-        for (rid, *s), memory in self._memories.items():
+        for (_rid, *s), memory in self._memories.items():
             if tuple(s) == scope_tuple:
                 derived_sources.update(memory.source_observation_ids)
         pending = [
-            o for (rid, *s), o in self._observations.items()
+            o for (_rid, *s), o in self._observations.items()
             if tuple(s) == scope_tuple
             and o.superseded_by_id is None
             and o.id not in derived_sources

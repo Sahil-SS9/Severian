@@ -146,12 +146,10 @@ def test_batch_ingest_failure_rolls_back_whole_batch(env) -> None:
     # second insert → the whole transaction must roll back (P0-4).
     dup = _observation(scope, 1).model_copy(update={"id": "dup-id"})
     observations = [_observation(scope, i) for i in range(5)] + [dup, dup]
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r"IntegrityError|UNIQUE|conflict|duplicate key"):
         env["repo"].add_observations_and_enqueue_batch(observations)
     # Nothing from the batch persisted (atomic rollback).
     assert len(env["repo"].list_observations(scope)) == 0
-
-
 # ---------------------------------------------------------------------------
 # ack_outbox_many
 # ---------------------------------------------------------------------------

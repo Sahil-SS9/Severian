@@ -626,7 +626,11 @@ class PostgreSQLBackend:
                 )
                 if (events := self._event_models("observation", candidate)) is not None:
                     event, audit = events
-                    connection.execute(records.insert().values(**self._record_values("outbox", event, status="pending")))
+                    connection.execute(
+                        records.insert().values(
+                            **self._record_values("outbox", event, status="pending")
+                        )
+                    )
                     connection.execute(records.insert().values(**self._record_values("audit", audit)))
                 connection.execute(
                     records.insert().values(
