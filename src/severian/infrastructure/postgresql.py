@@ -77,6 +77,11 @@ def _iso(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat()
 
 
+# Bind-parameter chunk for IN-clause bulk ops (ack_outbox_many). PG caps
+# at 65535/statement; SQLite at 32766 (3.32+). 5000 is safely under both.
+_ACK_CHUNK = 5000
+
+
 def _migrations_dir() -> Path:
     """Locate the Alembic migration tree relative to the package root."""
     return Path(__file__).resolve().parent.parent.parent.parent / "migrations"
@@ -1597,19 +1602,28 @@ class PostgreSQLBackend:
         Missing/already-acked ids are ignored (idempotent) — a crash
         between apply and ack leaves events pending; re-acking a batch
         that partially landed must not raise.
+
+        Chunked: PostgreSQL caps bind parameters at 65535 per statement
+        (psycopg: "number of parameters must be between 0 and 65535").
+        A 100k-event warmup pass acked the whole scope in ONE IN clause
+        and blew past the cap (found in scale B4, 2026-08-09). Slices of
+        _ACK_CHUNK are safely under both the PG protocol limit and
+        SQLite's SQLITE_MAX_VARIABLE_NUMBER (32766 since 3.32).
         """
         if not event_ids:
             return
-        with self.engine.begin() as connection:
-            connection.execute(
-                update(records)
-                .where(
-                    records.c.id.in_(event_ids),
-                    records.c.record_type == "outbox",
-                    records.c.status == "pending",
+        for start in range(0, len(event_ids), _ACK_CHUNK):
+            chunk = event_ids[start : start + _ACK_CHUNK]
+            with self.engine.begin() as connection:
+                connection.execute(
+                    update(records)
+                    .where(
+                        records.c.id.in_(chunk),
+                        records.c.record_type == "outbox",
+                        records.c.status == "pending",
+                    )
+                    .values(status="acked")
                 )
-                .values(status="acked")
-            )
 
     def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: Mapping[str, Any]) -> AuditEvent:
         self._require_scope(scope)

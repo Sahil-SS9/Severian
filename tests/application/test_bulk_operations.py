@@ -177,6 +177,27 @@ def test_ack_outbox_many_idempotent_with_missing_ids(env) -> None:
     assert len(env["repo"].pending_outbox()) == 0
 
 
+def test_ack_outbox_many_chunked_beyond_bind_limits(env) -> None:
+    """Scale B4 regression (2026-08-09): a 100k-event warmup pass acked
+    the whole scope in ONE IN clause and blew past PostgreSQL's 65535
+    bind-parameter cap. ack_outbox_many must chunk internally, so a
+    70k-ID call (14 chunks of 5000) must not raise — including on the
+    idempotent missing-ID path, which is how a re-acked backlog lands.
+    """
+    # Fabricated IDs exercise the chunked IN-clause path without needing
+    # 70k real rows; missing ids are ignored by contract.
+    ids = [f"fabricated-event-{i:06d}" for i in range(70_000)]
+    env["repo"].ack_outbox_many(ids)  # must not raise
+    # Real events spanning multiple chunks are all acked.
+    scope = _scope()
+    n = 12_000  # 3 chunks of 5000 (each observation emits 1 outbox event)
+    env["repo"].add_observations_and_enqueue_batch([_observation(scope, i) for i in range(n)])
+    pending = [e for e in env["repo"].pending_outbox() if e.kind == "observation.created"]
+    assert len(pending) == n
+    env["repo"].ack_outbox_many([e.id for e in pending])
+    assert len(env["repo"].pending_outbox()) == 0
+
+
 # ---------------------------------------------------------------------------
 # upsert_many: one commit per batch, atomic, bounded
 # ---------------------------------------------------------------------------

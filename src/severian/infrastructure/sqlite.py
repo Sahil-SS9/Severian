@@ -31,6 +31,11 @@ from severian.infrastructure.snapshot import validate_snapshot
 T = TypeVar("T")
 
 
+# Bind-parameter chunk for IN-clause bulk ops (ack_outbox_many),
+# symmetric with the PostgreSQL backend (_ACK_CHUNK there too).
+_ACK_CHUNK = 5000
+
+
 def _iso(value: datetime | None) -> str | None:
     """ISO-8601 UTC string for column comparison (lexicographic == chronological)."""
     if value is None:
@@ -1501,19 +1506,26 @@ class SQLiteRepository:
         Missing/already-acked ids are ignored (idempotent) — a crash
         between apply and ack leaves events pending; re-acking a batch
         that partially landed must not raise.
+
+        Chunked to stay under SQLITE_MAX_VARIABLE_NUMBER (32766 since
+        3.32) — symmetric with the PostgreSQL backend's 65535 bind cap
+        (scale B4 finding, 2026-08-09: a 100k-event warmup pass acked
+        the whole scope in one IN clause).
         """
         if not event_ids:
             return
-        with self.engine.begin() as connection:
-            connection.execute(
-                update(records)
-                .where(
-                    records.c.id.in_(event_ids),
-                    records.c.record_type == "outbox",
-                    records.c.status == "pending",
+        for start in range(0, len(event_ids), _ACK_CHUNK):
+            chunk = event_ids[start : start + _ACK_CHUNK]
+            with self.engine.begin() as connection:
+                connection.execute(
+                    update(records)
+                    .where(
+                        records.c.id.in_(chunk),
+                        records.c.record_type == "outbox",
+                        records.c.status == "pending",
+                    )
+                    .values(status="acked")
                 )
-                .values(status="acked")
-            )
 
     def append_audit(self, scope: Scope, action: str, target_id: str, metadata_: dict[str, Any]) -> AuditEvent:
         self._require_scope(scope)
