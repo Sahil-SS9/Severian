@@ -44,6 +44,13 @@ class FakeGateway:
         return [{"kind": "fact", "content": f"Fact: {content}", "confidence": 0.9}]
 
 
+@pytest.fixture(autouse=True)
+def _allow_pg_reset() -> None:
+    """This file resets the live PG test DB directly; allow it regardless
+    of test execution order (other files' fixtures must not be relied on)."""
+    os.environ.setdefault("SEVERIAN_PG_ALLOW_RESET", "1")
+
+
 @pytest.fixture
 def backend() -> Any:
     repo = PostgreSQLBackend(dsn=PG_DSN)
