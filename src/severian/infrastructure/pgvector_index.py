@@ -77,7 +77,18 @@ def _build_vector_space_meta(*, name: str = "vector_space_meta") -> Table:
     )
 
 
-memory_vectors = _build_memory_vectors(DEFAULT_VECTOR_DIMENSION)
+# Module-level default schema for alembic (migrations/env.py merges this
+# into the PG migration target). The default memory_vectors table and
+# its meta table live here so the vector index is versioned alongside
+# the canonical store; side-by-side rebuild lanes build their own named
+# tables via PGVectorIndex(table_name=...).
+metadata = MetaData()
+memory_vectors = _build_memory_vectors(DEFAULT_VECTOR_DIMENSION, name="memory_vectors")
+memory_vectors.metadata = metadata  # rebind onto the module metadata
+metadata._add_table("memory_vectors", None, memory_vectors)
+vector_space_meta = _build_vector_space_meta(name="vector_space_meta")
+vector_space_meta.metadata = metadata
+metadata._add_table("vector_space_meta", None, vector_space_meta)
 
 
 class PGVectorIndex:
