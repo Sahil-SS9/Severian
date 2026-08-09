@@ -31,6 +31,7 @@ build duration, and the full quality metric set.
 """
 from __future__ import annotations
 
+import json
 import os
 import resource
 import time
@@ -248,7 +249,7 @@ class EmbeddingBakeoffRunner:
                 except Exception:  # noqa: BLE001
                     pass
 
-    def run(self) -> EmbeddingBakeoffResult:
+    def run(self, checkpoint_dir: Path | None = None) -> EmbeddingBakeoffResult:
         from datetime import UTC, datetime
 
         lanes: list[EmbeddingLaneResult] = []
@@ -276,7 +277,16 @@ class EmbeddingBakeoffRunner:
                 ))
                 continue
             print(f"  [{provider_id}] building lane...", flush=True)
-            lanes.append(self._measure_lane(provider_id, spec))
+            lane = self._measure_lane(provider_id, spec)
+            lanes.append(lane)
+            # zero-debt 3.3 hardening: checkpoint each completed lane
+            # immediately so a timeout/crash never loses finished work.
+            if checkpoint_dir is not None:
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                (checkpoint_dir / f"lane-{provider_id}.json").write_text(
+                    json.dumps(asdict(lane), sort_keys=True)
+                )
+                print(f"  [{provider_id}] checkpointed -> lane-{provider_id}.json", flush=True)
 
         import platform
 

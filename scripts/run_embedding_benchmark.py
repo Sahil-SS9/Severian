@@ -228,7 +228,9 @@ def main() -> None:
                                     corpus_path=args.manifest)
     print(f"bake-off manifest: {manifest.manifest_id} "
           f"({len(manifest.corpus.documents)} docs, {len(manifest.queries)} queries)")
-    result = runner.run()
+    # zero-debt 3.3: checkpoint every completed lane immediately; a
+    # timeout/crash then preserves finished lanes for the merge step.
+    result = runner.run(checkpoint_dir=args.out)
 
     evidence = result.to_dict()
     evidence["repro"] = collect_provenance(
