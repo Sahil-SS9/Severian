@@ -266,14 +266,33 @@ def rebuild_pg_vectors(
 
         with index.engine.begin() as connection:
             connection.exec_driver_sql(f'ALTER TABLE "memory_vectors" RENAME TO "{prev_name}"')
+            # Renaming a table does NOT rename its indexes — move the
+            # live scope index with it so the canonical name is free
+            # for the candidate below.
+            connection.exec_driver_sql(
+                f'ALTER INDEX IF EXISTS "ix_memory_vectors_scope" RENAME TO "ix_{prev_name}_scope"'
+            )
+            # The live meta table is named after the live table
+            # (PGVectorIndex derives it as f"{table_name}_meta"), so the
+            # live meta is "memory_vectors_meta", not the alembic-only
+            # module-level "vector_space_meta".
+            connection.exec_driver_sql(
+                f'ALTER TABLE "memory_vectors_meta" RENAME TO "{prev_name}_meta"'
+            )
             connection.exec_driver_sql(f'ALTER TABLE "{table_name}" RENAME TO "memory_vectors"')
-            connection.exec_driver_sql(f'ALTER TABLE "{table_name}_meta" RENAME TO "vector_space_meta"')
+            connection.exec_driver_sql(
+                f'ALTER INDEX IF EXISTS "ix_{table_name}_scope" '
+                'RENAME TO "ix_memory_vectors_scope"'
+            )
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{table_name}_meta" RENAME TO "memory_vectors_meta"'
+            )
         result.status = "swapped"
         result.rollback_path = prev_name if keep_rollback else None
         if not keep_rollback:
             with index.engine.begin() as connection:
                 connection.exec_driver_sql(f'DROP TABLE IF EXISTS "{prev_name}"')
-                connection.exec_driver_sql('DROP TABLE IF EXISTS "vector_space_meta"')
+                connection.exec_driver_sql(f'DROP TABLE IF EXISTS "{prev_name}_meta"')
         return result
     except Exception as exc:  # noqa: BLE001 — surfaced in result.error
         result.status = "failed"
@@ -296,7 +315,9 @@ def _pg_engine(dsn: str) -> Any:
 
 
 def _nonce() -> str:
-    return f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    # Underscore (not hyphen): the nonce feeds derived identifiers
+    # (table name, scope index name), which PG requires unquoted.
+    return f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
 
 def _verification_failure(verification: RebuildVerification) -> str:

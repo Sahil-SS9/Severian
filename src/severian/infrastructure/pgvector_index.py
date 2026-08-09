@@ -56,7 +56,7 @@ def _build_memory_vectors(dimension: int, *, name: str = "memory_vectors") -> Ta
         Column("vector", Vector(dimension), nullable=False),
     )
     Index(
-        "ix_memory_vectors_scope",
+        f"ix_{name}_scope",
         table.c.tenant_id,
         table.c.profile_id,
         table.c.collection_id,
@@ -126,7 +126,8 @@ class PGVectorIndex:
             self._table.metadata.create_all(connection)
             self._meta.metadata.create_all(connection)
             connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_memory_vectors_scope "
+                "CREATE INDEX IF NOT EXISTS "
+                f"ix_{self.table_name}_scope "
                 f"ON {self.table_name} (tenant_id, profile_id, collection_id, agent_id, session_id)"
             )
         self._stamp_or_verify_space()
