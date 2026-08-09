@@ -185,12 +185,29 @@ class EmbeddingBakeoffRunner:
             encode_elapsed = time.perf_counter() - t0
             encode_tps = len(encode_texts) / encode_elapsed if encode_elapsed > 0 else 0.0
 
+            # zero-debt P0.3: warm the index to FULL derivation BEFORE
+            # scoring. The old flow left derive=True on every query —
+            # each query derived up to 50 observations INTO the index,
+            # growing it mid-run (measured: granite-97m queries started
+            # at 36ms and ended at ~53s mean; p95 79s while hash was
+            # 1.6s). That measured mixed derive+retrieval, not retrieval.
+            # Warmup uses the derive-only loop (linear, no query cost);
+            # scoring then runs with derive=False on a stable index.
+            if hasattr(built, "warmup"):
+                scopes = sorted({doc.scope for doc in self._manifest.corpus.documents})
+                for warm_scope in scopes:
+                    try:
+                        built.warmup(scope=warm_scope)
+                    except Exception as exc:  # noqa: BLE001 — lane isolation
+                        print(f"  [{provider_id}] warmup({warm_scope}) failed: {exc}")
+
             # Quality + query latency via the shared scorer. allow_missing:
             # the bake-off runs ONE lane at a time — the other manifest
             # providers legitimately have no adapter registered.
             runner = BenchmarkRunner(manifest=self._manifest,
                                      adapters={provider_id: built},
-                                     allow_missing=True)
+                                     allow_missing=True,
+                                     derive_on_query=False)
             quality = runner._run_provider(provider_id)  # noqa: SLF001 — reuse scoring
             latencies = [float(raw["elapsed_ms"]) for raw in quality.raw]
             p50, p95, p99 = self._percentiles(latencies)

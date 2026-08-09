@@ -83,7 +83,13 @@ class BenchmarkRunner:
         manifest: BenchmarkManifest,
         adapters: Mapping[str, ProviderAdapter],
         allow_missing: bool = False,
+        derive_on_query: bool = True,
     ) -> None:
+        # zero-debt P0.3: retrieval bake-offs must warm the index BEFORE
+        # timing queries (derive_on_query=False). When True (legacy
+        # behaviour), each query may derive up to the adapter's cap —
+        # which contaminates latency with index growth mid-run.
+        self._derive_on_query = derive_on_query
         live_providers = [provider for provider in manifest.providers if not provider.vendor_reported_only]
         missing = [provider.id for provider in live_providers if provider.id not in adapters]
         if missing and not allow_missing:
@@ -117,6 +123,23 @@ class BenchmarkRunner:
             if item in expected_set:
                 return 1.0 / index
         return 0.0
+
+    def _derive_kwargs(self, adapter: ProviderAdapter) -> dict[str, bool]:
+        """Pass derive= only to adapters that accept it (e.g. Severian).
+
+        Non-Severian adapters (baseline, chroma) have no derive concept;
+        forcing the kwarg would break them. Signature inspection keeps
+        the gate honest instead of guessing by class name.
+        """
+        import inspect
+
+        try:
+            params = inspect.signature(adapter.query).parameters
+        except (TypeError, ValueError):
+            return {}
+        if "derive" in params and self._derive_on_query is False:
+            return {"derive": False}
+        return {}
 
     @staticmethod
     def _ndcg_at_k(expected_weights: Mapping[str, float], returned_ids: list[str], k: int = 10) -> float:
@@ -169,7 +192,10 @@ class BenchmarkRunner:
                 expected_weights = {evidence.document_id: evidence.weight for evidence in query.expected_evidence}
                 started = time.perf_counter()
                 response = self._validate_response(
-                    adapter.query(query.query, limit=10, scope=query.scope, query_kind=query.kind)
+                    adapter.query(
+                        query.query, limit=10, scope=query.scope, query_kind=query.kind,
+                        **(self._derive_kwargs(adapter)),
+                    )
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 total_cost += response.cost_usd
@@ -233,15 +259,22 @@ class BenchmarkRunner:
             adapter.close()
         latencies_ms.sort()
         p95_index = max(0, int(round(0.95 * (len(latencies_ms) - 1))))
+        # Empty-guards (zero-debt): a manifest of only unanswerable /
+        # non-temporal queries legitimately produces empty metric lists;
+        # division by zero would crash the whole bake-off. 0.0 is the
+        # honest value for "no answerable queries measured".
+        def _avg(values: list[float]) -> float:
+            return (sum(values) / len(values)) if values else 0.0
+
         return ProviderResult(
             provider_id=provider_id,
             queries_run=len(self._manifest.queries),
-            recall_at_10=sum(recalls) / len(recalls),
-            mrr=sum(mrrs) / len(mrrs),
-            ndcg_at_10=sum(ndcgs) / len(ndcgs),
-            citation_precision=sum(citation_precisions) / len(citation_precisions) if citation_precisions else 1.0,
+            recall_at_10=_avg(recalls),
+            mrr=_avg(mrrs),
+            ndcg_at_10=_avg(ndcgs),
+            citation_precision=_avg(citation_precisions) if citation_precisions else 1.0,
             stale_fact_rate=stale_total / returned_total if returned_total else 0.0,
-            temporal_accuracy=sum(temporal_scores) / len(temporal_scores),
+            temporal_accuracy=_avg(temporal_scores),
             cross_scope_leakage=leakage_total / returned_total if returned_total else 0.0,
             unsupported_answer_rate=unsupported_total / len(self._manifest.queries),
             latency_p95_ms=latencies_ms[p95_index] if latencies_ms else 0.0,
