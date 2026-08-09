@@ -445,15 +445,17 @@ class _FailingTargetedProjection:
         raise RuntimeError("targeted index_memory failed")
 
 
-def test_correction_converges_projection_via_rebuild_fallback(repo):
+def test_correction_converges_projection_via_rebuild_fallback(repo, tmp_path):
     """DATA-03: if the targeted projection update fails during a
     correction, the service must fall back to a full rebuild so the
     correction is end-to-end durable — search surfaces the corrected
     content, never the stale head."""
     sc = scope()
-    # Build real projections.
-    fts = FTS5Index(Path("/tmp/severian-data03-fts.db"))
-    vec = LocalVectorIndex(Path("/tmp/severian-data03-vec.db"), HashEmbedding())
+    # Build real projections. tmp_path isolates the fixture: a stale
+    # legacy-format index at a fixed /tmp path (pre-4.1) is refused by
+    # the version-stamped open, so each run must start from a clean file.
+    fts = FTS5Index(tmp_path / "severian-data03-fts.db")
+    vec = LocalVectorIndex(tmp_path / "severian-data03-vec.db", HashEmbedding())
     coordinator = ProjectionCoordinator(repo, fts, vec)
 
     # Seed a derived memory and index it.
