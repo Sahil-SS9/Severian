@@ -8,7 +8,7 @@ import re
 import sqlite3
 import struct
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import VectorFormatError
@@ -24,11 +24,24 @@ from severian.infrastructure.embedding_registry import resolve_embedding_metadat
 
 _STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
 
-# zero-debt 4.1: the ONLY supported vector storage format is packed
+# zero-debt 4.2: the ONLY supported vector storage format is packed
 # little-endian float32 BLOB. Legacy JSON-text rows are never mutated
 # in place — a legacy index is refused at open with rebuild guidance.
 VECTOR_STORAGE_FORMAT = "blob_f32le"
 _FORMAT_KEY = "vector_storage_format"
+
+# Optional NumPy acceleration, opt-in ONLY (SEVERIAN_OPT_NUMPY=1): the
+# hash-only installation must never carry a compulsory heavy dependency
+# for a microbenchmark win. When off (default), search uses the pure
+# Python heapq path with identical ordering semantics.
+_NUMPY_AVAILABLE = os.environ.get("SEVERIAN_OPT_NUMPY", "") == "1"
+if _NUMPY_AVAILABLE:
+    try:
+        import numpy  # noqa: F401  (imported lazily again in _search_numpy)
+
+        _NUMPY_AVAILABLE = True
+    except ImportError:
+        _NUMPY_AVAILABLE = False
 
 
 def _pack_vector(vector: list[float]) -> bytes:
@@ -147,6 +160,12 @@ class LocalVectorIndex:
                 content TEXT NOT NULL,
                 vector TEXT NOT NULL
             )"""
+        )
+        # zero-debt 4.2: composite scope index — search filters on all
+        # five scope dimensions; without it every query is a full scan.
+        self.connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_memory_vectors_scope
+            ON memory_vectors (tenant_id, profile_id, collection_id, agent_id, session_id)"""
         )
         self._metadata = resolve_embedding_metadata(embedding)
         self._stamp_or_verify_space()
@@ -323,17 +342,77 @@ class LocalVectorIndex:
                 AND agent_id = ? AND session_id = ?""",
             tuple(scope.model_dump().values()),
         ).fetchall()
+        if not rows:
+            return []
+        # zero-debt 4.2: exact bounded top-k with a TOTAL tiebreak key
+        # (score desc, content, memory_id — memory_id unique) so the
+        # selection is deterministic and identical to a full sort.
+        # Optional NumPy acceleration (opt-in env) with the SAME key via
+        # lexsort; pure-Python heapq fallback needs no numpy at all.
+        if _NUMPY_AVAILABLE:
+            try:
+                return self._search_numpy(rows, query_vector, limit=limit)
+            except Exception:  # noqa: BLE001 - fall back to pure python
+                pass
+        import heapq
+
+        def _key(item: tuple[VectorHit, list[float], str]) -> tuple[float, str, str]:
+            hit, _vector, content = item
+            return (-hit.score, content, hit.memory_id)
+
         scored: list[tuple[VectorHit, list[float], str]] = []
         for memory_id, encoded, content in rows:
             vector = _unpack_vector(encoded, self.embedding.dimension)
             score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
             scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
-        # Deterministic tiebreak: identical scores (identical hash vectors)
-        # resolve by content — the stable key across runs — then by
-        # memory UUID as the final total-order safety net (never reached
-        # for distinct content post-dedupe).
-        scored.sort(key=lambda pair: (-pair[0].score, pair[2], pair[0].memory_id))
-        return [hit for hit, _vector, _content in scored[:limit]]
+        if limit < len(scored):
+            scored = heapq.nsmallest(limit, scored, key=_key)
+        else:
+            scored.sort(key=_key)
+        return [hit for hit, _vector, _content in scored]
+
+    def _search_numpy(
+        self,
+        rows: list[Any],
+        query_vector: list[float],
+        *,
+        limit: int,
+    ) -> list[VectorHit]:
+        """Vectorised exact top-k (opt-in; SEVERIAN_OPT_NUMPY=1).
+
+        Decodes the whole scope's BLOBs as one float32 matrix, computes
+        scores with float64 matmul, and selects with np.lexsort over the
+        SAME total key (score desc, content, memory_id). lexsort is the
+        exact analogue of the pure-Python sort, so ordering is
+        deterministic and identical — no argpartition (its arbitrary
+        tiebreak would change semantics at the k boundary).
+        """
+        import numpy as np
+
+        n = len(rows)
+        memory_ids: list[str] = []
+        contents: list[str] = []
+        blobs = bytearray()
+        for memory_id, encoded, content in rows:
+            memory_ids.append(memory_id)
+            contents.append(content)
+            blobs.extend(encoded)
+        dim = self.embedding.dimension
+        matrix = np.frombuffer(bytes(blobs), dtype="<f4").reshape(n, dim).astype(np.float64)
+        scores = matrix @ np.asarray(query_vector, dtype=np.float64)
+        # lexsort: LAST key is primary. (-scores, contents, memory_ids)
+        # == (score desc, content, memory_id) total order, exactly.
+        order = np.lexsort(
+            (
+                np.asarray(memory_ids),
+                np.asarray(contents),
+                -scores,
+            )
+        )
+        return [
+            VectorHit(memory_id=memory_ids[i], score=float(scores[i]))
+            for i in order[:limit]
+        ]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)

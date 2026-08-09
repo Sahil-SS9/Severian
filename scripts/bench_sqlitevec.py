@@ -8,11 +8,12 @@ speed alone; this measures the maintained-extension path.
 import json
 import random
 import sqlite3
-import sqlite_vec
 import struct
 import sys
 import time
 from pathlib import Path
+
+import sqlite_vec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 

@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from bench_provenance import collect_provenance  # noqa: E402
+
 from severian.application.worker import DerivationWorker  # noqa: E402
 from severian.composition import build_bundle  # noqa: E402
 from severian.domain.models import Collection, Observation, Scope  # noqa: E402
