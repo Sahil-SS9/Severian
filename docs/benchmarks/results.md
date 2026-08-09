@@ -180,6 +180,15 @@ run-to-run jitter of the earlier numbers). `scale-100k.json` records
 evidence writer (its original run-start SHA `241e68b` was stale); the
 numbers are verified equivalent at HEAD via the 1k/10k re-run.
 
+**Zero-debt candidate (2026-08-09):** the zero-debt embedding performance
+candidate (`c92769c`, branch `zero-debt-embedding-perf`) publishes fresh
+1k/10k scale evidence and the real-data embedding bake-off in
+`evidence/2026-08-09-zero-debt/` (`fingerprint.json`, `result.json`,
+`README.md`), plus the support-tier selections in
+`docs/benchmarks/support-tiers-2026-08-09.md`. The 100k lane on the candidate
+SHA is partial-warmup (indicative only); a complete-warmup 100k run on
+`c92769c` is still outstanding.
+
 ## 4. Cold vs hot path (the derive-on-read tradeoff)
 
 Severian's default SDK path (`search(derive=True)`) re-derives every

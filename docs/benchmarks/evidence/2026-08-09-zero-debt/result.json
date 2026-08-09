@@ -1,0 +1,26 @@
+{
+  "run_started_at": "2026-08-09T06:58:57.741235+00:00",
+  "manifest_id": "embedding-bakeoff-v1",
+  "repro": {
+    "command": "scripts/run_embedding_bakeoff.py (see repro.dirty_patch for exact invocation)",
+    "git_sha": "c92769ca2e8cb70684cef47e0b38f9605c369cfb",
+    "seed": "unknown-pin-at-run"
+  },
+  "scale": {
+    "1k": {
+      "severian-sqlite": {"docs_per_sec": 245.8, "query_p50_ms": 45.46, "query_p95_ms": 63.42, "warmup_complete": true},
+      "severian-postgres": {"docs_per_sec": 151.0, "query_p50_ms": 53.67, "query_p95_ms": 98.64, "warmup_complete": true},
+      "baseline-lexical": {"docs_per_sec": 304224.9, "query_p95_ms": 1.16, "warmup_complete": false, "note": "lexical baseline does not warm memory vectors"}
+    },
+    "10k": {
+      "severian-sqlite": {"docs_per_sec": 243.7, "query_p50_ms": 370.35, "query_p95_ms": 545.04, "warmup_complete": true},
+      "severian-postgres": {"docs_per_sec": 148.5, "query_p50_ms": 66.61, "query_p95_ms": 108.76, "warmup_complete": true},
+      "baseline-lexical": {"docs_per_sec": 311818.2, "query_p95_ms": 12.4, "warmup_complete": false, "note": "lexical baseline does not warm memory vectors"}
+    },
+    "100k": {
+      "severian-sqlite": {"docs_per_sec": 186.0, "query_p50_ms": 1368.55, "query_p95_ms": 1470.9, "warmup_complete": false, "warmed_memories": 35500, "note": "PARTIAL warmup on 100K lane; treated as indicative, not final"},
+      "severian-postgres": {"docs_per_sec": 154.2, "query_p50_ms": 65.82, "query_p95_ms": 151.74, "warmup_complete": false, "warmed_memories": 47500, "note": "PARTIAL warmup on 100K lane; treated as indicative, not final"},
+      "baseline-lexical": {"docs_per_sec": 199197.7, "query_p95_ms": 135.53, "warmup_complete": false, "note": "lexical baseline does not warm memory vectors"}
+    }
+  }
+}

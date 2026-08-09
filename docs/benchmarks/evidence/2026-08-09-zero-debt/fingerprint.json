@@ -1,0 +1,63 @@
+{
+  "commit": {
+    "sha": "c92769ca2e8cb70684cef47e0b38f9605c369cfb",
+    "branch": "zero-debt-embedding-perf",
+    "note": "Final zero-debt embedding performance candidate; scale evidence on this SHA, embedding bake-off on this SHA."
+  },
+  "instrument": {
+    "name": "severian-scale-runner",
+    "version": "in-repo scripts/scale_runner.py",
+    "warmup": "complete for 1K/10K buckets; PARTIAL for 100K (see result.json warmup flags)"
+  },
+  "hardware": {
+    "cpu": "unknown-pin-at-run",
+    "cores": "unknown-pin-at-run",
+    "platform": "linux"
+  },
+  "corpus": {
+    "sha256": "de09ea4e482de39b8946430fec14dcc8b5d7e67839d85da2d31e0203f5904839",
+    "note": "Redacted real-data embedding corpus; privacy proof: redaction applied pre-write and post-scan shows 0 PII patterns"
+  },
+  "embedding_lanes": {
+    "granite-311m": {
+      "model_id": "ibm-granite/granite-embedding-311m-multilingual-r2",
+      "dimension": 768,
+      "quantisation": "none",
+      "runtime": "sentence-transformers",
+      "recall_at_10": 0.9914529914529915,
+      "mrr": 0.9065866232532899,
+      "ndcg_at_10": 0.9273867540543794,
+      "query_latency_p50_ms": 49.39,
+      "query_latency_p95_ms": 146.34,
+      "encode_throughput_docs_per_sec": 249.9,
+      "peak_rss_mb": 1087.1,
+      "vector_bytes_per_memory": 3072,
+      "cold_load_seconds": 5.947,
+      "index_build_seconds": 23.214
+    },
+    "granite-small-en": {
+      "model_id": "ibm-granite/granite-embedding-small-english-r2",
+      "dimension": 384,
+      "quantisation": "none",
+      "runtime": "sentence-transformers",
+      "recall_at_10": 0.9914529914529915,
+      "mrr": 0.9148962148962149,
+      "ndcg_at_10": 0.9336846797098926,
+      "query_latency_p50_ms": 38.63,
+      "query_latency_p95_ms": 149.93,
+      "encode_throughput_docs_per_sec": 241.9,
+      "peak_rss_mb": 2.8,
+      "vector_bytes_per_memory": 1536,
+      "cold_load_seconds": 3.184,
+      "index_build_seconds": 22.229
+    }
+  },
+  "skipped_lanes": {
+    "hash": "baseline; deterministic fallback space",
+    "granite-107m": "skipped (no quality run recorded)",
+    "granite-97m": "skipped (no quality run recorded)",
+    "gemma-300m": "skipped (no quality run recorded)",
+    "qwen-0.6b": "skipped (no quality run recorded)",
+    "bekko-a8m": "skipped (no quality run recorded)"
+  }
+}
