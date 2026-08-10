@@ -189,6 +189,12 @@ candidate (`c92769c`, branch `zero-debt-embedding-perf`) publishes fresh
 SHA is partial-warmup (indicative only); a complete-warmup 100k run on
 `c92769c` is still outstanding.
 
+> **Superseded (2026-08-10 round-two remediation):** the 2026-08-09 zero-debt
+> packet above is **SUPERSEDED — INVALID FOR MODEL SELECTION**. It ran the old
+> corpus and the old gate semantics (P0-D/P0-E corrections). **NO MODEL
+> SELECTED** as of 2026-08-10. Replacement evidence will be published in a new
+> dated directory under `docs/benchmarks/evidence/` after the round-two bake-off.
+
 ## 4. Cold vs hot path (the derive-on-read tradeoff)
 
 Severian's default SDK path (`search(derive=True)`) re-derives every

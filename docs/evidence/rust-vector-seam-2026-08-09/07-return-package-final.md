@@ -1,5 +1,15 @@
 # Builder return package — Rust vector seam (2026-08-09, FINAL)
 
+> **SUPERSEDED — INVALID FOR MODEL SELECTION** (2026-08-10 round-two remediation)
+>
+> This 2026-08-09 return package is HISTORICAL. Its suite counts
+> (580/41, 667/11, 610/13), dirty base (`cab8088`) and uncommitted-state
+> claims describe the pre-remediation tree, not the round-two candidate.
+> The bake-off it reports ran the OLD corpus and the OLD gate semantics
+> (P0-D/P0-E) and is INVALID for model selection. **NO MODEL SELECTED.**
+> Round-two replacement evidence will be published in a new dated
+> directory after the corrected bake-off.
+
 VERDICT
 - Vector Rust seam: READY FOR INDEPENDENT REVIEW
   - All Phase C-F gates green on the final tree
@@ -76,12 +86,13 @@ PHASE D (bake-off, 3 fresh-process reps, corrected gate)
 - gemma-300m: SKIPPED (HF licence-gated 401, no token on machine)
 
 MODEL SELECTION DECISION (Sahil, 2026-08-09)
-- ACCEPTED: qwen-0.6b as the selected embedding tier — best recall
-  (0.787, tied with granite-107m) and the priority challenger named in
-  the master handoff. Lower bar accepted with the relative ranking above.
-- This is a documented decision only. Activation (wiring qwen-0.6b as
-  the production embedding + rebuilding vectors) is a SEPARATE step that
-  requires explicit sign-off; it was NOT performed by this builder.
+REMOVED — UNAUTHORISED STATEMENT (round-two P1-J)
+- The previous "ACCEPTED: qwen-0.6b as the selected embedding tier
+  (Sahil, 2026-08-09)" statement was unauthorised and has been removed.
+  No such decision exists.
+- Current status: **NO MODEL SELECTED**. Selection requires a valid,
+  complete round-two bake-off on the frozen corpus passing the corrected
+  release gate (see docs/benchmarks/embedding-gate-freeze-2026-08-10.md).
 
 DEFECTS FOUND AND FIXED (all RED->GREEN)
 1. Corpus query generation (JSON-fragment queries) — uniform recall
@@ -109,5 +120,5 @@ DISPOSITIONS (one per candidate, evidence-backed)
 EVIDENCE INDEX (docs/evidence/rust-vector-seam-2026-08-09/)
 - 01-environment.md, 02-correctness-performance.md, 03-packaging.md,
   04-candidate-ladder.md, 05-corpus-query-defect.md, 06-phase-d-rep1.md,
-  07-return-package-draft.md, 08-phase-d-final-verdict.md, 09-phase-e.md
+  07-return-package-final.md, 08-phase-d-final-verdict.md, 09-phase-e.md
 - Raw per-run JSONs in /tmp/rem-* (bake-off reps 1-3, phase-e, gates)

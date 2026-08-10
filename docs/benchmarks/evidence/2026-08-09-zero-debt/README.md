@@ -1,5 +1,14 @@
 # Evidence — zero-debt embedding performance candidate (2026-08-09)
 
+> **SUPERSEDED — INVALID FOR MODEL SELECTION** (2026-08-10 round-two remediation)
+>
+> Historical packet for the 2026-08-09 zero-debt candidate (SHA `c92769c`,
+> uncommitted state, dirty base `cab8088`). It ran the OLD real-data corpus
+> (`de09ea4e…`) under the OLD gate semantics and is NOT valid model-selection
+> evidence. Raw artefacts below (`fingerprint.json`, `result.json`) are
+> preserved IMMUTABLE. **NO MODEL SELECTED** as of 2026-08-10; round-two
+> replacement evidence will be published in a new dated directory.
+
 SHA: `c92769ca2e8cb70684cef47e0b38f9605c369cfb` (branch `zero-debt-embedding-perf`)
 
 ## What this packet contains

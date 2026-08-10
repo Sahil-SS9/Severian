@@ -1,5 +1,13 @@
 # Phase D bake-off FINAL VERDICT — 3 fresh-process reps (2026-08-09)
 
+> **SUPERSEDED — INVALID FOR MODEL SELECTION** (2026-08-10 round-two remediation)
+>
+> Phase D ran the OLD corpus and the OLD gate semantics (the `unsupported
+> 0.22` ceiling was derived from the diluted 26/120 denominator that P0-D
+> corrected). The relative ranking below is HISTORICAL ONLY — it is not a
+> selection, and its gate values are not comparable with round-two results.
+> **NO MODEL SELECTED.** See `docs/benchmarks/embedding-gate-freeze-2026-08-10.md`.
+
 Corpus: sha d463453e642ece0f (query-gen defect fixed)
 Gate: corrected constants (recall 0.9 / citation 0.78 / unsupported 0.22;
       stale 0.0 / leakage 0.0) — see 05-corpus-query-defect.md for derivation

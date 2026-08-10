@@ -1,7 +1,21 @@
-# Severian embedding support tiers — 2026-08-09
+# Severian embedding support tiers — 2026-08-09 (SUPERSEDED)
 
-Status: published with the zero-debt embedding performance candidate
-(SHA `c92769c`, branch `zero-debt-embedding-perf`).
+> **SUPERSEDED — INVALID FOR MODEL SELECTION** (2026-08-10 round-two remediation)
+>
+> This document was published with the 2026-08-09 zero-debt candidate
+> (SHA `c92769c`, branch `zero-debt-embedding-perf`, uncommitted state) on
+> the old real-data corpus (`de09ea4e…`) under the OLD gate semantics. It is
+> HISTORICAL ONLY: the Granite selections below are not valid round-two
+> evidence, the old suite counts (580/41, 667/11, 610/13) describe the
+> pre-remediation tree, and **NO MODEL SELECTED** is the current status
+> (as of 2026-08-10). Round-two selection requires the frozen corpus
+> (`docs/benchmarks/corpus/quality-corpus-v1.json`) and the corrected
+> release gate (`docs/benchmarks/embedding-gate-freeze-2026-08-10.md`).
+> Replacement evidence will be published in a new dated directory under
+> `docs/benchmarks/evidence/` after the round-two bake-off.
+
+Status (historical): published with the zero-debt embedding performance
+candidate (SHA `c92769c`, branch `zero-debt-embedding-perf`).
 Evidence: `docs/benchmarks/evidence/2026-08-09-zero-debt/`.
 
 ## Selections
