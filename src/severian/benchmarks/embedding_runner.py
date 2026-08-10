@@ -140,16 +140,12 @@ class EmbeddingBakeoffRunner:
 
     @staticmethod
     def _percentiles(values: list[float]) -> tuple[float, float, float]:
-        ordered = sorted(values)
-        if not ordered:
-            return (0.0, 0.0, 0.0)
-        n = len(ordered)
+        """(p50, p95, p99) over raw samples using the ONE documented
+        quantile method (linear interpolation, type 7 — see
+        severian.benchmarks.quantiles; P1-H)."""
+        from severian.benchmarks.quantiles import p50_p95_p99
 
-        def at(frac: float) -> float:
-            idx = max(0, min(n - 1, int(round(frac * (n - 1)))))
-            return ordered[idx]
-
-        return (at(0.50), at(0.95), at(0.99))
+        return p50_p95_p99(sorted(values))
 
     # -- lane lifecycle ----------------------------------------------------
 
@@ -173,6 +169,13 @@ class EmbeddingBakeoffRunner:
             "manifest_path": str(manifest_path),
             "corpus_path": str(self._corpus_path) if self._corpus_path else None,
             "lane_module": "scripts.run_embedding_benchmark",
+            # P0-F: capped-resource lanes — applied INSIDE the fresh child
+            # process (never the parent/tests). cpus = CPU affinity count,
+            # mem_mb = RLIMIT_AS cap in MiB.
+            "resource_caps": {
+                "cpus": int(spec.config.get("cpus", 0)) or None,
+                "mem_mb": int(spec.config.get("mem_mb", 0)) or None,
+            },
         }
         script = (
             "import json, sys; "
@@ -225,6 +228,7 @@ class EmbeddingBakeoffRunner:
                 mrr=0.0, ndcg_at_10=0.0, citation_precision=0.0,
                 stale_fact_rate=0.0, temporal_accuracy=0.0,
                 cross_scope_leakage=0.0, unsupported_answer_rate=0.0,
+                negative_false_positive_rate=0.0,
                 latency_p95_ms=0.0, cost_per_query_usd=0.0,
             ),
             skipped=True,
@@ -289,7 +293,18 @@ class EmbeddingBakeoffRunner:
             # Throughput in a SEPARATE fresh adapter (never the scored
             # index — audit CRITICAL 3). The probe adapter gets its own
             # workdir so enc-* rows cannot contaminate scoring.
+            # P1-G: snapshot the scored index's exact document IDs BEFORE
+            # the probe and require equality AFTER — throughput/warm-up
+            # probes must never change the scored index.
+            snapshot_before = self._snapshot_ids(built)
             encode_tps, probe_clean = self._measure_throughput_fresh(provider_id, spec)
+            snapshot_after = self._snapshot_ids(built)
+            if snapshot_before is not None and snapshot_after != snapshot_before:
+                probe_clean = False
+                print(
+                    f"  [{provider_id}] scored index ID set changed during "
+                    "throughput probe — probe is not clean"
+                )
 
             gate_passed, gate_failures = self._evaluate_lane_gate(provider_id, quality)
 
@@ -326,20 +341,37 @@ class EmbeddingBakeoffRunner:
                     pass
 
     def _assert_exact_index(self, provider_id: str, adapter: ProviderAdapter) -> None:
-        """Audit CRITICAL 3: the scored index must contain exactly the
-        manifest corpus document IDs."""
+        """Audit CRITICAL 3 / P1-G: the scored index must contain EXACTLY
+        the manifest corpus document IDs — both directions. Extra IDs
+        (throughput/warm-up contamination) AND missing IDs (partial
+        ingest) invalidate quality scoring."""
         list_ids = getattr(adapter, "list_document_ids", None)
         if list_ids is None:
             return  # non-inspectable adapter: caller must guarantee
         stored = set(list_ids())
         expected = {doc.id for doc in self._manifest.corpus.documents}
         extra = stored - expected
+        missing = expected - stored
         if extra:
             raise RuntimeError(
                 f"lane {provider_id}: scored index contains {len(extra)} "
                 f"unmanifested IDs (e.g. {sorted(extra)[:3]}) — "
                 "quality scoring is contaminated"
             )
+        if missing:
+            raise RuntimeError(
+                f"lane {provider_id}: scored index is missing {len(missing)} "
+                f"manifested IDs (e.g. {sorted(missing)[:3]}) — "
+                "quality scoring is incomplete"
+            )
+
+    def _snapshot_ids(self, adapter: ProviderAdapter) -> frozenset[str] | None:
+        """Exact scored-index document-ID snapshot (P1-G). None when the
+        adapter is not inspectable (caller then cannot verify)."""
+        list_ids = getattr(adapter, "list_document_ids", None)
+        if list_ids is None:
+            return None
+        return frozenset(list_ids())
 
     def _measure_throughput_fresh(
         self, provider_id: str, spec: Any
@@ -390,6 +422,8 @@ class EmbeddingBakeoffRunner:
             failures.append("cross_scope_leakage")
         if quality.unsupported_answer_rate > gate.max_unsupported_answer_rate:
             failures.append("unsupported_answer_rate")
+        if quality.negative_false_positive_rate > gate.max_negative_false_positive_rate:
+            failures.append("negative_false_positive_rate")
         return (not failures, failures)
 
     def run(self, checkpoint_dir: Path | None = None) -> EmbeddingBakeoffResult:
@@ -449,10 +483,39 @@ class EmbeddingBakeoffRunner:
         return result
 
 
+def _apply_resource_caps(caps: dict[str, Any] | None) -> None:
+    """Apply per-lane resource caps inside the fresh child process.
+
+    - cpus: pin the process to the first N logical CPUs (real affinity,
+      so throughput/latency reflect the capped lane).
+    - mem_mb: hard RLIMIT_AS cap in MiB — a lane that exceeds it dies
+      with MemoryError and is recorded as skipped, never faked.
+    """
+    caps = caps or {}
+    cpus = caps.get("cpus")
+    if cpus:
+        import os
+
+        available = sorted(os.sched_getaffinity(0))
+        if len(available) < cpus:
+            raise SystemExit(
+                f"cannot cap lane to {cpus} CPUs (only {len(available)} available)"
+            )
+        os.sched_setaffinity(0, set(available[:cpus]))
+    mem_mb = caps.get("mem_mb")
+    if mem_mb:
+        import resource
+
+        limit = int(mem_mb) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+
 def _lane_child_entrypoint(payload: dict[str, Any]) -> None:
     """Fresh-process child: rebuild the manifest + factory and measure
     one lane, printing one JSON line on stdout."""
     import sys
+
+    _apply_resource_caps(payload.get("resource_caps"))
 
     # parents: [0]=benchmarks [1]=severian [2]=src [3]=repo root
     _repo_root = Path(__file__).resolve().parents[3]

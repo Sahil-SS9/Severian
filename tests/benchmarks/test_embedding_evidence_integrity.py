@@ -25,7 +25,7 @@ from severian.infrastructure.vector import HashEmbedding  # noqa: E402
 
 def _manifest_payload(tmp_path: Path, n_docs: int = 20, n_queries: int = 6) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "manifest_id": "integrity-red",
         "name": "integrity",
         "corpus": {
@@ -59,10 +59,12 @@ def _manifest_payload(tmp_path: Path, n_docs: int = 20, n_queries: int = 6) -> d
         ],
         "metrics": ["recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
                     "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
-                    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"],
+                    "unsupported_answer_rate", "negative_false_positive_rate",
+                    "latency_p95_ms", "cost_per_query_usd"],
         "release_gate": {"min_recall_at_10": 0.9, "min_citation_precision": 0.8,
                          "max_stale_fact_rate": 0.0, "max_cross_scope_leakage": 0.0,
                          "max_unsupported_answer_rate": 0.1,
+                         "max_negative_false_positive_rate": 0.1,
                          "require_external_providers": 0},
     }
 
