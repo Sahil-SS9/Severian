@@ -68,6 +68,76 @@ jobs:
       - name: Validate benchmark manifest
         run: uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-v1.json
 
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: severian
+          POSTGRES_PASSWORD: severian
+          POSTGRES_DB: severian
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U severian"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust lint (fmt + clippy -D warnings)
+        working-directory: native
+        run: |
+          cargo fmt --check
+          cargo clippy --release -- -D warnings
+
+      - name: Rust dependency audit + licence inventory
+        working-directory: native
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+          cargo install cargo-license --locked
+          cargo license
+
+      - name: Build native wheels (CPython 3.11 + 3.12)
+        working-directory: native
+        run: |
+          uv tool run --from maturin maturin build --release -i 3.11
+          uv tool run --from maturin maturin build --release -i 3.12
+
+      - name: Install native wheel + run native test suites
+        run: |
+          uv sync --group dev
+          uv pip install native/target/wheels/severian_native-0.1.0-*.whl
+          uv run pytest -q tests/unit/test_native_vector_backend.py \
+            tests/integration/test_native_vector_integration.py \
+            tests/gates/test_native_fallback_contract.py \
+            tests/unit/test_cross_version_score_contract.py
+
+      - name: Uninstall native — base package still passes its suites
+        run: |
+          uv pip uninstall -y severian-native
+          uv run pytest -q tests/unit/test_cross_version_score_contract.py \
+            tests/gates/test_native_fallback_contract.py
+
       - name: Benchmark release gate (SQLite + live PostgreSQL)
         # Chroma lane is optional in CI: it requires a throwaway venv
         # with a vendored CVE-patched chromadb build. When absent the

@@ -9,3 +9,7 @@ __pycache__/
 *.db-shm
 build/
 dist/
+# native companion build artifacts (Rust)
+native/target/
+native/.venv/
+*.whl
