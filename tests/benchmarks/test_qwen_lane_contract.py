@@ -190,8 +190,15 @@ def test_truncate_dim_ignored_by_encoder_fails_loudly(
     adapter.close()
 
 
-def test_unormalised_vector_fails_loudly(
+def test_unnormalised_vector_is_renormalised(
         recording_model: type[_RecordingModel]) -> None:
+    """Post-truncation normalisation (P0-F, commit bde3eac).
+
+    sentence-transformers' truncate_dim + normalize_embeddings ordering
+    does not guarantee unit norm after truncation, so the adapter
+    renormalises explicitly. An unnormalised encode result (norm >> 1)
+    must therefore be accepted and corrected to unit norm — not rejected.
+    """
     def _unnormalised(self: Any, text: str, **kwargs: Any) -> list[float]:
         return [3.0] * 384  # norm = 3*sqrt(384) >> 1
 
@@ -200,7 +207,26 @@ def test_unormalised_vector_fails_loudly(
         "dimension": 384, "revision": QWEN_REVISION,
         "query_prompt": QWEN_PROMPT, "truncate_dim": 384,
     })
-    with pytest.raises(ValueError, match="not normalised"):
+    adapter.ingest("d1", "The Kestrel thruster reaches 40 km/s at full power.",
+                   scope="t1/p1/c1/a1/s1")
+    hits = adapter.query("How fast is the Kestrel thruster?", limit=5,
+                         scope="t1/p1/c1/a1/s1")
+    assert len(hits.items) > 0  # renormalised vectors index/search normally
+    adapter.close()
+
+
+def test_zero_norm_vector_fails_loudly(
+        recording_model: type[_RecordingModel]) -> None:
+    """A degenerate all-zero vector has no direction: reject loudly."""
+    def _zero(self: Any, text: str, **kwargs: Any) -> list[float]:
+        return [0.0] * 384
+
+    recording_model.encode = _zero  # type: ignore[method-assign]
+    adapter = _build({
+        "dimension": 384, "revision": QWEN_REVISION,
+        "query_prompt": QWEN_PROMPT, "truncate_dim": 384,
+    })
+    with pytest.raises(ValueError, match="zero norm"):
         adapter.query("How fast is the Kestrel thruster?", limit=5,
                       scope="t1/p1/c1/a1/s1")
     adapter.close()
