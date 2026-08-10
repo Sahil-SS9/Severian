@@ -101,6 +101,32 @@ class ProviderSpec(BaseModel):
     vendor_reported_only: bool = False
 
     @model_validator(mode="after")
+    def _require_immutable_revision(self) -> ProviderSpec:
+        """Audit HIGH 6: neural lanes MUST pin an immutable model revision.
+
+        ``unknown-pin-at-run`` (the pre-repair value) means a rerun at the
+        same Git SHA could load different weights. Hash/none runtime lanes
+        are deterministic and exempt; every other runtime must carry a
+        pinned revision (a full git/SHA-style commit id).
+        """
+        runtime = str(self.config.get("runtime", ""))
+        revision = str(self.config.get("revision", ""))
+        deterministic_runtimes = {"", "pure-python", "none", "n/a"}
+        if runtime in deterministic_runtimes:
+            return self
+        if not revision or revision in {"unknown-pin-at-run", "n/a", "latest"}:
+            raise ManifestValidationError(
+                f"provider {self.id!r} ({runtime}) requires an immutable "
+                f"revision; got {revision!r}"
+            )
+        if len(revision) < 8 or any(ch.isspace() for ch in revision):
+            raise ManifestValidationError(
+                f"provider {self.id!r} revision {revision!r} is not an "
+                "immutable commit/revision identifier"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _require_external_deployment(self) -> ProviderSpec:
         if self.kind == "external" and not self.vendor_reported_only and self.deployment not in {
             "hosted",

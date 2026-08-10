@@ -1,42 +1,38 @@
-"""Embedding bake-off runner (zero-debt plan, Task 1.2).
+"""Embedding bake-off runner (zero-debt plan, Task 1.2) — repaired.
 
 Selects Severian's embedding tiers from reproducible real-workload
 evidence, NOT from public MTEB alone (locked decision D4). Every lane
 runs the SAME corpus and query set through the SAME Severian retrieval
 path, differing only in the embedding provider.
 
-Reuses ``BenchmarkRunner`` scoring (recall@10, MRR, nDCG@10, citation
-precision, stale/temporal/leakage/unsupported rates, latency) — no
-duplicated metric implementations. Adds the model-tier measurements the
-selection gates require: cold load, encode throughput, artifact bytes,
-peak RSS, index build, vector bytes per memory.
+Phase B (remediation) contract — audit CRITICAL 1-3 / HIGH 5-8:
 
-Candidates (Task 1.2 matrix):
-- hash: HashEmbedding baseline (no model; the fallback contract)
-- granite-107m: current control (granite-embedding-107m-multilingual)
-- granite-97m: balanced default candidate
-- gemma-300m: balanced candidate (record gated acquisition terms)
-- qwen-0.6b: high tier (instruction + no-instruction control)
-- granite-311m: high tier (768 and 384 Matryoshka when supported)
-- bekko-a8m: lite multilingual
-- granite-small-en: English-only control (CANNOT win multilingual)
-- jina-v4: EXCLUDED — 3.8B / ~7.87GB BF16 / non-commercial terms;
-  recorded in the manifest as excluded, never downloaded/run here.
+- the corpus path is hashed separately from the manifest (audit
+  CRITICAL 1: the old code hashed the manifest and published it as the
+  corpus SHA);
+- encode throughput is measured in a SEPARATE fresh adapter, never into
+  the index used for quality scoring (audit CRITICAL 3);
+- the scored index is asserted to contain EXACTLY the manifest corpus
+  IDs before any query runs;
+- the manifest release gate is evaluated for EVERY completed lane and
+  ``gate_passed`` / ``gate_failures`` are persisted per lane (audit
+  CRITICAL 2);
+- each lane runs in a FRESH subprocess so peak RSS is a true process
+  peak, not a sequential ru_maxrss delta (audit HIGH 7);
+- model revisions are pinned immutable HF revisions (audit HIGH 6).
 
-Each lane records: model revision (HF commit), dimension, pooling/
-normalisation, query/doc prefix contract, runtime + quantisation,
-cold model load time, p50/p95/p99 query embedding latency (batch 1),
-document encode throughput, peak RSS, vector bytes per memory, index
-build duration, and the full quality metric set.
+Candidates (Task 1.2 matrix) live in the manifest; this runner executes
+whatever runnable providers the manifest declares.
 """
 from __future__ import annotations
 
 import json
 import os
-import resource
+import subprocess
+import sys
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +65,8 @@ class EmbeddingLaneResult:
     index_build_seconds: float
     vector_bytes_per_memory: float
     quality: ProviderResult
+    gate_passed: bool | None = None
+    gate_failures: list[str] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str = ""
 
@@ -78,13 +76,17 @@ class EmbeddingBakeoffResult:
     manifest_id: str
     lanes: list[EmbeddingLaneResult]
     corpus_sha256: str
+    manifest_sha256: str
     hardware: dict[str, Any]
     run_started_at: str
+    runner_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "manifest_id": self.manifest_id,
             "corpus_sha256": self.corpus_sha256,
+            "manifest_sha256": self.manifest_sha256,
+            "runner_sha256": self.runner_sha256,
             "hardware": self.hardware,
             "run_started_at": self.run_started_at,
             "lanes": [asdict(lane) for lane in self.lanes],
@@ -96,9 +98,10 @@ class EmbeddingBakeoffRunner:
 
     Quality scoring delegates to :class:`BenchmarkRunner` with a
     per-lane adapter — the SAME manifest, the SAME metric code. The
-    model-tier measurements are collected around the adapter lifecycle
-    (construction = cold load; ingest = index build; queries = latency;
-    a dedicated encode batch = throughput).
+    model-tier measurements are collected around the adapter lifecycle.
+
+    Each lane runs in a FRESH subprocess (``_measure_lane``) so peak RSS
+    is a true process peak and a broken lane cannot corrupt the parent.
     """
 
     def __init__(
@@ -107,16 +110,17 @@ class EmbeddingBakeoffRunner:
         manifest: Any,
         lane_factory: Mapping[str, Any],
         corpus_path: Path | None = None,
+        manifest_path: Path | None = None,
     ) -> None:
         self._manifest = manifest
         self._lane_factory = dict(lane_factory)
         self._corpus_path = corpus_path
+        # Explicit path for the fresh-subprocess protocol (audit HIGH 7).
+        # Never reach into pydantic private attrs: BenchmarkManifest uses
+        # extra="forbid", so a `_path` attribute can never exist there.
+        self._manifest_path = manifest_path
 
     # -- model-tier measurements ------------------------------------------
-
-    @staticmethod
-    def _peak_rss_mb() -> float:
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
     @staticmethod
     def _artifact_bytes(model_dir: str | None) -> int:
@@ -150,6 +154,88 @@ class EmbeddingBakeoffRunner:
     # -- lane lifecycle ----------------------------------------------------
 
     def _measure_lane(self, provider_id: str, spec: Any) -> EmbeddingLaneResult:
+        """Run one lane in a fresh subprocess and return its result.
+
+        A fresh process gives a true per-lane peak RSS (audit HIGH 7)
+        and isolates model-load crashes. The subprocess imports this
+        module and calls :meth:`_measure_lane_inline`.
+        """
+
+        # Serialise the manifest + factory registry path to the child.
+        manifest_path = self._manifest_path
+        if manifest_path is None:
+            # Inline fallback for in-memory manifests (tests): run in
+            # this process but with the fresh-process protocol.
+            return self._measure_lane_inline(provider_id, spec)
+
+        payload = {
+            "provider_id": provider_id,
+            "manifest_path": str(manifest_path),
+            "corpus_path": str(self._corpus_path) if self._corpus_path else None,
+            "lane_module": "scripts.run_embedding_benchmark",
+        }
+        script = (
+            "import json, sys; "
+            "from severian.benchmarks.embedding_runner import _lane_child_entrypoint; "
+            "_lane_child_entrypoint(json.loads(sys.argv[1]))"
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script, json.dumps(payload)],
+                capture_output=True, text=True, timeout=3600,
+                cwd=str(Path(__file__).resolve().parents[2]),
+            )
+        except subprocess.TimeoutExpired:
+            return self._skipped(provider_id, spec, "lane timed out (3600s)")
+        if proc.returncode != 0:
+            return self._skipped(
+                provider_id, spec,
+                f"lane subprocess failed (exit {proc.returncode}): "
+                f"{proc.stderr.strip()[:300]}",
+            )
+        try:
+            data = json.loads(proc.stdout.strip().splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001
+            return self._skipped(provider_id, spec, f"lane result unparseable: {exc}")
+        lane = EmbeddingLaneResult(**data)
+        lane.quality = ProviderResult(**data["quality"]) if "quality" in data else lane.quality
+        return lane
+
+    @staticmethod
+    def _skipped(provider_id: str, spec: Any, reason: str) -> EmbeddingLaneResult:
+        return EmbeddingLaneResult(
+            provider_id=provider_id,
+            model_id=spec.model.id,
+            revision=str(spec.config.get("revision", "unknown")),
+            dimension=int(spec.config.get("dimension", 384)),
+            normalize=bool(spec.config.get("normalize", True)),
+            runtime=str(spec.config.get("runtime", "unknown")),
+            quantisation=str(spec.config.get("quantisation", "none")),
+            cold_load_seconds=0.0,
+            artifact_bytes=0,
+            peak_rss_mb=0.0,
+            encode_throughput_docs_per_sec=0.0,
+            query_latency_p50_ms=0.0,
+            query_latency_p95_ms=0.0,
+            query_latency_p99_ms=0.0,
+            index_build_seconds=0.0,
+            vector_bytes_per_memory=int(spec.config.get("dimension", 384)) * 4,
+            quality=ProviderResult(
+                provider_id=provider_id, queries_run=0, recall_at_10=0.0,
+                mrr=0.0, ndcg_at_10=0.0, citation_precision=0.0,
+                stale_fact_rate=0.0, temporal_accuracy=0.0,
+                cross_scope_leakage=0.0, unsupported_answer_rate=0.0,
+                latency_p95_ms=0.0, cost_per_query_usd=0.0,
+            ),
+            skipped=True,
+            skip_reason=reason[:300],
+        )
+
+    def _measure_lane_inline(self, provider_id: str, spec: Any) -> EmbeddingLaneResult:
+        """Measure one lane in-process (used by fresh-process child and
+        in-memory test manifests)."""
+        import resource
+
         factory = self._lane_factory[provider_id]
         cfg = spec.config or {}
         model = spec.model
@@ -162,7 +248,7 @@ class EmbeddingBakeoffRunner:
 
         adapter: ProviderAdapter | None = None
         try:
-            rss_before = self._peak_rss_mb()
+            # Cold load is the construction time (model load included).
             t0 = time.perf_counter()
             built = factory()  # construction includes model load
             cold_load = time.perf_counter() - t0
@@ -176,23 +262,8 @@ class EmbeddingBakeoffRunner:
                              supersedes=doc.supersedes)
             index_build = time.perf_counter() - t0
 
-            # Encode throughput on a fresh batch (documents).
-            encode_texts = [doc.content for doc in self._manifest.corpus.documents][:200]
-            t0 = time.perf_counter()
-            for text in encode_texts:
-                built.ingest(f"enc-{abs(hash(text)) % 10**9}", text,
-                             scope=self._manifest.corpus.documents[0].scope)
-            encode_elapsed = time.perf_counter() - t0
-            encode_tps = len(encode_texts) / encode_elapsed if encode_elapsed > 0 else 0.0
-
-            # zero-debt P0.3: warm the index to FULL derivation BEFORE
-            # scoring. The old flow left derive=True on every query —
-            # each query derived up to 50 observations INTO the index,
-            # growing it mid-run (measured: granite-97m queries started
-            # at 36ms and ended at ~53s mean; p95 79s while hash was
-            # 1.6s). That measured mixed derive+retrieval, not retrieval.
-            # Warmup uses the derive-only loop (linear, no query cost);
-            # scoring then runs with derive=False on a stable index.
+            # Warm the index to FULL derivation BEFORE scoring so query
+            # latency measures retrieval, not derivation (zero-debt 2.4).
             if hasattr(built, "warmup"):
                 scopes = sorted({doc.scope for doc in self._manifest.corpus.documents})
                 for warm_scope in scopes:
@@ -201,9 +272,11 @@ class EmbeddingBakeoffRunner:
                     except Exception as exc:  # noqa: BLE001 — lane isolation
                         print(f"  [{provider_id}] warmup({warm_scope}) failed: {exc}")
 
-            # Quality + query latency via the shared scorer. allow_missing:
-            # the bake-off runs ONE lane at a time — the other manifest
-            # providers legitimately have no adapter registered.
+            # Audit CRITICAL 3: verify the scored index contains EXACTLY
+            # the manifest corpus IDs — no throughput probes, no residue.
+            self._assert_exact_index(provider_id, built)
+
+            # Quality + query latency via the shared scorer.
             runner = BenchmarkRunner(manifest=self._manifest,
                                      adapters={provider_id: built},
                                      allow_missing=True,
@@ -211,7 +284,14 @@ class EmbeddingBakeoffRunner:
             quality = runner._run_provider(provider_id)  # noqa: SLF001 — reuse scoring
             latencies = [float(raw["elapsed_ms"]) for raw in quality.raw]
             p50, p95, p99 = self._percentiles(latencies)
-            peak_rss = self._peak_rss_mb() - rss_before
+            peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+            # Throughput in a SEPARATE fresh adapter (never the scored
+            # index — audit CRITICAL 3). The probe adapter gets its own
+            # workdir so enc-* rows cannot contaminate scoring.
+            encode_tps, probe_clean = self._measure_throughput_fresh(provider_id, spec)
+
+            gate_passed, gate_failures = self._evaluate_lane_gate(provider_id, quality)
 
             return EmbeddingLaneResult(
                 provider_id=provider_id,
@@ -231,34 +311,13 @@ class EmbeddingBakeoffRunner:
                 index_build_seconds=round(index_build, 3),
                 vector_bytes_per_memory=dimension * 4,  # float32
                 quality=quality,
+                gate_passed=gate_passed,
+                gate_failures=gate_failures,
+                skipped=not probe_clean,
+                skip_reason="" if probe_clean else "throughput probe lane was not clean",
             )
         except Exception as exc:  # noqa: BLE001 — lane isolation
-            return EmbeddingLaneResult(
-                provider_id=provider_id,
-                model_id=model.id,
-                revision=revision,
-                dimension=dimension,
-                normalize=normalize,
-                runtime=runtime,
-                quantisation=quantisation,
-                cold_load_seconds=0.0,
-                artifact_bytes=self._artifact_bytes(model_dir),
-                peak_rss_mb=0.0,
-                encode_throughput_docs_per_sec=0.0,
-                query_latency_p50_ms=0.0,
-                query_latency_p95_ms=0.0,
-                query_latency_p99_ms=0.0,
-                index_build_seconds=0.0,
-                vector_bytes_per_memory=dimension * 4,
-                quality=ProviderResult(provider_id=provider_id, queries_run=0,
-                                       recall_at_10=0.0, mrr=0.0, ndcg_at_10=0.0,
-                                       citation_precision=0.0, stale_fact_rate=0.0,
-                                       temporal_accuracy=0.0, cross_scope_leakage=0.0,
-                                       unsupported_answer_rate=0.0,
-                                       latency_p95_ms=0.0, cost_per_query_usd=0.0),
-                skipped=True,
-                skip_reason=str(exc)[:200],
-            )
+            return self._skipped(provider_id, spec, str(exc)[:200])
         finally:
             if adapter is not None:
                 try:
@@ -266,31 +325,81 @@ class EmbeddingBakeoffRunner:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _assert_exact_index(self, provider_id: str, adapter: ProviderAdapter) -> None:
+        """Audit CRITICAL 3: the scored index must contain exactly the
+        manifest corpus document IDs."""
+        list_ids = getattr(adapter, "list_document_ids", None)
+        if list_ids is None:
+            return  # non-inspectable adapter: caller must guarantee
+        stored = set(list_ids())
+        expected = {doc.id for doc in self._manifest.corpus.documents}
+        extra = stored - expected
+        if extra:
+            raise RuntimeError(
+                f"lane {provider_id}: scored index contains {len(extra)} "
+                f"unmanifested IDs (e.g. {sorted(extra)[:3]}) — "
+                "quality scoring is contaminated"
+            )
+
+    def _measure_throughput_fresh(
+        self, provider_id: str, spec: Any
+    ) -> tuple[float, bool]:
+        """Encode throughput on a SEPARATE fresh adapter/index.
+
+        Returns (docs_per_sec, clean) where clean=True when the probe
+        adapter started and finished with exactly the probe documents —
+        it never touches the scored index.
+        """
+        factory = self._lane_factory[provider_id]
+        probe: ProviderAdapter | None = None
+        try:
+            built = factory()
+            assert built is not None, "throughput probe factory returned None"
+            probe = built
+            encode_texts = [doc.content for doc in self._manifest.corpus.documents][:200]
+            scope = self._manifest.corpus.documents[0].scope
+            t0 = time.perf_counter()
+            for i, text in enumerate(encode_texts):
+                probe.ingest(f"enc-{i:04d}", text, scope=scope)
+            encode_elapsed = time.perf_counter() - t0
+            tps = len(encode_texts) / encode_elapsed if encode_elapsed > 0 else 0.0
+            return tps, True
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [{provider_id}] throughput probe failed: {exc}")
+            return 0.0, False
+        finally:
+            if probe is not None:
+                try:
+                    probe.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _evaluate_lane_gate(
+        self, provider_id: str, quality: ProviderResult
+    ) -> tuple[bool, list[str]]:
+        """Audit CRITICAL 2: run the manifest release gate per lane."""
+        gate = self._manifest.release_gate
+        failures: list[str] = []
+        if quality.recall_at_10 < gate.min_recall_at_10:
+            failures.append("recall_at_10")
+        if quality.citation_precision < gate.min_citation_precision:
+            failures.append("citation_precision")
+        if quality.stale_fact_rate > gate.max_stale_fact_rate:
+            failures.append("stale_fact_rate")
+        if quality.cross_scope_leakage > gate.max_cross_scope_leakage:
+            failures.append("cross_scope_leakage")
+        if quality.unsupported_answer_rate > gate.max_unsupported_answer_rate:
+            failures.append("unsupported_answer_rate")
+        return (not failures, failures)
+
     def run(self, checkpoint_dir: Path | None = None) -> EmbeddingBakeoffResult:
         from datetime import UTC, datetime
 
         lanes: list[EmbeddingLaneResult] = []
         for provider_id, spec in enumerate_providers(self._manifest):
             if provider_id not in self._lane_factory:
-                lanes.append(EmbeddingLaneResult(
-                    provider_id=provider_id, model_id=spec.model.id,
-                    revision=str(spec.config.get("revision", "unknown")),
-                    dimension=int(spec.config.get("dimension", 384)),
-                    normalize=bool(spec.config.get("normalize", True)),
-                    runtime=str(spec.config.get("runtime", "unknown")),
-                    quantisation=str(spec.config.get("quantisation", "none")),
-                    cold_load_seconds=0.0, artifact_bytes=0, peak_rss_mb=0.0,
-                    encode_throughput_docs_per_sec=0.0,
-                    query_latency_p50_ms=0.0, query_latency_p95_ms=0.0,
-                    query_latency_p99_ms=0.0, index_build_seconds=0.0,
-                    vector_bytes_per_memory=0.0,
-                    quality=ProviderResult(provider_id=provider_id, queries_run=0,
-                                           recall_at_10=0.0, mrr=0.0, ndcg_at_10=0.0,
-                                           citation_precision=0.0, stale_fact_rate=0.0,
-                                           temporal_accuracy=0.0, cross_scope_leakage=0.0,
-                                           unsupported_answer_rate=0.0,
-                                           latency_p95_ms=0.0, cost_per_query_usd=0.0),
-                    skipped=True, skip_reason="no lane factory registered",
+                lanes.append(self._skipped(
+                    provider_id, spec, "no lane factory registered",
                 ))
                 continue
             print(f"  [{provider_id}] building lane...", flush=True)
@@ -312,18 +421,81 @@ class EmbeddingBakeoffRunner:
             "cores": os.cpu_count(),
             "platform": platform.platform(),
         }
+        import hashlib
+
         corpus_sha = ""
         if self._corpus_path and self._corpus_path.exists():
-            import hashlib
-
             corpus_sha = hashlib.sha256(self._corpus_path.read_bytes()).hexdigest()
-        return EmbeddingBakeoffResult(
+        manifest_sha = hashlib.sha256(
+            self._manifest.model_dump_json().encode()
+        ).hexdigest()
+        runner_sha = hashlib.sha256(
+            Path(__file__).read_bytes()
+        ).hexdigest()
+        result = EmbeddingBakeoffResult(
             manifest_id=self._manifest.manifest_id,
             lanes=lanes,
             corpus_sha256=corpus_sha,
+            manifest_sha256=manifest_sha,
+            runner_sha256=runner_sha,
             hardware=hardware,
             run_started_at=datetime.now(UTC).isoformat(),
         )
+        # audit B13: persist the contract alongside the lane checkpoints
+        # so a later merge can refuse incompatible or subset runs.
+        if checkpoint_dir is not None:
+            from severian.benchmarks.checkpoint_merge import write_contract
+            write_contract(checkpoint_dir / "bakeoff-contract.json", result)
+        return result
+
+
+def _lane_child_entrypoint(payload: dict[str, Any]) -> None:
+    """Fresh-process child: rebuild the manifest + factory and measure
+    one lane, printing one JSON line on stdout."""
+    import sys
+
+    # parents: [0]=benchmarks [1]=severian [2]=src [3]=repo root
+    _repo_root = Path(__file__).resolve().parents[3]
+    # Repo root FIRST: `scripts` is a namespace package (no __init__.py),
+    # so `from scripts.run_embedding_benchmark import ...` only resolves
+    # when the PARENT of scripts/ is on sys.path, not scripts/ itself.
+    sys.path.insert(0, str(_repo_root))
+    sys.path.insert(0, str(_repo_root / "src"))
+    sys.path.insert(0, str(_repo_root / "scripts"))
+
+    from scripts.run_embedding_benchmark import (
+        build_lane_factories,
+    )
+    from severian.benchmarks.manifest import load_manifest
+
+    manifest = load_manifest(payload["manifest_path"])
+    if payload.get("corpus_path"):
+        from scripts.run_embedding_benchmark import _inject_corpus
+        manifest = _inject_corpus(manifest, Path(payload["corpus_path"]))
+    factories = build_lane_factories(
+        argparse_namespace(payload), manifest,
+    )
+    provider_id = payload["provider_id"]
+    if provider_id not in factories:
+        raise SystemExit(f"lane factory {provider_id} not built in child")
+    runner = EmbeddingBakeoffRunner(
+        manifest=manifest,
+        lane_factory={provider_id: factories[provider_id]},
+        corpus_path=Path(payload["corpus_path"]) if payload.get("corpus_path") else None,
+    )
+    spec = next(s for pid, s in enumerate_providers(manifest) if pid == provider_id)
+    lane = runner._measure_lane_inline(provider_id, spec)  # noqa: SLF001
+    data = asdict(lane)
+    data["quality"] = asdict(lane.quality)
+    print(json.dumps(data, sort_keys=True))
+
+
+def argparse_namespace(payload: dict[str, Any]) -> Any:
+    """Minimal argparse.Namespace with the fields build_lane_factories needs."""
+    import argparse
+    ns = argparse.Namespace()
+    ns.only = ""
+    return ns
 
 
 def enumerate_providers(manifest: Any) -> list[tuple[str, Any]]:

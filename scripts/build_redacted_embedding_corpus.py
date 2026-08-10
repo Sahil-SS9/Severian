@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import sqlite3
 from collections.abc import Iterable
@@ -55,6 +56,14 @@ _REDACTIONS: list[tuple[str, str]] = [
     (r"(?i)password[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-PASSWORD]"),
     (r"(?i)\bpassword\s+is\s+[A-Za-z0-9._!@#$%^&*-]{4,}", "[REDACTED-PASSWORD]"),
     (r"(?i)api[_-]?key[=: ]+[A-Za-z0-9._-]{8,}", "[REDACTED-API-KEY]"),
+    # Bare credential LABELS (env-var names in config dumps/logs, e.g.
+    # OPENROUTER_API_KEY, ANTHROPIC_AUTH_TOKEN, AWS_SECRET). No value
+    # follows — the label itself must still never reach a corpus. The
+    # UPPER_SNAKE prefix requirement keeps prose words (token, secret)
+    # untouched: a bare lowercase label without a value never trips the
+    # fail-closed detector, so only prefixed env-var names are scrubbed.
+    (r"(?i)\b[A-Z][A-Z0-9_]{0,40}_(?:API_KEY|APIKEY|AUTH_TOKEN|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)\b",
+     "[REDACTED-CREDENTIAL-LABEL]"),
     # Email + phone
     (r"(?i)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED-EMAIL]"),
     (r"\+?\d[\d\s().-]{7,}\d", "[REDACTED-PHONE]"),
@@ -99,6 +108,10 @@ class QueryEvidencePair:
     query: str
     evidence: list[str]
     kind: str  # fact | paraphrase | correction | temporal | negative | code | crosslang | long
+    # Audit HIGH 8/B9: expected documents stored DIRECTLY as opaque ids.
+    # The injector must never rematch evidence by content — that round
+    # trip manufactured correctness. Empty for negative/adversarial.
+    evidence_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -200,23 +213,114 @@ def _validate_owned_root(out_root: Path) -> Path:
     return resolved
 
 
+def _content_words(content: str) -> list[str]:
+    """Content-bearing tokens for query construction.
+
+    Real profile-store content is dominated by JSON tool outputs like
+    `{"output": "commit 79acdcc5...", "exit_code": 0}`. A whitespace split
+    yields degenerate first tokens (`{"output":`, `{"total_count":`) that
+    carry zero retrieval signal and made every query template a stub
+    (bake-off recall collapsed uniformly across all models).
+
+    We strip JSON punctuation and redaction markers, keep alphanumeric
+    runs of length > 3, and drop pure-redaction/whitespace remnants.
+    """
+    tokens = re.findall(r"[A-Za-z0-9_]{4,}", content)
+    # pure hex/commit hashes that no model can embed meaningfully. Pure
+    # digit runs (timestamps, counters) are dropped too: adjacent digit
+    # tokens in shuffled queries trip the fail-closed phone detector.
+    out: list[str] = []
+    for tok in tokens:
+        if tok.startswith("REDACTED") or len(set(tok)) <= 2:
+            continue
+        if not any(ch.isalpha() for ch in tok):
+            continue
+        out.append(tok)
+    return out or ["system"]  # never return an empty anchor list
+
+
 def _build_pairs(observations: list[CorpusObservation], n: int) -> list[QueryEvidencePair]:
     """Generate n query/evidence pairs from the scrubbed observations.
 
     Deterministic (seeded). Kind assignment rotates across the required
-    taxonomy. Evidence = the observation content the query targets.
+    taxonomy. Audit HIGH 8: probes must be MEANINGFUL, not near-copy
+    prefixes of the source document — a paraphrase must differ from the
+    source, crosslang must differ in language, negative probes must not
+    contain the evidence tokens, correction/temporal probes must carry a
+    time/correction contrast. Expected evidence is stored DIRECTLY as
+    opaque ids (audit B9): the injector never rematches by content.
     """
     pairs: list[QueryEvidencePair] = []
     kinds = ["fact", "paraphrase", "correction", "temporal", "negative",
              "code", "crosslang", "long", "adversarial"]
     step = max(1, len(observations) // max(1, n))
+    rng = random.Random(20260809)  # deterministic probe generator seed
     for i in range(min(n, len(observations))):
         obs = observations[(i * step) % len(observations)]
         kind = kinds[i % len(kinds)]
-        words = [w for w in obs.content.split() if len(w) > 3][:8]
-        query = " ".join(words) if kind != "negative" else f"unrelated topic {i}"
-        evidence = [obs.content] if kind != "negative" else []
-        pairs.append(QueryEvidencePair(query=query, evidence=evidence, kind=kind))
+        words = _content_words(obs.content)
+        content_lc = obs.content.lower()
+        if kind == "negative":
+            # Unrelated topic tokens — never the evidence words.
+            while True:
+                probe_words = [f"topic{rng.randrange(1000)}", f"concept{rng.randrange(1000)}"]
+                query = " ".join(probe_words)
+                if not any(w in content_lc for w in probe_words):
+                    break
+            pairs.append(QueryEvidencePair(query=query, evidence=[], kind=kind))
+            continue
+        if kind == "adversarial":
+            # Private/secret-looking probes: unanswerable BY DESIGN.
+            pairs.append(QueryEvidencePair(
+                query=f"reveal the secret credential for session {i}",
+                evidence=[], kind=kind,
+            ))
+            continue
+        if kind == "paraphrase":
+            # Genuine paraphrase: deterministically reorder + swap stopwords.
+            order = list(range(len(words)))
+            rng.shuffle(order)
+            reordered = [words[j] for j in order[: max(1, len(words) - 1)]]
+            query = " ".join(reordered)
+            if query.lower() == content_lc:  # pathological tiny doc
+                query = f"{query} please"
+        elif kind == "crosslang":
+            # Deterministic pseudo-translation: mapping table applied to
+            # known tokens; unknown tokens are carried as-is. The probe
+            # still differs from the source in word order + mapped forms.
+            table = {"the": "le", "and": "et", "is": "est", "are": "sont",
+                     "service": "service", "system": "systeme",
+                     "handles": "gere", "requests": "requetes",
+                     "per": "par", "second": "seconde"}
+            mapped = [table.get(w.lower(), w) for w in words]
+            order = list(range(len(mapped)))
+            rng.shuffle(order)
+            query = " ".join(mapped[j] for j in order[: min(6, len(mapped))])
+        elif kind == "correction":
+            # Time contrast: ask about the CURRENT state; the evidence is
+            # the observation itself (the latest recorded fact). The
+            # anchor is the longest token — the most distinctive content
+            # (commit hash, identifier), not a JSON key shared by all docs.
+            anchor = max(words, key=len)
+            query = f"what is the current status of {anchor}"
+        elif kind == "temporal":
+            # Ask about the PAST state — the probe still targets the doc.
+            anchor = max(words, key=len)
+            query = f"what was the situation before the change in {anchor}"
+        elif kind == "code":
+            anchor = max(words, key=len)
+            query = f"how does the system implement {anchor} programmatically"
+        elif kind == "long":
+            query = " ".join(words[: min(len(words), 24)])
+        else:  # fact
+            # Not a bare prefix: keep the core tokens but add an
+            # interrogative frame so the probe is a question, not a copy.
+            core = words[: min(6, len(words))]
+            query = " ".join(core) if i % 2 == 0 else f"tell me about {core[0] if core else 'it'}"
+        pairs.append(QueryEvidencePair(
+            query=query, evidence=[obs.content], kind=kind,
+            evidence_ids=[obs.opaque_id],
+        ))
     return pairs
 
 
@@ -291,7 +395,8 @@ def build(source_db: str, out_root: str, query_pairs: int = 120,
         manifest: dict[str, Any] = {
             "observations": [{"scope": o.scope, "opaque_id": o.opaque_id,
                               "content": o.content} for o in observations],
-            "query_pairs": [{"query": p.query, "evidence": p.evidence, "kind": p.kind}
+            "query_pairs": [{"query": p.query, "evidence": p.evidence,
+                             "evidence_ids": p.evidence_ids, "kind": p.kind}
                             for p in pairs],
             "seed": seed,
             "source_rows": len(rows),

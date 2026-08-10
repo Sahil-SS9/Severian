@@ -1,16 +1,28 @@
-"""Run the embedding bake-off (zero-debt plan, Task 1.2/1.3).
+"""Run the embedding bake-off (zero-debt plan, Task 1.2/1.3) — repaired.
 
 Usage:
     uv run python scripts/run_embedding_benchmark.py \
         --manifest docs/benchmarks/manifest-embedding-v1.json \
+        --corpus /tmp/severian-corpus-*/corpus.json \
         --out /tmp/zero-debt-embedding \
         [--only granite-97m,bekko-a8m]
 
-Lanes are built by the registry below; each maps a provider id to a
-factory returning a SeverianAdapter with that embedding. Lanes that
-cannot run in this environment (missing dependency / licence-gated
-download) are skipped and recorded with the reason — never silently
-dropped, never faked.
+Phase B remediation contract:
+- ``--corpus`` is REQUIRED for a real bake-off; the corpus SHA published
+  in the evidence is the SHA of the corpus file, never the manifest
+  (audit CRITICAL 1);
+- expected evidence is injected DIRECTLY from corpus ``evidence_ids`` —
+  no content rematching (audit HIGH 8/B9);
+- lane verdicts are gate-aware — no unconditional ``ok`` (audit
+  CRITICAL 2);
+- neural model revisions are resolved to immutable HF commits before
+  load and passed to the runtime (audit HIGH 6);
+- Qwen instruction prompts apply to QUERIES only; documents are encoded
+  with the plain contract (audit HIGH 5).
+
+Lanes that cannot run in this environment (missing dependency /
+licence-gated download) are skipped and recorded with the reason — never
+silently dropped, never faked.
 """
 from __future__ import annotations
 
@@ -18,19 +30,21 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from bench_provenance import collect_provenance  # noqa: E402
+from bench_provenance import collect_provenance  # type: ignore[import-not-found]  # noqa: E402
 
 from severian.benchmarks.embedding_runner import EmbeddingBakeoffRunner  # noqa: E402
 from severian.benchmarks.manifest import BenchmarkManifest  # noqa: E402
 
 
 def _make_severian_adapter(provider_id: str, backend: str, dsn: str | None,
-                           dimension: int, embedding: object, *, workdir: str | None = None):
+                           dimension: int, embedding: object, *,
+                           workdir: str | None = None) -> object:
     from severian.benchmarks.adapters.severian import SeverianAdapter
 
     return SeverianAdapter(
@@ -44,11 +58,40 @@ def _make_severian_adapter(provider_id: str, backend: str, dsn: str | None,
     )
 
 
+def _resolve_hf_revision(model_name: str) -> str:
+    """Resolve the CURRENT immutable HF commit for a model (audit HIGH 6).
+
+    Falls back to the cached snapshot revision when offline; fails hard
+    when neither is available — an unpinned run is not evidence.
+    """
+    import urllib.request
+
+    api = f"https://huggingface.co/api/models/{model_name}"
+    try:
+        with urllib.request.urlopen(api, timeout=20) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode())
+        sha = data.get("sha")
+        if sha:
+            return str(sha)
+    except Exception as exc:  # noqa: BLE001 — offline fallback below
+        print(f"note: HF revision lookup failed ({exc}); using cached snapshot")
+    # Offline fallback: the snapshot revision cached locally is immutable.
+    cache = Path.home() / ".cache/huggingface/hub"
+    snapshot = cache / f"models--{model_name.replace('/', '--')}"
+    refs = snapshot / "refs" / "main"
+    if refs.exists():
+        return refs.read_text().strip()
+    raise SystemExit(
+        f"cannot resolve immutable revision for {model_name} — refusing to run unpinned"
+    )
+
+
 def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) -> dict[str, object]:
     """Return provider_id -> factory() for every lane requested + runnable.
 
     The factory closure defers embedding construction so cold-load time
-    is measured inside the runner (construction == model load).
+    is measured inside the runner (construction == model load). Neural
+    lanes load with the manifest-pinned revision (audit HIGH 6).
     """
     from severian.infrastructure.vector import HashEmbedding
 
@@ -69,62 +112,65 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
               f"only the hash baseline lane will run")
         return factories
 
-    def _st_embedding(model_name: str, dimension: int, prompt: str | None = None) -> object:
+    def _st_embedding(model_name: str, dimension: int, revision: str,
+                      prompt: str | None = None) -> object:
+        """Sentence-transformers embedding with query/doc encoding split.
+
+        Audit HIGH 5: instruction prompts (e.g. Qwen agent-memory) apply
+        to QUERIES ONLY. Documents are always encoded with the plain
+        contract — prompting both sides corrupts the doc index.
+        """
+
         class _STEmbedding:
             def __init__(self) -> None:
                 import os
 
                 os.environ.setdefault("TQDM_DISABLE", "1")
                 self.dimension = dimension
-                self._model = SentenceTransformer(model_name)
+                self.revision = revision
+                self._model = SentenceTransformer(model_name, revision=revision)
                 self._prompt = prompt
 
-            def encode(self, text: str) -> list[float]:
-                kwargs = {"normalize_embeddings": True,
-                          "show_progress_bar": False}
-                if self._prompt:
-                    kwargs["prompt"] = self._prompt  # type: ignore[assignment]
+            def _encode_contract(self, text: str, *, query: bool) -> list[float]:
+                from typing import Any as _Any
+
+                kwargs: dict[str, _Any] = {"normalize_embeddings": True,
+                                           "show_progress_bar": False}
+                if query and self._prompt:
+                    kwargs["prompt"] = self._prompt
                 vector = self._model.encode(text, **kwargs)
                 return [float(v) for v in vector]
 
+            def encode(self, text: str) -> list[float]:
+                # ProviderAdapter document/query path: encode with the
+                # QUERY contract for queries and plain contract for docs.
+                return self._encode_contract(text, query=False)
+
+            def encode_query(self, text: str) -> list[float]:
+                return self._encode_contract(text, query=True)
+
         return _STEmbedding()
 
-    # Granite 107M (current control)
-    factories["granite-107m"] = lambda: _make_severian_adapter(
-        "granite-107m", "sqlite", None, 384,
-        _st_embedding("ibm-granite/granite-embedding-107m-multilingual", 384))
+    # provider_id -> (model name, dimension, manifest revision, prompt)
+    lanes: dict[str, tuple[str, int, str, str | None]] = {}
+    for provider in manifest.providers:
+        if provider.vendor_reported_only:
+            continue
+        cfg = provider.config or {}
+        model_id = provider.model.id
+        if model_id == "hash" or provider.id == "hash":
+            continue
+        rev = str(cfg.get("revision", ""))
+        prompt = cfg.get("prompt")  # query-side instruction (audit HIGH 5)
+        lanes[provider.id] = (model_id, int(cfg.get("dimension", 384)), rev, prompt)
 
-    # Granite 97M R2 (balanced default candidate)
-    factories["granite-97m"] = lambda: _make_severian_adapter(
-        "granite-97m", "sqlite", None, 384,
-        _st_embedding("ibm-granite/granite-embedding-97m-multilingual-r2", 384))
-
-    # Granite 311M R2 (high tier, 768)
-    factories["granite-311m"] = lambda: _make_severian_adapter(
-        "granite-311m", "sqlite", None, 768,
-        _st_embedding("ibm-granite/granite-embedding-311m-multilingual-r2", 768))
-
-    # EmbeddingGemma 300M (balanced candidate; gated acquisition terms)
-    factories["gemma-300m"] = lambda: _make_severian_adapter(
-        "gemma-300m", "sqlite", None, 768,
-        _st_embedding("google/embeddinggemma-300m", 768))
-
-    # Qwen3 Embedding 0.6B (high tier; instruction for agent-memory)
-    factories["qwen-0.6b"] = lambda: _make_severian_adapter(
-        "qwen-0.6b", "sqlite", None, 1024,
-        _st_embedding("Qwen/Qwen3-Embedding-0.6B", 1024,
-                      prompt="Given a web search query, retrieve relevant passages that answer the query"))
-
-    # Bekko a8m (lite multilingual)
-    factories["bekko-a8m"] = lambda: _make_severian_adapter(
-        "bekko-a8m", "sqlite", None, 384,
-        _st_embedding("hotchpotch/bekko-embedding-v1-a8m", 384))
-
-    # Granite small English R2 (English-only control — cannot win the
-    # multilingual default, but measures the English-only tradeoff)
-    factories["granite-small-en"] = lambda: _make_severian_adapter(
-        "granite-small-en", "sqlite", None, 384,
-        _st_embedding("ibm-granite/granite-embedding-small-english-r2", 384))
+    for provider_id, (model_name, dimension, revision, prompt) in lanes.items():
+        factories[provider_id] = lambda pid=provider_id, mn=model_name, dim=dimension, rev=revision, pr=prompt: (
+            _make_severian_adapter(
+                pid, "sqlite", None, dim,
+                _st_embedding(mn, dim, rev, prompt=pr),
+            )
+        )
 
     return factories
 
@@ -133,41 +179,28 @@ def _inject_corpus(manifest: BenchmarkManifest, corpus_path: Path) -> BenchmarkM
     """Merge the exporter's corpus.json into an empty manifest.
 
     The exporter writes {observations: [{scope, opaque_id, content}],
-    query_pairs: [{query, evidence, kind}]}. Documents map 1:1 to
-    observations; queries map 1:1 to pairs with expected evidence by
-    opaque_id. Negative pairs (kind == 'negative') are answerable=False.
+    query_pairs: [{query, evidence, evidence_ids, kind}]}. Documents map
+    1:1 to observations; queries map 1:1 to pairs with expected evidence
+    by OPAQUE ID directly — never rematched by content (audit B9).
     """
     data = json.loads(corpus_path.read_text())
-    docs_by_id: dict[str, str] = {}
     documents = []
     for obs in data["observations"]:
-        doc_id = obs["opaque_id"]
-        docs_by_id[doc_id] = obs["scope"]
         documents.append({
-            "id": doc_id,
+            "id": obs["opaque_id"],
             "content": obs["content"],
             "scope": obs["scope"],
         })
     queries = []
+    scope_by_id = {obs["opaque_id"]: obs["scope"] for obs in data["observations"]}
     for i, pair in enumerate(data["query_pairs"]):
         kind = pair["kind"]
         # Negative and adversarial probes are unanswerable BY DESIGN: a
         # correct provider returns nothing (or nothing relevant) for them.
         answerable = kind not in {"negative", "adversarial"}
-        expected = []
-        query_scope = _any_scope(data)
-        if answerable:
-            # Match evidence by content → opaque_id (evidence is the
-            # observation content it targets).
-            for ev in pair["evidence"]:
-                matched = next(
-                    (oid for oid, content in _content_map(data).items()
-                     if content == ev),
-                    None,
-                )
-                if matched:
-                    expected.append({"document_id": matched, "weight": 1.0})
-                    query_scope = docs_by_id[matched]
+        evidence_ids = pair.get("evidence_ids") or []
+        expected = [{"document_id": oid, "weight": 1.0} for oid in evidence_ids]
+        query_scope = scope_by_id.get(evidence_ids[0]) if evidence_ids else _any_scope(data)
         queries.append({
             "id": f"q{i:04d}",
             "kind": kind if kind in {"fact", "paraphrase", "multi_source",
@@ -185,12 +218,8 @@ def _inject_corpus(manifest: BenchmarkManifest, corpus_path: Path) -> BenchmarkM
     return BenchmarkManifest.model_validate(payload)
 
 
-def _content_map(data: dict) -> dict[str, str]:
-    return {obs["opaque_id"]: obs["content"] for obs in data["observations"]}
-
-
-def _any_scope(data: dict) -> str:
-    return data["observations"][0]["scope"]
+def _any_scope(data: dict[str, Any]) -> str:
+    return str(data["observations"][0]["scope"])
 
 
 def main() -> None:
@@ -199,7 +228,7 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path,
                         help="corpus.json from build_redacted_embedding_corpus.py "
                              "(injected into the manifest; manifest must have "
-                             "empty documents/queries)")
+                             "empty documents/queries). REQUIRED for a real bake-off.")
     parser.add_argument("--out", type=Path, default=Path("/tmp/zero-debt-embedding"))
     parser.add_argument("--only", type=str, default="",
                         help="comma-separated provider ids to run (default: all runnable)")
@@ -207,6 +236,9 @@ def main() -> None:
 
     manifest = BenchmarkManifest.model_validate_json(args.manifest.read_text())
     if args.corpus:
+        args.corpus = args.corpus.resolve()  # child subprocess cwd != repo root
+        if not args.corpus.exists():
+            parser.error(f"--corpus file does not exist: {args.corpus}")
         manifest = _inject_corpus(manifest, args.corpus)
     else:
         placeholders = [
@@ -225,7 +257,8 @@ def main() -> None:
 
     args.out.mkdir(parents=True, exist_ok=True)
     runner = EmbeddingBakeoffRunner(manifest=manifest, lane_factory=factories,
-                                    corpus_path=args.manifest)
+                                    corpus_path=args.corpus,
+                                    manifest_path=args.manifest.resolve())
     print(f"bake-off manifest: {manifest.manifest_id} "
           f"({len(manifest.corpus.documents)} docs, {len(manifest.queries)} queries)")
     # zero-debt 3.3: checkpoint every completed lane immediately; a
@@ -241,19 +274,28 @@ def main() -> None:
     out_path.write_text(json.dumps(evidence, indent=2, sort_keys=True))
     print(f"\nwrote {out_path}")
 
-    # Verdict table (bottom line first)
-    print("\n=== bake-off results ===")
+    # Verdict table (bottom line first) — GATE-AWARE (audit CRITICAL 2).
+    print("\n=== bake-off results (gate-aware) ===")
     print(f"{'lane':<16} {'recall@10':>9} {'nDCG@10':>8} {'p95ms':>8} {'cold_s':>7} "
           f"{'RSS_MB':>7} {'vecB':>5}  status")
+    any_gate_pass = False
     for lane in result.lanes:
         if lane.skipped:
             print(f"{lane.provider_id:<16} {'-':>9} {'-':>8} {'-':>8} {'-':>7} "
                   f"{'-':>7} {'-':>5}  SKIPPED: {lane.skip_reason[:60]}")
             continue
         q = lane.quality
+        if lane.gate_passed:
+            status = "PASS"
+            any_gate_pass = True
+        else:
+            status = f"FAIL[{','.join(lane.gate_failures)}]"
         print(f"{lane.provider_id:<16} {q.recall_at_10:>9.3f} {q.ndcg_at_10:>8.3f} "
               f"{lane.query_latency_p95_ms:>8.1f} {lane.cold_load_seconds:>7.1f} "
-              f"{lane.peak_rss_mb:>7.1f} {lane.vector_bytes_per_memory:>5.0f}  ok")
+              f"{lane.peak_rss_mb:>7.1f} {lane.vector_bytes_per_memory:>5.0f}  {status}")
+    if not any_gate_pass:
+        print("\nNO LANE PASSED THE RELEASE GATE — this evidence must NOT be "
+              "used for model-tier selection.")
 
 
 if __name__ == "__main__":

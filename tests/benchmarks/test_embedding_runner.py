@@ -144,7 +144,7 @@ def test_missing_lane_factory_is_recorded_not_dropped(tmp_path: Path) -> None:
 
 
 def test_inject_corpus_merges_observations_and_pairs(tmp_path: Path) -> None:
-    from run_embedding_benchmark import _inject_corpus
+    from run_embedding_benchmark import _inject_corpus  # type: ignore[import-not-found]
 
     manifest = _manifest(tmp_path, n_docs=1, n_queries=1)
     corpus_data = {
@@ -156,11 +156,13 @@ def test_inject_corpus_merges_observations_and_pairs(tmp_path: Path) -> None:
         ],
         "query_pairs": [
             {"query": "backup job time", "evidence": ["the backup job runs at 02:00 utc"],
-             "kind": "fact"},
-            {"query": "unrelated topic 0", "evidence": [], "kind": "negative"},
+             "evidence_ids": ["oid-1"], "kind": "fact"},
+            {"query": "unrelated topic 0", "evidence": [], "evidence_ids": [],
+             "kind": "negative"},
             {"query": "old backup schedule", "evidence": ["the backup job runs at 02:00 utc"],
-             "kind": "temporal"},
-            {"query": "private marker", "evidence": [], "kind": "adversarial"},
+             "evidence_ids": ["oid-1"], "kind": "temporal"},
+            {"query": "private marker", "evidence": [], "evidence_ids": [],
+             "kind": "adversarial"},
         ],
     }
     corpus_path = tmp_path / "corpus.json"
@@ -187,3 +189,51 @@ def test_result_to_dict_is_jsonable(tmp_path: Path) -> None:
     json.dumps(payload)  # must not raise
     assert payload["lanes"][0]["quality"]["queries_run"] == 11
     assert payload["corpus_sha256"] == ""
+
+
+def test_manifest_path_forces_fresh_subprocess_lane(tmp_path: Path) -> None:
+    """manifest_path must route the lane through a FRESH subprocess.
+
+    Regression: the runner previously probed `hasattr(manifest, "_path")`
+    to decide, but BenchmarkManifest uses pydantic extra="forbid", so the
+    attribute could never exist and every lane silently ran inline in the
+    parent — peak RSS was not a true process peak (audit HIGH 7) and a
+    broken lane could corrupt the parent.
+    """
+    import subprocess
+
+    manifest = _manifest(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json())
+
+    runner = EmbeddingBakeoffRunner(
+        manifest=manifest,
+        lane_factory={"hash": lambda: _hash_factory(tmp_path)},
+        manifest_path=manifest_path,
+    )
+    # Patch the subprocess call to record that a child was spawned.
+    from typing import Any, cast
+
+    import severian.benchmarks.embedding_runner as mod
+
+    original: Any = mod.subprocess.run  # type: ignore[attr-defined]
+    calls: list[list[str]] = []
+
+    def recording_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        argv = args[0] if args and isinstance(args[0], list) else []
+        calls.append([str(a) for a in argv])
+        return cast(subprocess.CompletedProcess[bytes], original(*args, **kwargs))
+
+    monkeypatch = __import__("pytest").MonkeyPatch()
+    monkeypatch.setattr(mod.subprocess, "run", recording_run)  # type: ignore[attr-defined]
+    try:
+        result = runner.run()
+    finally:
+        monkeypatch.undo()
+
+    # Lane measurement + throughput probe both run in fresh subprocesses
+    # (audit CRITICAL 3 / HIGH 7); at minimum the lane call must exist.
+    assert len(calls) >= 1, "lane must run via a subprocess when manifest_path is set"
+    assert "severian.benchmarks.embedding_runner" in " ".join(calls[0])
+    lane = result.lanes[0]
+    assert lane.skipped is False, lane.skip_reason

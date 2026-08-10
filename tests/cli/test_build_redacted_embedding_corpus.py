@@ -233,6 +233,47 @@ def test_corpus_has_required_shape(tmp_path: Path) -> None:
     assert out.raw_documents_logged == 0, "raw documents must never be logged"
 
 
+def test_answerable_queries_are_not_json_prefix_stubs(tmp_path: Path) -> None:
+    """Query templates must never be built from degenerate tokens.
+
+    Regression: `words[0]` from a whitespace split of real JSON-heavy
+    content is often `{"output":` or `{"total_count":` — a JSON opening
+    that carries zero retrieval signal. Every answerable query must
+    contain at least one content-bearing token (letters), and no query
+    may consist solely of JSON punctuation/redaction stubs.
+    """
+    import re
+
+    src = tmp_path / "src.db"
+    # JSON-heavy rows: the exact degenerate pattern from the real corpus
+    rows = [
+        ("s1", "tool", '{"output": "commit 79acdcc5bb73e8f6c72f7d38a01b", "exit_code": 0}'),
+        ("s1", "tool", '{"total_count": 0, "results": []}'),
+        ("s2", "tool", '{"output": "[REDACTED-PHONE] Ssl temporal-server", "ok": true}'),
+    ] * 200
+    _make_source_db(src, rows)
+    out = exporter.build(source_db=str(src), out_root=str(tmp_path / "owned-json"), query_pairs=60, seed=1)
+    assert len(out.query_pairs) >= 40
+    for pair in out.query_pairs:
+        if pair.kind in ("negative", "adversarial"):
+            continue  # deliberately unanswerable
+        # A query that is a raw JSON fragment is a degenerate probe: it
+        # carries no retrieval signal beyond the braces all docs share.
+        assert not any(ch in pair.query for ch in ('{', '}', '"', ':')), (
+            f"query for kind={pair.kind} is a raw JSON fragment: {pair.query!r}"
+        )
+        # Template frames alone must not satisfy the check: the query has
+        # to share a content-bearing token with its evidence.
+        query_toks = set(re.findall(r"[A-Za-z]{4,}", pair.query))
+        ev_text = " ".join(getattr(ev, "content", str(ev)) for ev in pair.evidence)
+        ev_toks = set(re.findall(r"[A-Za-z]{4,}", ev_text))
+        shared = query_toks & ev_toks
+        assert shared, (
+            f"query for kind={pair.kind} shares no content-bearing token "
+            f"with its evidence (JSON/redaction stub?): {pair.query!r} vs {ev_text[:80]!r}"
+        )
+
+
 def _all_corpus_text(out: object) -> list[str]:
     """Extract every text field from the built corpus for redaction checks."""
     texts: list[str] = []
