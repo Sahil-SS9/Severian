@@ -160,12 +160,20 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
                         f"encoder returned {len(values)} dims, expected "
                         f"{self.dimension} (truncate_dim={self._truncate_dim})"
                     )
-                if self._truncate_dim is not None:
-                    norm = sum(v * v for v in values) ** 0.5
-                    if not (0.999 <= norm <= 1.001):
-                        raise ValueError(
-                            f"encoded vector is not normalised (norm={norm:.4f})"
-                        )
+                # P0-F: normalisation must be EXPLICIT, not trusted from
+                # the library. sentence-transformers' truncate_dim +
+                # normalize_embeddings ordering does not guarantee unit
+                # norm after truncation (observed 0.9985-1.0033), so the
+                # lane renormalises itself and asserts the contract.
+                norm = sum(v * v for v in values) ** 0.5
+                if not (norm > 0.0):
+                    raise ValueError("encoded vector has zero norm")
+                values = [v / norm for v in values]
+                norm = sum(v * v for v in values) ** 0.5
+                if not (0.999999 <= norm <= 1.000001):
+                    raise ValueError(
+                        f"encoded vector is not normalised (norm={norm:.6f})"
+                    )
                 return values
 
             def encode(self, text: str) -> list[float]:
