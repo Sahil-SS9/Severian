@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -24,7 +24,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
+      SEVERIAN_PG_DSN: postgresql://severian:***@127.0.0.1:54329/severian
     steps:
       - uses: actions/checkout@v4
 
@@ -62,15 +62,26 @@ jobs:
       - name: Dependency vulnerability scan (pip-audit)
         run: uv run pip-audit
 
-      - name: Test (SQLite + live PostgreSQL lanes)
-        run: uv run pytest -q
+      - name: Pure-Python lane — native wheel provably absent
+        run: |
+          uv pip uninstall -y severian-native || true
+          uv run python - <<'PY'
+          try:
+              import severian_native  # noqa: F401
+              raise SystemExit("severian_native unexpectedly importable in pure-Python lane")
+          except ImportError:
+              print("severian_native absent: pure-Python lane confirmed")
+          PY
+
+      - name: Pure-Python full suite (native-required tests must SKIP)
+        run: uv run pytest -q -ra
 
       - name: Validate benchmark manifest
         run: uv run python -m severian.benchmarks.cli validate --manifest docs/benchmarks/manifest-v1.json
 
   native:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -86,7 +97,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
+      SEVERIAN_PG_DSN: postgresql://severian:***@127.0.0.1:54329/severian
     steps:
       - uses: actions/checkout@v4
 
@@ -127,16 +138,21 @@ jobs:
         run: |
           uv sync --group dev
           uv pip install native/target/wheels/severian_native-0.1.0-*.whl
-          uv run pytest -q tests/unit/test_native_vector_backend.py \
+          uv run pytest -q -ra tests/unit/test_native_vector_backend.py \
             tests/integration/test_native_vector_integration.py \
             tests/gates/test_native_fallback_contract.py \
-            tests/unit/test_cross_version_score_contract.py
+            tests/unit/test_cross_version_score_contract.py \
+            tests/benchmarks/test_native_acceleration_runner.py
 
-      - name: Uninstall native — base package still passes its suites
+      - name: Native full suite (wheel installed)
+        run: uv run pytest -q -ra
+
+      - name: Uninstall native — pure-Python suite still green, native benchmark SKIPS
         run: |
           uv pip uninstall -y severian-native
-          uv run pytest -q tests/unit/test_cross_version_score_contract.py \
-            tests/gates/test_native_fallback_contract.py
+          uv run pytest -q -ra tests/unit/test_cross_version_score_contract.py \
+            tests/gates/test_native_fallback_contract.py \
+            tests/benchmarks/test_native_acceleration_runner.py
 
       - name: Benchmark release gate (SQLite + live PostgreSQL)
         # Chroma lane is optional in CI: it requires a throwaway venv
