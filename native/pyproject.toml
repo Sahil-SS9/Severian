@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "severian-native"
+version = "0.1.0"
+description = "Optional native vector-search acceleration for Severian (exact top-k, fsum parity)."
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+]
+
+[tool.maturin]
+module-name = "severian_native._severian_native"
+python-source = "python"
+features = ["pyo3/extension-module"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]

@@ -139,6 +139,12 @@ class LocalVectorIndex:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.embedding = embedding
+        # R2: optional native accel (auto|python|rust). Lazy import to
+        # avoid the vector<->native_accel import cycle; adapter
+        # construction is cheap and never raises for auto.
+        from severian.infrastructure.native_accel import NativeAccelAdapter
+
+        self._native_accel: NativeAccelAdapter | None = None
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=30000")
@@ -335,7 +341,15 @@ class LocalVectorIndex:
         self.connection.commit()
 
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]:
-        query_vector = self.embedding.encode(query)
+        # zero-debt audit HIGH 5: query encoding is a SEPARATE contract
+        # from document encoding. Embeddings that expose encode_query()
+        # (e.g. instruction-prompted Qwen) get their query-side prompt
+        # here; documents are ALWAYS encoded with the plain contract.
+        encode_query = getattr(self.embedding, "encode_query", None)
+        if encode_query is not None:
+            query_vector = encode_query(query)
+        else:
+            query_vector = self.embedding.encode(query)
         rows = self.connection.execute(
             """SELECT memory_id, vector, content FROM memory_vectors
               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
@@ -344,6 +358,21 @@ class LocalVectorIndex:
         ).fetchall()
         if not rows:
             return []
+        # R2: optional native exact top-k (auto|python|rust). The Python
+        # reference remains the fallback and test oracle. Backend
+        # identity is diagnostics-only — it never alters vectors/ranking.
+        # Adapter is built lazily from SEVERIAN_VECTOR_BACKEND on first
+        # search (auto -> rust when the wheel is installed, else python).
+        if self._native_accel is None:
+            from severian.infrastructure.native_accel import NativeAccelAdapter
+
+            try:
+                self._native_accel = NativeAccelAdapter()
+            except Exception:  # noqa: BLE001 - explicit rust w/o wheel -> python path
+                self._native_accel = NativeAccelAdapter("python")
+        if self._native_accel.selected == "rust":
+            native_rows = [(m, c, b) for m, b, c in rows]
+            return self._native_accel.exact_top_k(query_vector, native_rows, limit)
         # zero-debt 4.2: exact bounded top-k with a TOTAL tiebreak key
         # (score desc, content, memory_id — memory_id unique) so the
         # selection is deterministic and identical to a full sort.
@@ -363,7 +392,11 @@ class LocalVectorIndex:
         scored: list[tuple[VectorHit, list[float], str]] = []
         for memory_id, encoded, content in rows:
             vector = _unpack_vector(encoded, self.embedding.dimension)
-            score = sum(left * right for left, right in zip(query_vector, vector, strict=True))
+            # R0.2 score contract: math.fsum (Shewchuk-compensated),
+            # version-independent, bit-identical to the Rust kernel.
+            score = math.fsum(
+                left * right for left, right in zip(query_vector, vector, strict=True)
+            )
             scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
         if limit < len(scored):
             scored = heapq.nsmallest(limit, scored, key=_key)
@@ -444,3 +477,25 @@ class LocalVectorIndex:
             return "ok"
         except Exception:  # pragma: no cover - defensive
             return "error"
+
+    def backend_diagnostics(self) -> dict[str, object]:
+        """R2.3 visible backend diagnostics (never part of the vector
+        fingerprint — acceleration must not alter vectors or ranking)."""
+        if self._native_accel is None:
+            return {
+                "requested": "auto",
+                "selected": "python",
+                "native_version": None,
+                "fallback_reason": "not initialised (no search yet)",
+                "calls": 0,
+                "failures": 0,
+            }
+        d = self._native_accel.diagnostics
+        return {
+            "requested": d.requested,
+            "selected": d.selected,
+            "native_version": d.native_version,
+            "fallback_reason": d.fallback_reason,
+            "calls": d.calls,
+            "failures": d.failures,
+        }
