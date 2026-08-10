@@ -1,15 +1,15 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "manifest_id": "embedding-bakeoff-v1",
-  "name": "Severian embedding tier bake-off v1",
+  "name": "Severian embedding tier bake-off v1 (round-two schema v2)",
   "corpus": {
-    "id": "real-data-redacted-v1",
-    "version": "0.1.0",
-    "seed": 20260808,
+    "id": "synthetic-quality-v1",
+    "version": "2",
+    "seed": 20260810,
     "documents": [
       {
         "id": "template-placeholder",
-        "content": "TEMPLATE PLACEHOLDER — inject a redacted corpus with --corpus",
+        "content": "TEMPLATE PLACEHOLDER — inject the frozen quality corpus with --corpus docs/benchmarks/corpus/quality-corpus-v1.json",
         "scope": "template:placeholder"
       }
     ]
@@ -62,7 +62,7 @@
         "quantisation": "none",
         "revision": "n/a",
         "model_dir": null,
-        "note": "Baseline. No model, no dependency. Explicit in telemetry (locked decision D6)."
+        "note": "Baseline control — deterministic, NEVER selectable (locked decision D6). Uncapped lane."
       }
     },
     {
@@ -78,7 +78,9 @@
         "quantisation": "none",
         "revision": "d6cffd338414d6a1c1f5decfad5fec62eebc90d5",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-107m-multilingual",
-        "note": "Current production control (historical/current comparison only)."
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Multilingual control — current production baseline (historical/current comparison only)."
       }
     },
     {
@@ -94,7 +96,163 @@
         "quantisation": "none",
         "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-97m-multilingual-r2",
-        "note": "Balanced DEFAULT candidate."
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Multilingual R2 control."
+      }
+    },
+    {
+      "id": "granite-311m-768",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-311m-multilingual-r2", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 768,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "High-tier candidate — native 768-dim."
+      }
+    },
+    {
+      "id": "granite-311m-384",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "ibm-granite/granite-embedding-311m-multilingual-r2", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
+        "truncate_dim": 384,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "High-tier candidate — Matryoshka 384 control. Runner asserts final dim; unsupported truncation fails loudly."
+      }
+    },
+    {
+      "id": "qwen-0.6b-1024",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "qwen-retrieval-instruction-v1"},
+      "config": {
+        "dimension": 1024,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        "truncate_dim": 1024,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Priority challenger — full pinned query-prompt contract, native 1024-dim (P0-F)."
+      }
+    },
+    {
+      "id": "qwen-0.6b-512",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "qwen-retrieval-instruction-v1"},
+      "config": {
+        "dimension": 512,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        "truncate_dim": 512,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Priority challenger — Matryoshka 512."
+      }
+    },
+    {
+      "id": "qwen-0.6b-384",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "qwen-retrieval-instruction-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        "truncate_dim": 384,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Priority challenger — Matryoshka 384."
+      }
+    },
+    {
+      "id": "qwen-no-instruction-1024",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "no-instruction-control-v1"},
+      "config": {
+        "dimension": 1024,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "truncate_dim": 1024,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Matched no-instruction control — SAME Qwen revision and dims as qwen-0.6b-1024 with NO query_prompt (measures the instruction's contribution)."
+      }
+    },
+    {
+      "id": "qwen-no-instruction-512",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "no-instruction-control-v1"},
+      "config": {
+        "dimension": 512,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "truncate_dim": 512,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Matched no-instruction control — qwen-0.6b-512 without query_prompt."
+      }
+    },
+    {
+      "id": "qwen-no-instruction-384",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "no-instruction-control-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "none",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
+        "truncate_dim": 384,
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Matched no-instruction control — qwen-0.6b-384 without query_prompt."
       }
     },
     {
@@ -110,72 +268,9 @@
         "quantisation": "none",
         "revision": "57c266a740f537b4dc058e1b0cda161fd15afa75",
         "model_dir": "~/.cache/huggingface/hub/models--google--embeddinggemma-300m",
-        "note": "Balanced candidate. RECORD Gemma terms / gated acquisition before any production use."
-      }
-    },
-    {
-      "id": "qwen-0.6b",
-      "kind": "severian",
-      "deployment": "local",
-      "backend": "sqlite",
-      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "qwen-retrieval-instruction-v1"},
-      "config": {
-        "dimension": 1024,
-        "normalize": true,
-        "runtime": "sentence-transformers",
-        "quantisation": "none",
-        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
-        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
-        "prompt": "Given a web search query, retrieve relevant passages that answer the query",
-        "note": "High-tier candidate. Run with query instruction AND no-instruction control."
-      }
-    },
-    {
-      "id": "qwen-no-instruction",
-      "kind": "severian",
-      "deployment": "local",
-      "backend": "sqlite",
-      "model": {"id": "Qwen/Qwen3-Embedding-0.6B", "prompt_version": "no-instruction-control-v1"},
-      "config": {
-        "dimension": 1024,
-        "normalize": true,
-        "runtime": "sentence-transformers",
-        "quantisation": "none",
-        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
-        "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
-        "note": "Audit HIGH 5 control: SAME Qwen revision WITHOUT the query instruction, so the instruction's contribution is measured, not assumed. Identical bytes to qwen-0.6b except prompt=None."
-      }
-    },
-    {
-      "id": "granite-311m",
-      "kind": "severian",
-      "deployment": "local",
-      "backend": "sqlite",
-      "model": {"id": "ibm-granite/granite-embedding-311m-multilingual-r2", "prompt_version": "sentence-transformers-v1"},
-      "config": {
-        "dimension": 768,
-        "normalize": true,
-        "runtime": "sentence-transformers",
-        "quantisation": "none",
-        "revision": "44399559930365213510b1ee2eb15ded83374f0e",
-        "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
-        "note": "High-tier candidate. Test 768 and 384 Matryoshka if the published artefact supports it."
-      }
-    },
-    {
-      "id": "bekko-a8m",
-      "kind": "severian",
-      "deployment": "local",
-      "backend": "sqlite",
-      "model": {"id": "hotchpotch/bekko-embedding-v1-a8m", "prompt_version": "sentence-transformers-v1"},
-      "config": {
-        "dimension": 384,
-        "normalize": true,
-        "runtime": "sentence-transformers",
-        "quantisation": "int8",
-        "revision": "c721113d59a1d91b447450324f51c4b3332c924a",
-        "model_dir": "~/.cache/huggingface/hub/models--hotchpotch--bekko-embedding-v1-a8m",
-        "note": "Lite multilingual candidate."
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Run ONLY if access/licence is already authorised. Do not accept terms. Record SKIPPED with reason otherwise (handoff §8)."
       }
     },
     {
@@ -191,7 +286,27 @@
         "quantisation": "none",
         "revision": "2ab6fa8ea2d674564defd37171ae19079b864b33",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-small-english-r2",
+        "cpus": 4,
+        "mem_mb": 8192,
         "note": "English-only control. CANNOT win the multilingual default (plan 1.2)."
+      }
+    },
+    {
+      "id": "bekko-a8m",
+      "kind": "severian",
+      "deployment": "local",
+      "backend": "sqlite",
+      "model": {"id": "hotchpotch/bekko-embedding-v1-a8m", "prompt_version": "sentence-transformers-v1"},
+      "config": {
+        "dimension": 384,
+        "normalize": true,
+        "runtime": "sentence-transformers",
+        "quantisation": "int8",
+        "revision": "c721113d59a1d91b447450324f51c4b3332c924a",
+        "model_dir": "~/.cache/huggingface/hub/models--hotchpotch--bekko-embedding-v1-a8m",
+        "cpus": 4,
+        "mem_mb": 8192,
+        "note": "Lite multilingual candidate."
       }
     },
     {
@@ -207,17 +322,19 @@
       }
     }
   ],
-  "release_gate": {
-   "min_recall_at_10": 0.9,
-   "min_citation_precision": 0.78,
-   "max_stale_fact_rate": 0.0,
-   "max_cross_scope_leakage": 0.0,
-   "max_unsupported_answer_rate": 0.22,
-   "require_external_providers": 0
-  },
   "metrics": [
     "recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
     "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
-    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"
-  ]
+    "unsupported_answer_rate", "negative_false_positive_rate",
+    "latency_p95_ms", "cost_per_query_usd"
+  ],
+  "release_gate": {
+    "min_recall_at_10": 0.9,
+    "min_citation_precision": 0.78,
+    "max_stale_fact_rate": 0.0,
+    "max_cross_scope_leakage": 0.0,
+    "max_unsupported_answer_rate": 0.1,
+    "max_negative_false_positive_rate": 0.0,
+    "require_external_providers": 0
+  }
 }

@@ -113,12 +113,24 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
         return factories
 
     def _st_embedding(model_name: str, dimension: int, revision: str,
-                      prompt: str | None = None) -> object:
+                      prompt: str | None = None,
+                      truncate_dim: int | None = None) -> object:
         """Sentence-transformers embedding with query/doc encoding split.
 
-        Audit HIGH 5: instruction prompts (e.g. Qwen agent-memory) apply
-        to QUERIES ONLY. Documents are always encoded with the plain
-        contract — prompting both sides corrupts the doc index.
+        Audit HIGH 5 / P0-F: instruction prompts (e.g. Qwen agent-memory)
+        apply to QUERIES ONLY. Documents are always encoded with the
+        plain contract — prompting both sides corrupts the doc index.
+
+        P0-F contract:
+        - ``prompt`` is the FULL documented query-prompt template prefix
+          (e.g. Qwen's ``Instruct: {task}\\nQuery:``); it is passed as the
+          ``prompt=`` kwarg for queries only, and asserted verbatim by
+          spy tests.
+        - ``truncate_dim`` is the Matryoshka/truncation target. The
+          encoder ASSERTS the returned vector length equals the adapter
+          dimension — if truncation is silently ignored the lane fails
+          loudly instead of recording 1024-dim vectors as 384-dim.
+        - normalisation is always requested and asserted (unit norm).
         """
 
         class _STEmbedding:
@@ -130,16 +142,31 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
                 self.revision = revision
                 self._model = SentenceTransformer(model_name, revision=revision)
                 self._prompt = prompt
+                self._truncate_dim = truncate_dim
 
             def _encode_contract(self, text: str, *, query: bool) -> list[float]:
                 from typing import Any as _Any
 
                 kwargs: dict[str, _Any] = {"normalize_embeddings": True,
                                            "show_progress_bar": False}
+                if self._truncate_dim is not None:
+                    kwargs["truncate_dim"] = self._truncate_dim
                 if query and self._prompt:
                     kwargs["prompt"] = self._prompt
                 vector = self._model.encode(text, **kwargs)
-                return [float(v) for v in vector]
+                values = [float(v) for v in vector]
+                if len(values) != self.dimension:
+                    raise ValueError(
+                        f"encoder returned {len(values)} dims, expected "
+                        f"{self.dimension} (truncate_dim={self._truncate_dim})"
+                    )
+                if self._truncate_dim is not None:
+                    norm = sum(v * v for v in values) ** 0.5
+                    if not (0.999 <= norm <= 1.001):
+                        raise ValueError(
+                            f"encoded vector is not normalised (norm={norm:.4f})"
+                        )
+                return values
 
             def encode(self, text: str) -> list[float]:
                 # ProviderAdapter document/query path: encode with the
@@ -151,8 +178,9 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
 
         return _STEmbedding()
 
-    # provider_id -> (model name, dimension, manifest revision, prompt)
-    lanes: dict[str, tuple[str, int, str, str | None]] = {}
+    # provider_id -> (model name, dimension, manifest revision, prompt,
+    #                 truncate_dim)
+    lanes: dict[str, tuple[str, int, str, str | None, int | None]] = {}
     for provider in manifest.providers:
         if provider.vendor_reported_only:
             continue
@@ -161,16 +189,28 @@ def build_lane_factories(args: argparse.Namespace, manifest: BenchmarkManifest) 
         if model_id == "hash" or provider.id == "hash":
             continue
         rev = str(cfg.get("revision", ""))
-        prompt = cfg.get("prompt")  # query-side instruction (audit HIGH 5)
-        lanes[provider.id] = (model_id, int(cfg.get("dimension", 384)), rev, prompt)
-
-    for provider_id, (model_name, dimension, revision, prompt) in lanes.items():
-        factories[provider_id] = lambda pid=provider_id, mn=model_name, dim=dimension, rev=revision, pr=prompt: (
-            _make_severian_adapter(
-                pid, "sqlite", None, dim,
-                _st_embedding(mn, dim, rev, prompt=pr),
-            )
+        # P0-F: full documented query-prompt template prefix (e.g. Qwen
+        # "Instruct: {task}\nQuery:"); absent => no-instruction control.
+        prompt = cfg.get("query_prompt")
+        truncate_dim = cfg.get("truncate_dim")
+        lanes[provider.id] = (
+            model_id, int(cfg.get("dimension", 384)), rev,
+            str(prompt) if prompt else None,
+            int(truncate_dim) if truncate_dim is not None else None,
         )
+
+    for provider_id, (model_name, dimension, revision, prompt, truncate_dim) in lanes.items():
+        def _factory(
+            pid: str = provider_id, mn: str = model_name, dim: int = dimension,
+            rev: str = revision, pr: str | None = prompt,
+            td: int | None = truncate_dim,
+        ) -> object:
+            return _make_severian_adapter(
+                pid, "sqlite", None, dim,
+                _st_embedding(mn, dim, rev, prompt=pr, truncate_dim=td),
+            )
+
+        factories[provider_id] = _factory
 
     return factories
 
@@ -186,11 +226,19 @@ def _inject_corpus(manifest: BenchmarkManifest, corpus_path: Path) -> BenchmarkM
     data = json.loads(corpus_path.read_text())
     documents = []
     for obs in data["observations"]:
-        documents.append({
+        doc: dict[str, Any] = {
             "id": obs["opaque_id"],
             "content": obs["content"],
             "scope": obs["scope"],
-        })
+        }
+        # P0-E: correction chains must reach the runner — pass through
+        # the supersession identity (stale flag + supersedes ids).
+        if obs.get("is_stale"):
+            doc["is_stale"] = True
+        supersedes = obs.get("supersedes") or []
+        if supersedes:
+            doc["supersedes"] = [str(s) for s in supersedes]
+        documents.append(doc)
     queries = []
     scope_by_id = {obs["opaque_id"]: obs["scope"] for obs in data["observations"]}
     for i, pair in enumerate(data["query_pairs"]):

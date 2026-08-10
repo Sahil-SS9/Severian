@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "manifest_id": "quality-corpus-v1",
+  "name": "Severian semantic quality corpus v1 (round-two remediation P0-E)",
+  "status": "FROZEN — valid for round-two model-selection evidence",
+  "frozen_on": "2026-08-10",
+  "generator": "scripts/build_semantic_quality_corpus.py",
+  "licence": "deterministic-synthetic-fictional-content (no third-party data)",
+  "seed": 20260810,
+  "corpus_version": 2,
+  "file": "docs/benchmarks/corpus/quality-corpus-v1.json",
+  "file_sha256": "83f4e4b2383f17907dec36825d4c9b86cfb593f1f19df55642d3edb027a97fb9",
+  "content_sha256": "b836ea6016f7df44606c22d7624b325f4be1855fdd5e4dee73a7b6bfaeb5d428",
+  "content_sha256_note": "content_sha256 is the canonical hash over {observations, query_pairs} only (corpus_sha256() in the generator); file_sha256 covers the committed JSON file bytes. Both are pinned by tests/benchmarks/test_corpus_provenance.py.",
+  "taxonomy": {
+    "total_documents": 1107,
+    "total_queries": 250,
+    "answerable_queries": 206,
+    "unanswerable_queries": 44,
+    "kind_counts": {
+      "adversarial": 20,
+      "code": 12,
+      "correction": 40,
+      "crosslang": 50,
+      "fact": 30,
+      "long": 12,
+      "negative": 24,
+      "paraphrase": 10,
+      "task": 12,
+      "temporal": 40
+    },
+    "language_counts": {"de": 12, "en": 185, "es": 12, "fr": 14, "hi": 12, "ja": 15},
+    "non_english_query_count": 65,
+    "non_english_query_fraction": 0.26,
+    "non_english_languages": ["de", "es", "fr", "hi", "ja"],
+    "non_latin_scripts": ["hi", "ja"],
+    "supersession_chains": 40,
+    "stale_documents": 40,
+    "temporal_pairs": 40
+  },
+  "privacy": {
+    "documents_scanned": 1107,
+    "queries_scanned": 250,
+    "hits": 0,
+    "detectors_fired": [],
+    "method": "regex detectors (email, phone, api-key, bearer, home-path, live-store, dsn); fail-closed on any hit; aggregate counts/hashes only, never corpus text"
+  },
+  "determinism": "build_corpus(seed=20260810) regenerates byte-identical output (verified 2026-08-10); tests/benchmarks/test_corpus_provenance.py pins the frozen hashes and byte identity",
+  "contract": [
+    ">= 20% non-English quality queries across >= 4 non-English languages including >= 1 non-Latin script, each with a language code and provenance",
+    "genuine semantic paraphrases (different token sets, not token permutations)",
+    "real correction chains: stale old fact + superseding new fact with explicit supersession identity; current-fact and historical-fact queries expect DIFFERENT evidence",
+    "real temporal before/after pairs with explicit expected evidence",
+    "labelled answerable fact/code/task/long/crosslang probes and a separately labelled unanswerable negative/adversarial set",
+    "deterministic structural validator (validate_corpus) — semantic quality additionally relies on manual review of the committed corpus JSON"
+  ]
+}
