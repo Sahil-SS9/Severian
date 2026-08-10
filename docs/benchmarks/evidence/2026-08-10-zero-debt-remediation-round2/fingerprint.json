@@ -1,0 +1,94 @@
+{
+  "evidence_id": "2026-08-10-zero-debt-remediation-round2",
+  "programme": "Severian zero-debt remediation — round two",
+  "source_sha": "bde3eac2c6843af763c74030b2a073f31ad5cc64",
+  "source_sha_clean": true,
+  "base_sha": "635a47c158fda97e719be2a2a55b8c48ca76ab2a",
+  "base_relationship": "verified ancestor (git merge-base == base_sha)",
+  "canonical_repo": "/home/kensei/repos/Severian",
+  "canonical_head": "c4d2b602e82e48b70cb4299cb9511d0e7a6c064c",
+  "canonical_touched": false,
+  "reviewed_candidate_repo": "/home/kensei/repos/severian-zero-debt",
+  "reviewed_candidate_head": "635a47c158fda97e719be2a2a55b8c48ca76ab2a",
+  "reviewed_candidate_touched": false,
+  "no_merge": true,
+  "no_push": true,
+  "production_touched": false,
+  "environment": {
+    "os": "Linux sahil-System 7.0.0-28-generic x86_64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "cores": 24,
+    "ram_gb": 125,
+    "python": "3.12.13 (uv managed)",
+    "uv": "0.11.28",
+    "rustc": "1.97.1",
+    "cargo": "1.97.1",
+    "maturin": "1.14.1",
+    "sentence_transformers": "5.7.0",
+    "torch": "2.13.0+cpu",
+    "wheel_cp311_sha256": "8008a5a6f4a60e1112df8e27bbc0846bf272dae671ecf99916d7af88a716f403",
+    "wheel_cp312_sha256": "ffa9b7f45af013f16ba0974fbaacf65d8733e335a1412e99142a9f52fb6e158a",
+    "uv_lock_sha256": "4f4400fabb6b5876285f3f4ad6bc4080f0080539e633ddbe7c5eb78a43c51161"
+  },
+  "corpus": {
+    "path": "docs/benchmarks/corpus/quality-corpus-v1.json",
+    "file_sha256": "83f4e4b2383f17907dec36825d4c9b86cfb593f1f19df55642d3edb027a97fb9",
+    "content_sha256": "b836ea6016f7df44606c22d7624b325f4be1855fdd5e4dee73a7b6bfaeb5d428",
+    "docs": 1107,
+    "queries": 250,
+    "non_english_pct": 26,
+    "correction_chains": 40,
+    "temporal_pairs": 40,
+    "privacy_hits": 0
+  },
+  "manifest": {
+    "path": "docs/benchmarks/manifest-embedding-v1.json",
+    "file_sha256": "4a5350bf623dbfb6873ebb7fd0f78b59db17e08b345171fb6a48b3ebe68182a4",
+    "schema": "v2",
+    "gate_frozen": {
+      "recall_at_10_min": 0.90,
+      "citation_precision_min": 0.78,
+      "unsupported_answer_rate_max": 0.10,
+      "negative_false_positive_rate_max": 0.0
+    }
+  },
+  "locked_decisions": {
+    "embedding_gemma_300m": "SKIPPED — licence not authorised by Sahil; handoff: run only if authorised, else incomplete matrix -> NO SELECTION",
+    "jina_v4": "EXCLUDED — non-commercial licence; never download or run (vendor_reported_only in manifest)",
+    "no_model_preselection": true
+  },
+  "gates": {
+    "pytest_collect": "654 collected",
+    "ruff": 0,
+    "mypy_strict": 0,
+    "compileall": 0,
+    "pip_audit": 0,
+    "pure_python_suite": "639 passed / 17 skipped / 0 failed / 0 warnings",
+    "native_suite": "659 passed / 52 skipped / 0 failed",
+    "native_focused": "94 passed",
+    "clean311": "90 passed",
+    "clean312": "90 passed",
+    "live_pg": "51 passed",
+    "cargo_fmt": 0,
+    "cargo_clippy": 0,
+    "cargo_test": 0,
+    "cargo_audit": 0,
+    "cargo_license": 0,
+    "diff_check": 0
+  },
+  "bakeoff_reps": [
+    {"rep": 1, "dir": "/tmp/severian-r2-bakeoff-rep1", "summary_sha256": "7f8985bb3f726f2cfaf9ff7088eebd20ff2fb9fdc5522ad312abf0ee977308bb", "completed": true},
+    {"rep": 2, "dir": "/tmp/severian-r2-bakeoff-rep2", "summary_sha256": "816f4b746647e57c75311eb184a960dc6b961cdd4047f27ca217d487f92e4e50", "completed": true},
+    {"rep": 3, "dir": "/tmp/severian-r2-bakeoff-rep3", "summary_sha256": "d35eb082863ec9a2816b33d23133318c75156e312e6438cadd05da9ed119b566", "completed": true}
+  ],
+  "bakeoff_aggregate_sha256": "fbe429dda5ba363a23170b8f3497aab201383f4bc2160ac80a23a77e472f7ebb",
+  "bakeoff_verdict": "NO MODEL SELECTED — all 13 lanes fail the frozen gate across all 3 fresh-process reps; gemma-300m licence-gated SKIPPED (incomplete matrix by locked decision)",
+  "notes": [
+    "R1 'accept best model' (qwen-0.6b) was based on gate-calibration-defective evidence; superseded",
+    "R2 gates corrected: citation_precision 0.78, unsupported_answer_rate 0.10, negative_false_positive_rate 0.0",
+    "negative_false_positive_rate scored on negatives-only denominator (P0-D fix)",
+    "normalisation explicit post-truncation (P0-F fix, commit bde3eac)",
+    "native lane runner fixture misuse fixed (commit acc5078, only visible with wheel present)",
+    "pip-audit setuptools CVE fixed in dev venv only (Sahil-approved 2026-08-10); CI unaffected"
+  ]
+}

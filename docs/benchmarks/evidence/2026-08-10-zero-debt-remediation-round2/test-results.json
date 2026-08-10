@@ -1,0 +1,49 @@
+{
+  "evidence_id": "2026-08-10-zero-debt-remediation-round2",
+  "source_sha": "bde3eac2c6843af763c74030b2a073f31ad5cc64",
+  "test_results": {
+    "pytest_collect_only": {"collected": 654, "exit": 0},
+    "ruff": {"result": "All checks passed", "exit": 0},
+    "mypy_strict": {"result": "no issues in 78 source files", "exit": 0},
+    "compileall": {"exit": 0},
+    "pip_audit": {"exit": 0, "note": "2 setuptools CVEs in dev venv fixed via Sahil-approved upgrade 2026-08-10; unpublished local packages labelled skips not passes"},
+    "pure_python_suite": {"passed": 639, "skipped": 17, "failed": 0, "warnings": 0, "exit": 0, "note": "native wheel absent (fallback lanes active)"},
+    "native_suite": {"passed": 659, "skipped": 52, "failed": 0, "exit": 0, "note": "cp312 wheel installed"},
+    "native_focused": {"passed": 94, "failed": 0, "exit": 0, "note": "after acc5078 fixture fix"},
+    "clean_cpython311": {"passed": 90, "exit": 0, "note": "fresh venv, cp311 wheel"},
+    "clean_cpython312": {"passed": 90, "exit": 0, "note": "fresh venv, cp312 wheel"},
+    "live_pg_contracts": {"passed": 51, "exit": 0, "note": "disposable severian-pg-test container, DSN env-only"},
+    "cargo_fmt": {"exit": 0},
+    "cargo_clippy": {"exit": 0, "note": "-D warnings, release profile"},
+    "cargo_test": {"exit": 0, "note": "0 tests in crate (logic covered via pyo3 suite)"},
+    "cargo_audit": {"exit": 0, "note": "1199 advisories loaded, no vulnerabilities"},
+    "cargo_license": {"exit": 0, "note": "severian-native MIT; deps Apache-2.0 OR MIT"},
+    "git_diff_check": {"exit": 0, "note": "no whitespace errors 635a47c..HEAD"},
+    "git_status": {"clean": true, "at": "bde3eac"}
+  },
+  "rust_vector_e2e": {
+    "result": "PASS",
+    "summary_sha256": "732e4cc771cc46d05b7e39c5a199479e22d4cbfc405ccaa8d55d2821a1ca51a6",
+    "dims": {
+      "384": {"p95_improvement": 0.9103, "id_parity": true, "score_parity": true, "e2e_25pct_gate": true},
+      "512": {"p95_improvement": 0.9242, "id_parity": true, "score_parity": true, "e2e_25pct_gate": true},
+      "768": {"p95_improvement": 0.9362, "id_parity": true, "score_parity": true, "e2e_25pct_gate": true},
+      "1024": {"p95_improvement": 0.9511, "id_parity": true, "score_parity": true, "e2e_25pct_gate": true}
+    },
+    "note": "vector-only proof (hash surrogate), NOT model evidence (P1-H); recorded clean=false in-file because fingerprint.json was the untracked patch at run time — no source modified after bde3eac"
+  },
+  "bakeoff": {
+    "reps": 3,
+    "fresh_process_per_rep": true,
+    "corpus_sha": "b836ea6016f7df44606c22d7624b325f4be1855fdd5e4dee73a7b6bfaeb5d428",
+    "lanes_run": 13,
+    "gemma_300m": "SKIPPED — licence not authorised (locked decision)",
+    "jina_v4": "EXCLUDED — never downloaded (vendor_reported_only)",
+    "verdict": "NO MODEL SELECTED",
+    "best_recall_at_10": 0.8204,
+    "best_lane": "qwen-no-instruction-1024",
+    "all_lanes_fail_gate": true,
+    "gate": {"recall_at_10_min": 0.90, "citation_precision_min": 0.78, "unsupported_answer_rate_max": 0.10, "negative_false_positive_rate_max": 0.0},
+    "determinism": "recall identical across reps to 4 decimals (frozen corpus + pinned revisions)"
+  }
+}

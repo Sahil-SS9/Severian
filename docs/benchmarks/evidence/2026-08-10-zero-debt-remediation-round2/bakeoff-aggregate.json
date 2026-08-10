@@ -1,0 +1,554 @@
+{
+  "gate": {
+    "citation_precision_min": 0.78,
+    "negative_false_positive_rate_max": 0.0,
+    "recall_at_10_min": 0.9,
+    "unsupported_answer_rate_max": 0.1
+  },
+  "kind": "embedding-bakeoff-aggregate",
+  "lanes": {
+    "bekko-a8m": {
+      "cold_load_seconds": {
+        "max": 3.43,
+        "mean": 3.372,
+        "min": 3.336
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.3511,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.7961,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 75.7268,
+        "mean": 67.574,
+        "min": 57.31
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.592,
+        "mean": 0.5916,
+        "min": 0.5911
+      },
+      "peak_rss_mb": {
+        "max": 1059.5,
+        "mean": 1048.2,
+        "min": 1041.6
+      },
+      "recall_at_10": {
+        "max": 0.7961,
+        "mean": 0.7961,
+        "min": 0.7961
+      },
+      "skipped": false
+    },
+    "granite-107m": {
+      "cold_load_seconds": {
+        "max": 3.418,
+        "mean": 3.2737,
+        "min": 3.131
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.356,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.7913,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 82.3091,
+        "mean": 68.2034,
+        "min": 59.0544
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5896,
+        "mean": 0.5887,
+        "min": 0.588
+      },
+      "peak_rss_mb": {
+        "max": 931.3,
+        "mean": 930.0667,
+        "min": 929.4
+      },
+      "recall_at_10": {
+        "max": 0.7913,
+        "mean": 0.7913,
+        "min": 0.7913
+      },
+      "skipped": false
+    },
+    "granite-311m-384": {
+      "cold_load_seconds": {
+        "max": 3.613,
+        "mean": 3.497,
+        "min": 3.389
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.3172,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.7816,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 164.2552,
+        "mean": 153.6855,
+        "min": 139.6176
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5827,
+        "mean": 0.5801,
+        "min": 0.5785
+      },
+      "peak_rss_mb": {
+        "max": 1070.5,
+        "mean": 1070.3,
+        "min": 1070.2
+      },
+      "recall_at_10": {
+        "max": 0.7816,
+        "mean": 0.7816,
+        "min": 0.7816
+      },
+      "skipped": false
+    },
+    "granite-311m-768": {
+      "cold_load_seconds": {
+        "max": 3.999,
+        "mean": 3.6133,
+        "min": 3.388
+      },
+      "dimension": {
+        "max": 768.0,
+        "mean": 768.0,
+        "min": 768.0
+      },
+      "gate": {
+        "citation_precision": 0.3188,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.7913,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 185.1876,
+        "mean": 170.2705,
+        "min": 161.9211
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5844,
+        "mean": 0.5831,
+        "min": 0.5816
+      },
+      "peak_rss_mb": {
+        "max": 1074.2,
+        "mean": 1072.3333,
+        "min": 1069.5
+      },
+      "recall_at_10": {
+        "max": 0.7913,
+        "mean": 0.7913,
+        "min": 0.7913
+      },
+      "skipped": false
+    },
+    "granite-97m": {
+      "cold_load_seconds": {
+        "max": 2.92,
+        "mean": 2.7903,
+        "min": 2.679
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.3269,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.801,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 101.9033,
+        "mean": 96.1576,
+        "min": 89.8486
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5901,
+        "mean": 0.588,
+        "min": 0.5867
+      },
+      "peak_rss_mb": {
+        "max": 865.6,
+        "mean": 864.2667,
+        "min": 863.3
+      },
+      "recall_at_10": {
+        "max": 0.801,
+        "mean": 0.801,
+        "min": 0.801
+      },
+      "skipped": false
+    },
+    "granite-small-en": {
+      "cold_load_seconds": {
+        "max": 1.847,
+        "mean": 1.75,
+        "min": 1.677
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.3544,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.7913,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 96.2197,
+        "mean": 94.546,
+        "min": 93.2216
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5907,
+        "mean": 0.59,
+        "min": 0.5895
+      },
+      "peak_rss_mb": {
+        "max": 584.9,
+        "mean": 583.4,
+        "min": 582.0
+      },
+      "recall_at_10": {
+        "max": 0.7913,
+        "mean": 0.7913,
+        "min": 0.7913
+      },
+      "skipped": false
+    },
+    "hash": {
+      "cold_load_seconds": {
+        "max": 0.238,
+        "mean": 0.207,
+        "min": 0.187
+      },
+      "dimension": {
+        "max": 256.0,
+        "mean": 256.0,
+        "min": 256.0
+      },
+      "gate": {
+        "citation_precision": 0.2913,
+        "negative_false_positive_rate": 0.9545,
+        "recall_at_10": 0.7233,
+        "unsupported_answer_rate": 0.0485
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 28.9321,
+        "mean": 28.1937,
+        "min": 27.8242
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5225,
+        "mean": 0.5224,
+        "min": 0.5222
+      },
+      "peak_rss_mb": {
+        "max": 437.1,
+        "mean": 435.5,
+        "min": 434.5
+      },
+      "recall_at_10": {
+        "max": 0.7233,
+        "mean": 0.7233,
+        "min": 0.7233
+      },
+      "skipped": false
+    },
+    "qwen-0.6b-1024": {
+      "cold_load_seconds": {
+        "max": 2.604,
+        "mean": 2.525,
+        "min": 2.47
+      },
+      "dimension": {
+        "max": 1024.0,
+        "mean": 1024.0,
+        "min": 1024.0
+      },
+      "gate": {
+        "citation_precision": 0.3592,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.8058,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 1064.9954,
+        "mean": 1062.8706,
+        "min": 1060.5202
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.61,
+        "mean": 0.6091,
+        "min": 0.6074
+      },
+      "peak_rss_mb": {
+        "max": 1625.4,
+        "mean": 1620.0333,
+        "min": 1611.2
+      },
+      "recall_at_10": {
+        "max": 0.8058,
+        "mean": 0.8058,
+        "min": 0.8058
+      },
+      "skipped": false
+    },
+    "qwen-0.6b-384": {
+      "cold_load_seconds": {
+        "max": 2.583,
+        "mean": 2.5473,
+        "min": 2.513
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.335,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.8155,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 1048.8083,
+        "mean": 1045.717,
+        "min": 1040.8723
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.6037,
+        "mean": 0.6006,
+        "min": 0.5982
+      },
+      "peak_rss_mb": {
+        "max": 1618.5,
+        "mean": 1618.0,
+        "min": 1617.3
+      },
+      "recall_at_10": {
+        "max": 0.8155,
+        "mean": 0.8155,
+        "min": 0.8155
+      },
+      "skipped": false
+    },
+    "qwen-0.6b-512": {
+      "cold_load_seconds": {
+        "max": 3.547,
+        "mean": 2.8467,
+        "min": 2.493
+      },
+      "dimension": {
+        "max": 512.0,
+        "mean": 512.0,
+        "min": 512.0
+      },
+      "gate": {
+        "citation_precision": 0.3382,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.8155,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 1080.3427,
+        "mean": 1063.9821,
+        "min": 1045.6756
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.6013,
+        "mean": 0.6007,
+        "min": 0.6001
+      },
+      "peak_rss_mb": {
+        "max": 1620.8,
+        "mean": 1619.6,
+        "min": 1618.5
+      },
+      "recall_at_10": {
+        "max": 0.8155,
+        "mean": 0.8155,
+        "min": 0.8155
+      },
+      "skipped": false
+    },
+    "qwen-no-instruction-1024": {
+      "cold_load_seconds": {
+        "max": 2.66,
+        "mean": 2.5817,
+        "min": 2.488
+      },
+      "dimension": {
+        "max": 1024.0,
+        "mean": 1024.0,
+        "min": 1024.0
+      },
+      "gate": {
+        "citation_precision": 0.3155,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.8204,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 735.5998,
+        "mean": 729.3082,
+        "min": 723.8812
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5952,
+        "mean": 0.5937,
+        "min": 0.5927
+      },
+      "peak_rss_mb": {
+        "max": 1625.9,
+        "mean": 1624.6333,
+        "min": 1623.3
+      },
+      "recall_at_10": {
+        "max": 0.8204,
+        "mean": 0.8204,
+        "min": 0.8204
+      },
+      "skipped": false
+    },
+    "qwen-no-instruction-384": {
+      "cold_load_seconds": {
+        "max": 2.529,
+        "mean": 2.502,
+        "min": 2.465
+      },
+      "dimension": {
+        "max": 384.0,
+        "mean": 384.0,
+        "min": 384.0
+      },
+      "gate": {
+        "citation_precision": 0.3463,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.801,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 720.8539,
+        "mean": 711.5374,
+        "min": 701.0068
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5995,
+        "mean": 0.598,
+        "min": 0.5967
+      },
+      "peak_rss_mb": {
+        "max": 1619.8,
+        "mean": 1618.1333,
+        "min": 1617.0
+      },
+      "recall_at_10": {
+        "max": 0.801,
+        "mean": 0.801,
+        "min": 0.801
+      },
+      "skipped": false
+    },
+    "qwen-no-instruction-512": {
+      "cold_load_seconds": {
+        "max": 2.82,
+        "mean": 2.597,
+        "min": 2.461
+      },
+      "dimension": {
+        "max": 512.0,
+        "mean": 512.0,
+        "min": 512.0
+      },
+      "gate": {
+        "citation_precision": 0.3236,
+        "negative_false_positive_rate": 1.0,
+        "recall_at_10": 0.8155,
+        "unsupported_answer_rate": 0.0
+      },
+      "gate_passed": false,
+      "latency_p95_ms": {
+        "max": 722.4287,
+        "mean": 716.7386,
+        "min": 711.2937
+      },
+      "n": 3,
+      "ndcg_at_10": {
+        "max": 0.5965,
+        "mean": 0.595,
+        "min": 0.5941
+      },
+      "peak_rss_mb": {
+        "max": 1619.5,
+        "mean": 1619.2333,
+        "min": 1618.9
+      },
+      "recall_at_10": {
+        "max": 0.8155,
+        "mean": 0.8155,
+        "min": 0.8155
+      },
+      "skipped": false
+    }
+  },
+  "reps": [
+    1,
+    2,
+    3
+  ],
+  "verdict": {
+    "lanes_passing_gate": [],
+    "model_selection": "NO MODEL SELECTED",
+    "note": "NO SELECTION unless a lane clears ALL four frozen metrics across all 3 fresh-process reps; gemma-300m licence-gated SKIPPED -> incomplete matrix -> NO SELECTION by locked decision."
+  }
+}
