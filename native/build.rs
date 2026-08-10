@@ -1,12 +1,16 @@
 //! Emits the resolved pyo3 version as a compile-time env var so the
 //! native_version() diagnostics string is always truthful (R2.3).
+//!
+//! Zero-debt (P2-I): no `unwrap()`. The build script returns `Result`
+//! and propagates hard errors with `?` so Cargo fails the build with an
+//! explicit message instead of panicking.
 use std::env;
 use std::fs;
 use std::path::Path;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=Cargo.lock");
-    let manifest_dir_str = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let manifest_dir_str = env::var("CARGO_MANIFEST_DIR")?;
     let manifest_dir = Path::new(&manifest_dir_str);
     let lock = manifest_dir.join("Cargo.lock");
     if let Ok(text) = fs::read_to_string(&lock) {
@@ -23,4 +27,5 @@ fn main() {
             }
         }
     }
+    Ok(())
 }

@@ -15,10 +15,12 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from severian.benchmarks.adapters.chroma import ChromaAdapter
+from severian.benchmarks.manifest import BenchmarkManifest
 from severian.benchmarks.runner import BenchmarkRunner
 
 MANIFEST_V1 = Path(__file__).resolve().parents[2] / "docs/benchmarks/manifest-v1.json"
@@ -40,13 +42,13 @@ def _chroma_venv_on_path() -> None:
         sys.path.insert(0, str(site))
 
 
-def _load_manifest(path: Path):
+def _load_manifest(path: Path) -> BenchmarkManifest:
     from severian.benchmarks.manifest import BenchmarkManifest
 
     return BenchmarkManifest.model_validate(json.loads(path.read_text()))
 
 
-def _run_manifest(manifest_path: Path, run_namespace: str, workdir: Path) -> dict:
+def _run_manifest(manifest_path: Path, run_namespace: str, workdir: Path) -> dict[str, Any]:
     """Run one manifest through a fresh ChromaAdapter; return non-latency metrics + IDs."""
     import sys
 

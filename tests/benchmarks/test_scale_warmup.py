@@ -46,7 +46,7 @@ def test_cold_query_must_fully_warm_index(tmp_path: Path) -> None:
             adapter.ingest(f"d{i}", f"fact {i}: service handles {i*7} requests/sec",
                            scope=_scope())
         # The lane's warmup path — full derive to stability.
-        warmed = adapter.warmup(scope=_scope())  # type: ignore[attr-defined]
+        warmed = adapter.warmup(scope=_scope())
         assert warmed == 500, f"warmup derived {warmed}/500 — hot timing would be invalid"
     finally:
         adapter.close()
@@ -60,7 +60,7 @@ def test_warmup_method_exists_and_fully_derives(tmp_path: Path) -> None:
                            scope=_scope())
         assert hasattr(adapter, "warmup"), "SeverianAdapter must expose warmup()"
         t0 = time.perf_counter()
-        count = adapter.warmup(scope=_scope())  # type: ignore[attr-defined]
+        count = adapter.warmup(scope=_scope())
         elapsed = time.perf_counter() - t0
         assert count == 300, f"warmup derived {count}/300"
         assert elapsed >= 0

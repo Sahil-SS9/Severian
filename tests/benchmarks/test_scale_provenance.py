@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_scale_benchmark.py"
@@ -41,7 +42,7 @@ REQUIRED_PROVENANCE = {
 _ANYWHERE = {"seed"}
 
 
-def _run_tiny_scale(out_dir: Path) -> dict:
+def _run_tiny_scale(out_dir: Path) -> dict[str, Any]:
     """Run the scale script at the minimum bucket with sqlite lane only."""
     result = subprocess.run(
         [
@@ -63,11 +64,11 @@ def _run_tiny_scale(out_dir: Path) -> dict:
         f"scale script failed rc={result.returncode}\n"
         f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
     )
-    payload = json.loads((out_dir / "scale.json").read_text())
+    payload: dict[str, Any] = json.loads((out_dir / "scale.json").read_text())
     return payload
 
 
-def _run_tiny_dreaming(out_dir: Path) -> dict:
+def _run_tiny_dreaming(out_dir: Path) -> dict[str, Any]:
     """Run the dreaming scale script at the minimum bucket."""
     result = subprocess.run(
         [
@@ -87,7 +88,7 @@ def _run_tiny_dreaming(out_dir: Path) -> dict:
         f"dreaming script failed rc={result.returncode}\n"
         f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
     )
-    payload = json.loads((out_dir / "dreaming-scale.json").read_text())
+    payload: dict[str, Any] = json.loads((out_dir / "dreaming-scale.json").read_text())
     return payload
 
 

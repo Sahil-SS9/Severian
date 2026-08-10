@@ -17,7 +17,14 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.9", "mypy>=1.14", "pyyaml>=6.0", "pip-audit>=2.7"]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pyyaml>=6.0",
+    "pip-audit>=2.7",
+    "httpx2>=2.10.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -66,5 +73,10 @@ module = [
     "sentence_transformers", "sentence_transformers.*",
     "onnxruntime", "onnxruntime.*",
     "numpy", "numpy.*",
+    "severian_native",
+    # Bench scripts imported by tests via sys.path (plain scripts, not
+    # packages on mypy's search path) — same treat-as-optional treatment.
+    "build_semantic_quality_corpus",
+    "run_embedding_benchmark",
 ]
 ignore_missing_imports = true

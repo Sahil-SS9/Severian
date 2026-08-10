@@ -29,7 +29,7 @@ class _FakeLane:
     def __init__(self, seconds: float) -> None:
         self.seconds = seconds
 
-    def __call__(self, adapter, docs) -> float:  # noqa: ANN001
+    def __call__(self, adapter: object, docs: object) -> float:  # noqa: ANN001
         return self.seconds
 
     def close(self) -> None:
