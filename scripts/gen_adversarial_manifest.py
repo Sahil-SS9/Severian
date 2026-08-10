@@ -273,7 +273,7 @@ QUERIES: list[dict[str, object]] = [
 
 def main() -> None:
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "manifest_id": "adversarial-v1-2026-08-05",
         "name": "Adversarial-27 (A-3 option 3)",
         "corpus": {"id": "adversarial-27", "version": "1.0", "seed": 20260805, "documents": DOCS},
@@ -325,6 +325,7 @@ def main() -> None:
             "temporal_accuracy",
             "cross_scope_leakage",
             "unsupported_answer_rate",
+            "negative_false_positive_rate",
             "latency_p95_ms",
             "cost_per_query_usd",
         ],
@@ -334,6 +335,7 @@ def main() -> None:
             "max_stale_fact_rate": 0.0,
             "max_cross_scope_leakage": 0.0,
             "max_unsupported_answer_rate": 0.0,
+            "max_negative_false_positive_rate": 0.0,
             "require_external_providers": 1,
         },
     }

@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 REQUIRED_METRICS: tuple[str, ...] = (
     "recall_at_10",
     "mrr",
@@ -17,6 +17,7 @@ REQUIRED_METRICS: tuple[str, ...] = (
     "temporal_accuracy",
     "cross_scope_leakage",
     "unsupported_answer_rate",
+    "negative_false_positive_rate",
     "latency_p95_ms",
     "cost_per_query_usd",
 )
@@ -146,6 +147,10 @@ class ReleaseGate(BaseModel):
     max_stale_fact_rate: float = 0.0
     max_cross_scope_leakage: float = 0.0
     max_unsupported_answer_rate: float = 0.0
+    # P0-D: abstention is measured over the UNSANSWERABLE population
+    # only. A correct system must not return results for unanswerable
+    # probes; any lane that always returns top-k fails this gate at 1.0.
+    max_negative_false_positive_rate: float = 0.0
     require_external_providers: int = 2
 
 
@@ -216,6 +221,23 @@ class BenchmarkManifest(BaseModel):
         missing_kinds = REQUIRED_QUERY_KINDS - kinds
         if missing_kinds:
             raise ManifestValidationError(f"manifest missing required query kinds: {sorted(missing_kinds)}")
+        # P0-D: BOTH populations are mandatory. Answerable-query citation
+        # precision and unanswerable-query false-positive/abstention rates
+        # are only defined when their denominator population exists. A
+        # manifest missing either must be rejected — never silently return
+        # a convenient zero or 1.0.
+        n_answerable = sum(1 for query in self.queries if query.answerable)
+        n_unanswerable = len(self.queries) - n_answerable
+        if n_answerable == 0:
+            raise ManifestValidationError(
+                "manifest must include at least one ANSWERABLE query "
+                "(answerable-only citation precision/recall are undefined otherwise)"
+            )
+        if n_unanswerable == 0:
+            raise ManifestValidationError(
+                "manifest must include at least one UNANSWERABLE query "
+                "(negative false-positive/abstention rate is undefined otherwise)"
+            )
         seen_query_ids: set[str] = set()
         for query in self.queries:
             if query.id in seen_query_ids:

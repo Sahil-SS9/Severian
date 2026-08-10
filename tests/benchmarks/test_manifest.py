@@ -27,7 +27,7 @@ from severian.benchmarks.runner import BenchmarkRunner, ProviderAdapter, Provide
 
 def _minimal_manifest() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "manifest_id": "bench-2026-07-31-001",
         "name": "phase3-smoke",
         "corpus": {
@@ -106,6 +106,7 @@ def _minimal_manifest() -> dict[str, Any]:
             "temporal_accuracy",
             "cross_scope_leakage",
             "unsupported_answer_rate",
+            "negative_false_positive_rate",
             "latency_p95_ms",
             "cost_per_query_usd",
         ],
@@ -115,6 +116,7 @@ def _minimal_manifest() -> dict[str, Any]:
             "max_stale_fact_rate": 0.0,
             "max_cross_scope_leakage": 0.0,
             "max_unsupported_answer_rate": 0.0,
+            "max_negative_false_positive_rate": 0.0,
             "require_external_providers": 2,
         },
     }
@@ -266,10 +268,17 @@ def test_runner_computes_stale_temporal_scope_and_unsupported_metrics() -> None:
     assert measured.stale_fact_rate == 0.25
     assert measured.temporal_accuracy == 0.0
     assert measured.cross_scope_leakage == 0.5
-    assert measured.unsupported_answer_rate == 0.25
+    # P0-D: the adapter returns items for every ANSWERABLE query, so no
+    # answerable abstentions occur (denominator = 3 answerable queries).
+    assert measured.unsupported_answer_rate == 0.0
+    # P0-D: the adapter returns an item for the ONE unanswerable query,
+    # so the false-positive rate over the unanswerable population is 1.0
+    # (never diluted to 1/4 by the whole query set).
+    assert measured.negative_false_positive_rate == 1.0
     assert measured.cost_per_query_usd == 0.25
     assert result.gate_passed is False
     assert "severian" in result.gate_failures
+    assert "negative_false_positive_rate" in result.gate_failures["severian"]
     assert adapters["severian"].closed is True
 
 
@@ -396,3 +405,36 @@ def test_runner_gate_only_checks_severian_kind_providers() -> None:
     # Competitor results are still present for comparison.
     for provider in manifest.providers:
         assert provider.id in result.results
+
+
+# --- P0-D: both query populations are mandatory ----------------------------
+
+
+def test_manifest_rejects_zero_unanswerable_queries(tmp_path: Path) -> None:
+    """A manifest with no unanswerable queries must be REJECTED — the
+    negative false-positive/abstention rate is undefined without its
+    denominator population (never a convenient zero)."""
+    payload = _minimal_manifest()
+    # Remove the unanswerable population entirely (all queries answerable)
+    # while keeping every REQUIRED_QUERY_KINDS present, so the validator
+    # reaches the population check and rejects on UNANSWERABLE.
+    for query in payload["queries"]:
+        query["answerable"] = True
+    manifest_path = tmp_path / "bench-no-negatives.json"
+    manifest_path.write_text(json.dumps(payload))
+    with pytest.raises(ManifestValidationError, match="UNANSWERABLE"):
+        load_manifest(manifest_path)
+
+
+def test_manifest_rejects_zero_answerable_queries(tmp_path: Path) -> None:
+    """A manifest with no answerable queries must be REJECTED — recall /
+    answerable-only citation precision are undefined without their
+    denominator population."""
+    payload = _minimal_manifest()
+    for query in payload["queries"]:
+        query["answerable"] = False
+        query["expected_evidence"] = []
+    manifest_path = tmp_path / "bench-no-answerable.json"
+    manifest_path.write_text(json.dumps(payload))
+    with pytest.raises(ManifestValidationError, match="ANSWERABLE"):
+        load_manifest(manifest_path)

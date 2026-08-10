@@ -101,7 +101,9 @@ def merge_checkpoints(
                 recall_at_10=0.0, mrr=0.0, ndcg_at_10=0.0,
                 citation_precision=0.0, stale_fact_rate=0.0,
                 temporal_accuracy=0.0, cross_scope_leakage=0.0,
-                unsupported_answer_rate=0.0, latency_p95_ms=0.0,
+                unsupported_answer_rate=0.0,
+                negative_false_positive_rate=0.0,
+                latency_p95_ms=0.0,
                 cost_per_query_usd=0.0,
             ),
         )

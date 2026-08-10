@@ -34,6 +34,7 @@ class ProviderResult:
     temporal_accuracy: float
     cross_scope_leakage: float
     unsupported_answer_rate: float
+    negative_false_positive_rate: float
     latency_p95_ms: float
     cost_per_query_usd: float
     raw: list[dict[str, Any]] = field(default_factory=list)
@@ -183,7 +184,15 @@ class BenchmarkRunner:
         returned_total = 0
         stale_total = 0
         leakage_total = 0
-        unsupported_total = 0
+        # P0-D: populations are counted SEPARATELY. Answerable-query
+        # citation precision and unanswerable-query false-positive/
+        # abstention rates use their own denominators — never the whole
+        # query set (the old 26/120 dilution that let a lane fail every
+        # negative probe and still pass the gate).
+        n_answerable = 0
+        n_unanswerable = 0
+        answerable_abstentions = 0
+        negative_false_positives = 0
         raw: list[dict[str, Any]] = []
         try:
             self._ingest(adapter)
@@ -202,18 +211,31 @@ class BenchmarkRunner:
                 latencies_ms.append(elapsed_ms)
                 returned_ids = [str(item.get("document_id", "")) for item in response.items]
                 returned_total += len(returned_ids)
-                # Rank-aware citation precision: a provider is precise when
-                # the top ``expected_count`` items it returns ARE the
-                # expected evidence. Raw precision over a fixed limit=10
-                # would cap every provider at ~0.1, hiding real differences.
-                expected_count = len(expected_ids)
-                if expected_count == 0:
-                    citation_precisions.append(1.0 if not returned_ids else 0.0)
-                else:
+                if query.answerable:
+                    n_answerable += 1
+                    # Rank-aware citation precision: a provider is precise when
+                    # the top ``expected_count`` items it returns ARE the
+                    # expected evidence. Raw precision over a fixed limit=10
+                    # would cap every provider at ~0.1, hiding real differences.
+                    # P0-D: computed over the ANSWERABLE population only.
+                    expected_count = len(expected_ids)
                     top_expected_window = returned_ids[:expected_count]
                     citation_precisions.append(
                         len(set(expected_ids) & set(top_expected_window)) / expected_count
+                        if expected_count
+                        else 0.0
                     )
+                    if not returned_ids:
+                        answerable_abstentions += 1
+                    recalls.append(self._recall_at_k(expected_ids, returned_ids))
+                    mrrs.append(self._mrr(expected_ids, returned_ids))
+                    ndcgs.append(self._ndcg_at_k(expected_weights, returned_ids))
+                else:
+                    n_unanswerable += 1
+                    # P0-D: any returned result for an unanswerable probe is
+                    # a false positive / failed abstention.
+                    if returned_ids:
+                        negative_false_positives += 1
                 stale_total += sum(
                     1
                     for document_id in returned_ids
@@ -238,16 +260,11 @@ class BenchmarkRunner:
                     temporal_scores.append(
                         len(expected_set & set(returned_ids)) / len(expected_set) if expected_set else 0.0
                     )
-                has_answer = bool(returned_ids)
-                if (query.answerable and not has_answer) or (not query.answerable and has_answer):
-                    unsupported_total += 1
-                if query.answerable:
-                    recalls.append(self._recall_at_k(expected_ids, returned_ids))
-                    mrrs.append(self._mrr(expected_ids, returned_ids))
-                    ndcgs.append(self._ndcg_at_k(expected_weights, returned_ids))
                 raw.append(
                     {
                         "query_id": query.id,
+                        "kind": query.kind,
+                        "answerable": query.answerable,
                         "scope": query.scope,
                         "returned_ids": returned_ids,
                         "citations": [str(item.get("citation", "")) for item in response.items],
@@ -257,12 +274,25 @@ class BenchmarkRunner:
                 )
         finally:
             adapter.close()
+        # P0-D: populations are mandatory (manifest validator enforces
+        # >= 1 of each). If they are missing anyway, FAIL LOUDLY — never
+        # return a convenient 0.0/1.0 for an undefined metric.
+        if n_answerable == 0:
+            raise RuntimeError(
+                f"provider {provider_id}: no answerable queries measured — "
+                "answerable-only metrics are undefined"
+            )
+        if n_unanswerable == 0:
+            raise RuntimeError(
+                f"provider {provider_id}: no unanswerable queries measured — "
+                "abstention metrics are undefined"
+            )
         latencies_ms.sort()
         p95_index = max(0, int(round(0.95 * (len(latencies_ms) - 1))))
-        # Empty-guards (zero-debt): a manifest of only unanswerable /
-        # non-temporal queries legitimately produces empty metric lists;
-        # division by zero would crash the whole bake-off. 0.0 is the
-        # honest value for "no answerable queries measured".
+        # Empty-guards (zero-debt): a manifest of only non-temporal
+        # queries legitimately produces an empty temporal list; division
+        # by zero would crash the whole bake-off. 0.0 is the honest
+        # value for "no temporal queries measured".
         def _avg(values: list[float]) -> float:
             return (sum(values) / len(values)) if values else 0.0
 
@@ -272,11 +302,16 @@ class BenchmarkRunner:
             recall_at_10=_avg(recalls),
             mrr=_avg(mrrs),
             ndcg_at_10=_avg(ndcgs),
-            citation_precision=_avg(citation_precisions) if citation_precisions else 1.0,
+            citation_precision=_avg(citation_precisions),
             stale_fact_rate=stale_total / returned_total if returned_total else 0.0,
             temporal_accuracy=_avg(temporal_scores),
             cross_scope_leakage=leakage_total / returned_total if returned_total else 0.0,
-            unsupported_answer_rate=unsupported_total / len(self._manifest.queries),
+            # P0-D: answerable-abstention rate over the ANSWERABLE
+            # population (an answerable query that returns nothing).
+            unsupported_answer_rate=answerable_abstentions / n_answerable,
+            # P0-D: false positives over the UNSANSWERABLE population
+            # only (an unanswerable query that returns any result).
+            negative_false_positive_rate=negative_false_positives / n_unanswerable,
             latency_p95_ms=latencies_ms[p95_index] if latencies_ms else 0.0,
             cost_per_query_usd=total_cost / len(self._manifest.queries),
             raw=raw,
@@ -305,6 +340,8 @@ class BenchmarkRunner:
                 provider_failures.append("cross_scope_leakage")
             if result.unsupported_answer_rate > gate.max_unsupported_answer_rate:
                 provider_failures.append("unsupported_answer_rate")
+            if result.negative_false_positive_rate > gate.max_negative_false_positive_rate:
+                provider_failures.append("negative_false_positive_rate")
             if provider_failures:
                 failures[provider_id] = provider_failures
         external_count = sum(

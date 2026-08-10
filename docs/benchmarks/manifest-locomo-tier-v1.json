@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "manifest_id": "locomo-tier-conversation-v1-2026-08-03",
   "name": "LOCOMO-tier conversation recall — typed probes over conversation documents",
   "corpus": {
@@ -63,6 +63,6 @@
     {"id": "chroma", "kind": "external", "vendor": "ChromaDB", "deployment": "self-hosted", "model": {"id": "chroma-default-embedding", "prompt_version": "n/a"}, "config": {"note": "CVE-2026-45829 critical unpatched; local-only use"}},
     {"id": "baseline-lexical", "kind": "external", "vendor": "Baseline (bag-of-words)", "deployment": "self-hosted", "model": {"id": "baseline-lexical", "prompt_version": "n/a"}}
   ],
-  "metrics": ["recall_at_10", "mrr", "ndcg_at_10", "citation_precision", "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage", "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"],
-  "release_gate": {"min_recall_at_10": 0.95, "min_citation_precision": 1.0, "max_stale_fact_rate": 0.0, "max_cross_scope_leakage": 0.0, "max_unsupported_answer_rate": 0.0, "require_external_providers": 1}
+  "metrics": ["recall_at_10", "mrr", "ndcg_at_10", "citation_precision", "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage", "unsupported_answer_rate", "negative_false_positive_rate", "latency_p95_ms", "cost_per_query_usd"],
+  "release_gate": {"min_recall_at_10": 0.95, "min_citation_precision": 1.0, "max_stale_fact_rate": 0.0, "max_cross_scope_leakage": 0.0, "max_unsupported_answer_rate": 0.0, "max_negative_false_positive_rate": 0.0, "require_external_providers": 1}
 }

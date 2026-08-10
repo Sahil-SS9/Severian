@@ -20,7 +20,7 @@ from severian.infrastructure.vector import HashEmbedding  # noqa: E402
 
 def _manifest(tmp_path: Path, n_docs: int = 30, n_queries: int = 8) -> BenchmarkManifest:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "manifest_id": "embedding-contract",
         "name": "contract",
         "corpus": {
@@ -62,10 +62,12 @@ def _manifest(tmp_path: Path, n_docs: int = 30, n_queries: int = 8) -> Benchmark
         ],
         "metrics": ["recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
                     "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
-                    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"],
+                    "unsupported_answer_rate", "negative_false_positive_rate",
+                    "latency_p95_ms", "cost_per_query_usd"],
         "release_gate": {"min_recall_at_10": 0.0, "min_citation_precision": 0.0,
                          "max_stale_fact_rate": 1.0, "max_cross_scope_leakage": 1.0,
                          "max_unsupported_answer_rate": 1.0,
+                         "max_negative_false_positive_rate": 1.0,
                          "require_external_providers": 0},
     }
     return BenchmarkManifest.model_validate(payload)
@@ -81,7 +83,7 @@ def _hash_factory(workdir: Path) -> object:
 
 def test_manifest_with_new_query_kinds_validates() -> None:
     payload = {
-        "schema_version": 1, "manifest_id": "kinds", "name": "kinds",
+        "schema_version": 2, "manifest_id": "kinds", "name": "kinds",
         "corpus": {"id": "c", "version": "1", "seed": 1,
                    "documents": [{"id": "d0", "content": "x", "scope": "s"}]},
         "queries": [
@@ -96,7 +98,8 @@ def test_manifest_with_new_query_kinds_validates() -> None:
                        "config": {}}],
         "metrics": ["recall_at_10", "mrr", "ndcg_at_10", "citation_precision",
                     "stale_fact_rate", "temporal_accuracy", "cross_scope_leakage",
-                    "unsupported_answer_rate", "latency_p95_ms", "cost_per_query_usd"],
+                    "unsupported_answer_rate", "negative_false_positive_rate",
+                    "latency_p95_ms", "cost_per_query_usd"],
         "release_gate": {"require_external_providers": 0},
     }
     manifest = BenchmarkManifest.model_validate(payload)
@@ -144,7 +147,7 @@ def test_missing_lane_factory_is_recorded_not_dropped(tmp_path: Path) -> None:
 
 
 def test_inject_corpus_merges_observations_and_pairs(tmp_path: Path) -> None:
-    from run_embedding_benchmark import _inject_corpus  # type: ignore[import-not-found]
+    from run_embedding_benchmark import _inject_corpus
 
     manifest = _manifest(tmp_path, n_docs=1, n_queries=1)
     corpus_data = {
