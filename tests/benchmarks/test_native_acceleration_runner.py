@@ -46,7 +46,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture()
 def gate_out(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     """Run the script once in an ISOLATED workdir; return (out_path, data)."""
     out = tmp_path / "gate.json"
