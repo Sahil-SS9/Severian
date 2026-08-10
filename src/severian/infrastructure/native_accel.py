@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from severian.domain.hits import VectorHit  # noqa: F401 (re-export for mypy)
 
 try:  # pragma: no cover - exercised via tests
-    import severian_native as _native  # type: ignore[import-untyped]
+    import severian_native as _native
 
     _NATIVE_AVAILABLE = True
 except Exception:  # noqa: BLE001 - import must never break base install

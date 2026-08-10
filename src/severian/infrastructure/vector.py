@@ -366,10 +366,12 @@ class LocalVectorIndex:
         if self._native_accel is None:
             from severian.infrastructure.native_accel import NativeAccelAdapter
 
-            try:
-                self._native_accel = NativeAccelAdapter()
-            except Exception:  # noqa: BLE001 - explicit rust w/o wheel -> python path
-                self._native_accel = NativeAccelAdapter("python")
+            # Fail-closed (P0-A): the adapter owns auto fallback policy.
+            # An explicit `rust` request with the optional module absent or
+            # broken raises NativeAccelError HERE — it must never be caught
+            # and silently replaced with a Python adapter, or explicit Rust
+            # mode would degrade without the operator's knowledge.
+            self._native_accel = NativeAccelAdapter()
         if self._native_accel.selected == "rust":
             native_rows = [(m, c, b) for m, b, c in rows]
             return self._native_accel.exact_top_k(query_vector, native_rows, limit)
