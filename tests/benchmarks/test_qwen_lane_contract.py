@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -69,10 +70,11 @@ class _RecordingModel:
 
 @pytest.fixture()
 def recording_model(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingModel]:
+    """Provide the optional model module without making it a base CI dependency."""
     _RecordingModel.instances.clear()
-    monkeypatch.setattr(
-        "sentence_transformers.SentenceTransformer", _RecordingModel,
-    )
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _RecordingModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
     return _RecordingModel
 
 

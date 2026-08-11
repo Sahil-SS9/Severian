@@ -24,7 +24,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEVERIAN_PG_DSN: postgresql://severian:***@127.0.0.1:54329/severian
+      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
     steps:
       - uses: actions/checkout@v4
 
@@ -97,7 +97,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEVERIAN_PG_DSN: postgresql://severian:***@127.0.0.1:54329/severian
+      SEVERIAN_PG_DSN: postgresql://severian:severian@127.0.0.1:54329/severian
     steps:
       - uses: actions/checkout@v4
 
