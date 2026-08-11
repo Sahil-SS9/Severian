@@ -79,7 +79,7 @@
         "revision": "d6cffd338414d6a1c1f5decfad5fec62eebc90d5",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-107m-multilingual",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Multilingual control — current production baseline (historical/current comparison only)."
       }
     },
@@ -97,7 +97,7 @@
         "revision": "835ad14087e140460703cf0fae09f97d469d65c2",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-97m-multilingual-r2",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Multilingual R2 control."
       }
     },
@@ -115,7 +115,7 @@
         "revision": "44399559930365213510b1ee2eb15ded83374f0e",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "High-tier candidate — native 768-dim."
       }
     },
@@ -134,7 +134,7 @@
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-311m-multilingual-r2",
         "truncate_dim": 384,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "High-tier candidate — Matryoshka 384 control. Runner asserts final dim; unsupported truncation fails loudly."
       }
     },
@@ -154,7 +154,7 @@
         "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
         "truncate_dim": 1024,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Priority challenger — full pinned query-prompt contract, native 1024-dim (P0-F)."
       }
     },
@@ -174,7 +174,7 @@
         "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
         "truncate_dim": 512,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Priority challenger — Matryoshka 512."
       }
     },
@@ -194,7 +194,7 @@
         "query_prompt": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
         "truncate_dim": 384,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Priority challenger — Matryoshka 384."
       }
     },
@@ -213,7 +213,7 @@
         "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
         "truncate_dim": 1024,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Matched no-instruction control — SAME Qwen revision and dims as qwen-0.6b-1024 with NO query_prompt (measures the instruction's contribution)."
       }
     },
@@ -232,7 +232,7 @@
         "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
         "truncate_dim": 512,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Matched no-instruction control — qwen-0.6b-512 without query_prompt."
       }
     },
@@ -251,7 +251,7 @@
         "model_dir": "~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B",
         "truncate_dim": 384,
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Matched no-instruction control — qwen-0.6b-384 without query_prompt."
       }
     },
@@ -269,7 +269,7 @@
         "revision": "57c266a740f537b4dc058e1b0cda161fd15afa75",
         "model_dir": "~/.cache/huggingface/hub/models--google--embeddinggemma-300m",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Run ONLY if access/licence is already authorised. Do not accept terms. Record SKIPPED with reason otherwise (handoff §8)."
       }
     },
@@ -287,7 +287,7 @@
         "revision": "2ab6fa8ea2d674564defd37171ae19079b864b33",
         "model_dir": "~/.cache/huggingface/hub/models--ibm-granite--granite-embedding-small-english-r2",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "English-only control. CANNOT win the multilingual default (plan 1.2)."
       }
     },
@@ -305,7 +305,7 @@
         "revision": "c721113d59a1d91b447450324f51c4b3332c924a",
         "model_dir": "~/.cache/huggingface/hub/models--hotchpotch--bekko-embedding-v1-a8m",
         "cpus": 4,
-        "mem_mb": 8192,
+        "mem_mb": 4096,
         "note": "Lite multilingual candidate."
       }
     },

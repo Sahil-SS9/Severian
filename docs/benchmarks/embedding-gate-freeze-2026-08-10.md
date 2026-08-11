@@ -42,7 +42,7 @@ Applied INSIDE each fresh lane subprocess
 (`src/severian/benchmarks/embedding_runner.py` `_apply_resource_caps`):
 
 - `cpus`: 4 — process pinned to 4 logical CPUs (affinity).
-- `mem_mb`: 8192 — hard `RLIMIT_AS` cap (MiB); a lane that exceeds it
+- `mem_mb`: 4096 — hard `RLIMIT_AS` cap (MiB); a lane that exceeds it
   dies with `MemoryError` and is recorded as SKIPPED, never faked.
 
 Declared per neural provider in the manifest `config`. The hash
