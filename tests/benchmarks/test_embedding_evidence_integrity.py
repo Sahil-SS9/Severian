@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from severian.benchmarks.adapters.severian import SeverianAdapter  # noqa: E402
 from severian.benchmarks.embedding_runner import EmbeddingBakeoffRunner  # noqa: E402
 from severian.benchmarks.manifest import BenchmarkManifest  # noqa: E402
-from severian.domain.models import Scope  # noqa: E402
+from severian.domain.models import Memory, Scope  # noqa: E402
 from severian.infrastructure.vector import HashEmbedding  # noqa: E402
 
 
@@ -80,6 +80,39 @@ def _hash_factory(workdir: Path) -> SeverianAdapter:
         embedding=HashEmbedding(dimension=256), reset_db=False,
         workdir=str(workdir),
     )
+
+
+def test_severian_adapter_maps_corrected_observation_to_replacement_document(tmp_path: Path) -> None:
+    """A derived correction head is evidence for its replacement document."""
+    scope_text = "t1/p1/c1/a1/s1"
+    scope = Scope(
+        tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1"
+    )
+    adapter = _hash_factory(tmp_path / "store")
+    try:
+        adapter.ingest("old", "the limit is ten", scope=scope_text)
+        adapter.ingest("new", "the limit is twenty", scope=scope_text, supersedes=("old",))
+        revision = next(
+            observation
+            for observation in adapter._bundle.repository.list_observations(scope)
+            if observation.revision_of_id is not None
+        )
+        memory = adapter._bundle.repository.add_memory(
+            Memory(
+                scope=scope,
+                kind="fact",
+                content=revision.content,
+                source_observation_ids=[revision.id],
+                model_id="test/hasher",
+                prompt_version="test-v1",
+                confidence=1.0,
+            )
+        )
+        adapter._bundle.vector.upsert(memory)
+
+        assert adapter.list_document_ids() == {"new"}
+    finally:
+        adapter.close()
 
 
 def test_severian_adapter_inspects_active_vector_projection(tmp_path: Path) -> None:

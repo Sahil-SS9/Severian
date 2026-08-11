@@ -190,15 +190,20 @@ class SeverianAdapter:
         # revise path so its observation is marked superseded (derive
         # skips it) and its memories are tombstoned.
         for superseded_document_id in supersedes:
-            self._supersede(scoped, superseded_document_id, content)
+            self._supersede(scoped, superseded_document_id, document_id, content)
 
-    def _supersede(self, scope: Any, superseded_document_id: str, replacement_content: str) -> None:
-        """Mark the superseded corpus document's observation as revised.
+    def _supersede(
+        self,
+        scope: Any,
+        superseded_document_id: str,
+        replacement_document_id: str,
+        replacement_content: str,
+    ) -> None:
+        """Mark a corpus document superseded and map its revision to the replacement.
 
-        ``revise_observation`` sets ``superseded_by_id`` on the old head,
-        which the derive pass skips, and tombstones any memories already
-        derived from it (P0-5 correction propagation). Naive providers
-        have no equivalent — the stale-fact gate is the differentiator.
+        ``revise_observation`` creates a new canonical observation whose source
+        metadata remains attached to the old document. Benchmark evidence must
+        instead cite the replacement document whose content that revision holds.
         """
         from severian.domain.errors import ConflictError
 
@@ -206,7 +211,8 @@ class SeverianAdapter:
             if doc_id != superseded_document_id:
                 continue
             try:
-                self._bundle.service.revise_observation(scope, obs_id, replacement_content)
+                revision = self._bundle.service.revise_observation(scope, obs_id, replacement_content)
+                self._obs_to_doc[revision.id] = replacement_document_id
             except ConflictError:
                 # Already superseded by an earlier ingest; idempotent.
                 continue
