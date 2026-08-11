@@ -33,43 +33,63 @@ fn finite_f64(value: f64) -> PyResult<f64> {
     Ok(value)
 }
 
-/// Compensated summation (Shewchuk), bit-identical to CPython's
-/// `math.fsum` — the locked cross-version score contract (R0.2).
-/// Naive left-to-right accumulation differs in the last ulp.
-/// Uses a stack partials buffer (64 entries covers every practical
-/// dimension) to avoid per-row allocation.
-fn fsum(values: impl Iterator<Item = f64>) -> f64 {
-    let mut partials = [0.0_f64; 64];
-    let mut len = 0usize;
-    for x in values {
-        let mut x = x;
-        // CPython iterates the inner loop over a FIXED snapshot of the
-        // partials list (indices 0..n), writing back only at j.
-        // Iterating until j reaches len() instead would spin forever on
-        // exact cancellation (hi == 0.0 => lo == 0.0 => j never advances).
-        let n = len;
-        let mut j = 0usize;
-        for k in 0..n {
-            let mut y = partials[k];
-            // Swap LOCALS only (CPython `x, y = y, x` semantics): the
-            // source partials[k] is never mutated by the swap — only
-            // partials[j] = lo writes happen.
+/// CPython-compatible accurate summation (Shewchuk / ``math.fsum``).
+///
+/// The partials are collapsed from largest to smallest with CPython's
+/// half-even correction. A left-to-right final sum loses valid low-order
+/// information and breaks the strict Python/Rust score contract.
+fn fsum(values: impl Iterator<Item = f64>, partials: &mut Vec<f64>) -> Result<f64, String> {
+    partials.clear();
+    for mut x in values {
+        let n = partials.len();
+        let mut i = 0usize;
+        for j in 0..n {
+            let mut y = partials[j];
             if x.abs() < y.abs() {
                 std::mem::swap(&mut x, &mut y);
             }
             let hi = x + y;
-            let lo = y - (hi - x);
+            let yr = hi - x;
+            let lo = y - yr;
             if lo != 0.0 {
-                partials[j] = lo;
-                j += 1;
+                partials[i] = lo;
+                i += 1;
             }
             x = hi;
         }
-        len = j;
-        partials[len] = x;
-        len += 1;
+        partials.truncate(i);
+        if x != 0.0 {
+            if !x.is_finite() {
+                return Err("non-finite dot product".to_string());
+            }
+            partials.push(x);
+        }
     }
-    partials[..len].iter().sum()
+
+    let Some(mut hi) = partials.pop() else {
+        return Ok(0.0);
+    };
+    let mut lo = 0.0;
+    while let Some(y) = partials.pop() {
+        let x = hi;
+        hi = x + y;
+        let yr = hi - x;
+        lo = y - yr;
+        if lo != 0.0 {
+            break;
+        }
+    }
+    if let Some(next) = partials.last() {
+        if (lo < 0.0 && *next < 0.0) || (lo > 0.0 && *next > 0.0) {
+            let y = lo * 2.0;
+            let x = hi + y;
+            let yr = x - hi;
+            if y == yr {
+                hi = x;
+            }
+        }
+    }
+    Ok(hi)
 }
 
 /// Exact bounded top-k.
@@ -115,7 +135,9 @@ fn exact_top_k(
     }
 
     // Decode + score, releasing the GIL for the pure CPU pass.
-    // The fused decode+product stream avoids any per-row Vec<f64>.
+    // The fused decode+product stream avoids any per-row decoded vector.
+    // The reusable partials buffer keeps CPython-compatible fsum state out
+    // of the allocation hot path.
     // Plain-Rust error inside the detached closure (PyErr is not Ungil);
     // converted to PyValueError after the GIL is reacquired.
     let mut scored: Vec<(f64, String, String)> = {
@@ -123,6 +145,7 @@ fn exact_top_k(
         let result: Result<Vec<(f64, String, String)>, String> = pyo3::Python::attach(|py| {
             py.detach(move || {
                 let mut out = Vec::with_capacity(rows.len());
+                let mut partials = Vec::with_capacity(64);
                 for (mid, content, blob) in rows {
                     // NaN/inf via integer bit-test (exponent all ones,
                     // 0x7F800000) — cheaper than float classify. The
@@ -139,7 +162,7 @@ fn exact_top_k(
                         let b = f32::from_bits(bits) as f64;
                         a * b
                     });
-                    let score = fsum(products);
+                    let score = fsum(products, &mut partials)?;
                     if nan {
                         return Err("vector contains NaN or infinity".to_string());
                     }

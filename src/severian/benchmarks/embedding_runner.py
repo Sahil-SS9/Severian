@@ -38,6 +38,7 @@ from typing import Any
 
 from severian.benchmarks.runner import (
     BenchmarkRunner,
+    InspectableProviderAdapter,
     ProviderAdapter,
     ProviderResult,
     to_jsonable,
@@ -322,7 +323,8 @@ class EmbeddingBakeoffRunner:
             runner = BenchmarkRunner(manifest=self._manifest,
                                      adapters={provider_id: built},
                                      allow_missing=True,
-                                     derive_on_query=False)
+                                     derive_on_query=False,
+                                     close_adapters=False)
             quality = runner._run_provider(provider_id)  # noqa: SLF001 — reuse scoring
             latencies = [float(raw["elapsed_ms"]) for raw in quality.raw]
             p50, p95, p99 = self._percentiles(latencies)
@@ -391,38 +393,59 @@ class EmbeddingBakeoffRunner:
                 except Exception:  # noqa: BLE001
                     pass
 
-    def _assert_exact_index(self, provider_id: str, adapter: ProviderAdapter) -> None:
-        """Audit CRITICAL 3 / P1-G: the scored index must contain EXACTLY
-        the manifest corpus document IDs — both directions. Extra IDs
-        (throughput/warm-up contamination) AND missing IDs (partial
-        ingest) invalidate quality scoring."""
-        list_ids = getattr(adapter, "list_document_ids", None)
-        if list_ids is None:
-            return  # non-inspectable adapter: caller must guarantee
-        stored = set(list_ids())
-        expected = {doc.id for doc in self._manifest.corpus.documents}
+    def _active_scored_document_ids(self) -> set[str]:
+        """Manifest document IDs expected in the active scored projection.
+
+        Raw superseded observations remain in the corpus as auditable history,
+        but their vector-memory heads are correctly removed. A scored-index
+        guard must therefore require current heads only.
+        """
+        document_ids = {document.id for document in self._manifest.corpus.documents}
+        superseded_ids = {
+            document_id
+            for document in self._manifest.corpus.documents
+            for document_id in document.supersedes
+        }
+        unknown = superseded_ids - document_ids
+        if unknown:
+            raise RuntimeError(
+                "manifest supersedes unknown corpus document IDs: "
+                f"{sorted(unknown)!r}"
+            )
+        return document_ids - superseded_ids
+
+    def _assert_exact_index(self, provider_id: str, adapter: InspectableProviderAdapter) -> None:
+        """The scored index must contain exactly the active corpus heads.
+
+        Every live adapter must expose actual stored IDs. Extra IDs prove
+        contamination; missing active IDs prove partial ingest; an adapter
+        without inspection is unverifiable and cannot produce release evidence.
+        """
+        if not callable(getattr(adapter, "list_document_ids", None)):
+            raise RuntimeError(
+                f"lane {provider_id}: adapter does not expose list_document_ids; "
+                "scored-index evidence is unverifiable"
+            )
+        stored = set(adapter.list_document_ids())
+        expected = self._active_scored_document_ids()
         extra = stored - expected
         missing = expected - stored
         if extra:
             raise RuntimeError(
                 f"lane {provider_id}: scored index contains {len(extra)} "
-                f"unmanifested IDs (e.g. {sorted(extra)[:3]}) — "
+                f"unmanifested or superseded IDs (e.g. {sorted(extra)[:3]}) — "
                 "quality scoring is contaminated"
             )
         if missing:
             raise RuntimeError(
                 f"lane {provider_id}: scored index is missing {len(missing)} "
-                f"manifested IDs (e.g. {sorted(missing)[:3]}) — "
+                f"active manifest IDs (e.g. {sorted(missing)[:3]}) — "
                 "quality scoring is incomplete"
             )
 
-    def _snapshot_ids(self, adapter: ProviderAdapter) -> frozenset[str] | None:
-        """Exact scored-index document-ID snapshot (P1-G). None when the
-        adapter is not inspectable (caller then cannot verify)."""
-        list_ids = getattr(adapter, "list_document_ids", None)
-        if list_ids is None:
-            return None
-        return frozenset(list_ids())
+    def _snapshot_ids(self, adapter: InspectableProviderAdapter) -> frozenset[str]:
+        """Exact scored-index document-ID snapshot after mandatory inspection."""
+        return frozenset(adapter.list_document_ids())
 
     def _measure_throughput_fresh(
         self, provider_id: str, spec: Any

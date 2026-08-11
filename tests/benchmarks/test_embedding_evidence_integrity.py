@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from severian.benchmarks.adapters.severian import SeverianAdapter  # noqa: E402
 from severian.benchmarks.embedding_runner import EmbeddingBakeoffRunner  # noqa: E402
 from severian.benchmarks.manifest import BenchmarkManifest  # noqa: E402
+from severian.domain.models import Scope  # noqa: E402
 from severian.infrastructure.vector import HashEmbedding  # noqa: E402
 
 
@@ -79,6 +80,32 @@ def _hash_factory(workdir: Path) -> SeverianAdapter:
         embedding=HashEmbedding(dimension=256), reset_db=False,
         workdir=str(workdir),
     )
+
+
+def test_severian_adapter_inspects_active_vector_projection(tmp_path: Path) -> None:
+    """The scored-index guard must inspect vectors, not adapter bookkeeping.
+
+    A correction leaves the historical source observation intact but removes
+    its active memory/vector head. The adapter must therefore report only the
+    active document, and reject a missing actual vector row.
+    """
+    scope_text = "t1/p1/c1/a1/s1"
+    scope = Scope(
+        tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1"
+    )
+    adapter = _hash_factory(tmp_path / "store")
+    try:
+        adapter.ingest("old", "the limit is ten", scope=scope_text)
+        adapter.ingest("new", "the limit is twenty", scope=scope_text, supersedes=("old",))
+        assert adapter.warmup(scope=scope_text) == 1
+        assert adapter.list_document_ids() == {"new"}
+
+        active_memory = adapter._bundle.repository.list_memories(scope)[0]
+        adapter._bundle.vector.delete(active_memory.id)
+        with pytest.raises(RuntimeError, match="vector projection"):
+            adapter.list_document_ids()
+    finally:
+        adapter.close()
 
 
 # --- RED 1: corpus SHA must hash the CORPUS, not the manifest ---------------

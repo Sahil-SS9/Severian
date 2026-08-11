@@ -105,6 +105,7 @@ def test_full_postgres_stack_ingest_derive_retrieve(tmp_path) -> None:
             vector_index.upsert(memory)
 
         assert vector_index.count(scope) == len(memories)
+        assert vector_index.list_memory_ids(scope) == {memory.id for memory in memories}
 
         hits = vector_index.search(scope, "memory platform", limit=5)
         assert hits, "pgvector search should return hits"

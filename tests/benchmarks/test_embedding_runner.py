@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any, cast
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -79,6 +82,39 @@ def _hash_factory(workdir: Path) -> object:
         embedding=HashEmbedding(dimension=256), reset_db=False,
         workdir=str(workdir),
     )
+
+
+def test_exact_index_requires_adapter_introspection(tmp_path: Path) -> None:
+    """A scored lane with no actual index-ID API is unverifiable."""
+    runner = EmbeddingBakeoffRunner(manifest=_manifest(tmp_path), lane_factory={})
+    with pytest.raises(RuntimeError, match="does not expose list_document_ids"):
+        runner._assert_exact_index("hash", cast(Any, object()))  # noqa: SLF001
+
+
+def test_exact_index_excludes_superseded_historical_documents(tmp_path: Path) -> None:
+    """The projection contains active heads, not superseded raw evidence."""
+    payload = _manifest(tmp_path, n_docs=1, n_queries=1).model_dump()
+    payload["corpus"]["documents"] = [
+        {"id": "old", "content": "the limit is ten", "scope": "t1/p1/c1/a1/s1"},
+        {
+            "id": "new",
+            "content": "the limit is twenty",
+            "scope": "t1/p1/c1/a1/s1",
+            "supersedes": ["old"],
+        },
+    ]
+    for query in payload["queries"]:
+        for evidence in query["expected_evidence"]:
+            evidence["document_id"] = "old"
+    manifest = BenchmarkManifest.model_validate(payload)
+    runner = EmbeddingBakeoffRunner(manifest=manifest, lane_factory={})
+
+    class _InspectableAdapter:
+        def list_document_ids(self) -> set[str]:
+            return {"new"}
+
+    runner._assert_exact_index("hash", cast(Any, _InspectableAdapter()))  # noqa: SLF001
+
 
 
 def test_manifest_with_new_query_kinds_validates() -> None:
@@ -246,8 +282,6 @@ def test_manifest_path_forces_fresh_subprocess_lane(tmp_path: Path) -> None:
         manifest_path=manifest_path,
     )
     # Patch the subprocess call to record that a child was spawned.
-    from typing import Any, cast
-
     import severian.benchmarks.embedding_runner as mod
 
     original: Any = mod.subprocess.run  # type: ignore[attr-defined]

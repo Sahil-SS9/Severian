@@ -328,6 +328,20 @@ class LocalVectorIndex:
             ).fetchone()[0]
         )
 
+    def list_memory_ids(self, scope: Scope) -> set[str]:
+        """Return exactly the memory IDs currently present in this scope.
+
+        Benchmark evidence uses this to prove the scored vector projection,
+        rather than relying on adapter ingestion bookkeeping.
+        """
+        rows = self.connection.execute(
+            """SELECT memory_id FROM memory_vectors
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        return {str(row[0]) for row in rows}
+
     def clear(self, scope: Scope | None = None) -> None:
         if scope is None:
             self.connection.execute("DELETE FROM memory_vectors")
@@ -396,9 +410,14 @@ class LocalVectorIndex:
             vector = _unpack_vector(encoded, self.embedding.dimension)
             # R0.2 score contract: math.fsum (Shewchuk-compensated),
             # version-independent, bit-identical to the Rust kernel.
-            score = math.fsum(
-                left * right for left, right in zip(query_vector, vector, strict=True)
-            )
+            try:
+                score = math.fsum(
+                    left * right for left, right in zip(query_vector, vector, strict=True)
+                )
+            except OverflowError as exc:
+                raise VectorFormatError("non-finite dot product") from exc
+            if not math.isfinite(score):
+                raise VectorFormatError("non-finite dot product")
             scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
         if limit < len(scored):
             scored = heapq.nsmallest(limit, scored, key=_key)
@@ -434,7 +453,10 @@ class LocalVectorIndex:
             blobs.extend(encoded)
         dim = self.embedding.dimension
         matrix = np.frombuffer(bytes(blobs), dtype="<f4").reshape(n, dim).astype(np.float64)
-        scores = matrix @ np.asarray(query_vector, dtype=np.float64)
+        with np.errstate(over="ignore", invalid="ignore"):
+            scores = matrix @ np.asarray(query_vector, dtype=np.float64)
+        if not np.isfinite(scores).all():
+            raise VectorFormatError("non-finite dot product")
         # lexsort: LAST key is primary. (-scores, contents, memory_ids)
         # == (score desc, content, memory_id) total order, exactly.
         order = np.lexsort(

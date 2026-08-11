@@ -16,6 +16,7 @@ from typing import Any
 
 from severian.benchmarks.adapters.scope import parse_scope
 from severian.benchmarks.runner import ProviderQueryResponse
+from severian.domain.models import Scope
 
 # Optional; imported lazily so the module can be imported without a backend.
 _SEVERIAN_COMPOSE_CACHE: dict[str, Any] = {}
@@ -93,6 +94,9 @@ class SeverianAdapter:
             self._bundle.vector.initialize()
         # observation_id -> document_id map for trace resolution.
         self._obs_to_doc: dict[str, str] = {}
+        # Every benchmark scope seen by this adapter. Index evidence must
+        # inspect all actual scoped vector projections, not ingestion state.
+        self._scopes: dict[str, Scope] = {}
         # scope -> collection created
         self._collections: set[str] = set()
 
@@ -126,6 +130,7 @@ class SeverianAdapter:
             agent_id=parts[3],
             session_id=parts[4],
         )
+        self._scopes[scope] = scoped
         collection_key = f"{scoped.tenant_id}/{scoped.collection_id}"
         if collection_key not in self._collections:
             try:
@@ -164,6 +169,7 @@ class SeverianAdapter:
             agent_id=parts[3],
             session_id=parts[4],
         )
+        self._scopes[scope] = scoped
         collection_key = f"{scoped.tenant_id}/{scoped.collection_id}"
         if collection_key not in self._collections:
             try:
@@ -249,6 +255,43 @@ class SeverianAdapter:
                 return cur
             prev = cur
         return cur
+
+    def list_document_ids(self) -> set[str]:
+        """Return document IDs from the actual active vector projections.
+
+        The check is deliberately fail-closed: a projection missing an active
+        canonical memory, carrying an extra memory, or lacking an observation
+        to corpus-document mapping invalidates benchmark evidence.
+        """
+        document_ids: set[str] = set()
+        for scope_text, scope in self._scopes.items():
+            projected_ids = self._bundle.vector.list_memory_ids(scope)
+            active_memories = self._bundle.repository.list_memories(scope)
+            active_by_id = {memory.id: memory for memory in active_memories}
+            active_ids = set(active_by_id)
+            if projected_ids != active_ids:
+                missing = sorted(active_ids - projected_ids)
+                extra = sorted(projected_ids - active_ids)
+                raise RuntimeError(
+                    "vector projection differs from canonical active memories "
+                    f"for scope {scope_text!r}: missing={missing}, extra={extra}"
+                )
+            for memory in active_memories:
+                unknown_sources = [
+                    source_id
+                    for source_id in memory.source_observation_ids
+                    if source_id not in self._obs_to_doc
+                ]
+                if unknown_sources:
+                    raise RuntimeError(
+                        "active vector memory has no corpus-document provenance "
+                        f"for scope {scope_text!r}: memory_id={memory.id!r}, "
+                        f"observation_ids={sorted(unknown_sources)!r}"
+                    )
+                document_ids.update(
+                    self._obs_to_doc[source_id] for source_id in memory.source_observation_ids
+                )
+        return document_ids
 
     def query(
         self,

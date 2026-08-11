@@ -159,6 +159,23 @@ def test_parity_non_ascii_ids_and_content() -> None:
     assert [mid for mid, _ in ref] == [mid for mid, _ in nat]
 
 
+def test_parity_adversarial_cancellation_matches_cpython_fsum() -> None:
+    """The native final partial collapse must match CPython's half-even fsum.
+
+    A random unit-vector matrix does not exercise the critical rounding path.
+    This ordered magnitude sequence does: plain left-to-right summation loses
+    the unit term, while ``math.fsum`` recovers the correctly rounded result.
+    """
+    query = [1e-16, 1.0, 1e16]
+    rows = [("mem", "cancellation", _pack([1.0, 1.0, 1.0]))]
+
+    expected = _reference_topk(query, rows, 1)
+    actual = _native_topk(query, rows, 1)
+
+    assert expected[0][1] == math.fsum(query)
+    assert actual == expected
+
+
 def test_error_contract_malformed_lengths() -> None:
     """Malformed BLOBs raise a typed error; no panic/segfault."""
     dim, n = 64, 10
@@ -184,6 +201,15 @@ def test_error_contract_nan_inf() -> None:
     inf_rows = rows[:-1] + [("mem-inf", "c", _pack([float("inf")] * dim))]
     with pytest.raises(ValueError):
         severian_native.exact_top_k(query, inf_rows, k)
+
+
+def test_error_contract_rejects_overflowed_dot_product() -> None:
+    """Finite components must not produce a ranked ``inf`` score."""
+    max_f32 = 3.4028234663852886e38
+    with pytest.raises(ValueError, match="non-finite dot product"):
+        severian_native.exact_top_k(
+            [1e308], [("mem", "overflow", _pack([max_f32]))], 1
+        )
 
 
 def test_empty_rows_and_k0() -> None:

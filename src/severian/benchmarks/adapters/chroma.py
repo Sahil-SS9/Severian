@@ -189,6 +189,14 @@ class ChromaAdapter:
                 self._collections[name] = self._client.create_collection(name)
         return self._collections[name]
 
+    def list_document_ids(self) -> set[str]:
+        """Return IDs from the actual scoped Chroma collections."""
+        document_ids: set[str] = set()
+        for collection in self._collections.values():
+            result = collection.get(include=[])
+            document_ids.update(str(document_id) for document_id in result.get("ids", []))
+        return document_ids
+
     def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         name = self._collection_name(scope)
         if name not in self._collections:

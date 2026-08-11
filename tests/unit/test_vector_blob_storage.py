@@ -131,6 +131,33 @@ def test_index_writes_blobs_and_searches(tmp_path: Path) -> None:
         index.close()
 
 
+class _OverflowDotEmbedding:
+    """Finite f64 query × finite f32 row whose product overflows f64."""
+
+    def __init__(self) -> None:
+        self.dimension = 1
+
+    def encode(self, content: str) -> list[float]:
+        return [3.4028234663852886e38]
+
+    def encode_query(self, query: str) -> list[float]:
+        return [1e308]
+
+
+def test_search_rejects_nonfinite_dot_product_from_finite_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Python fallback must not rank ``inf`` while native rejects it."""
+    monkeypatch.setenv("SEVERIAN_VECTOR_BACKEND", "python")
+    index = LocalVectorIndex(tmp_path / "overflow.db", _OverflowDotEmbedding())
+    try:
+        index.upsert(_memory(_scope()))
+        with pytest.raises(VectorFormatError, match="non-finite dot product"):
+            index.search(_scope(), "overflow")
+    finally:
+        index.close()
+
+
 def test_legacy_json_index_is_refused_with_guidance(tmp_path: Path) -> None:
     """A JSON-format index must be refused, never mutated in place."""
     path = tmp_path / "legacy.db"

@@ -261,6 +261,15 @@ class PGVectorIndex:
                 ).scalar_one()
             )
 
+    def list_memory_ids(self, scope: Scope) -> set[str]:
+        """Return exactly the memory IDs currently present in this scope."""
+        self._require_scope(scope)
+        statement = select(self._table.c.memory_id).where(
+            *(self._table.c[key] == value for key, value in scope.model_dump().items())
+        )
+        with self.engine.connect() as connection:
+            return {str(memory_id) for memory_id in connection.execute(statement).scalars()}
+
     def clear(self, scope: Scope | None = None) -> None:
         with self.engine.begin() as connection:
             if scope is None:

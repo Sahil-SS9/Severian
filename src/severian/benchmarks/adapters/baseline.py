@@ -44,6 +44,10 @@ class LexicalBaselineAdapter:
         for document_id, content in documents:
             self.ingest(document_id, content, scope=scope)
 
+    def list_document_ids(self) -> set[str]:
+        """Return the exact IDs in the baseline's in-memory scored store."""
+        return {document_id for documents in self._corpus.values() for document_id in documents}
+
     def query(self, query: str, *, limit: int, scope: str, query_kind: str | None = None) -> ProviderQueryResponse:
         query_tokens = _tokens(query)
         docs = self._corpus.get(scope, {})

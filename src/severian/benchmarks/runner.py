@@ -75,6 +75,12 @@ class ProviderAdapter(Protocol):
     def close(self) -> None: ...
 
 
+class InspectableProviderAdapter(ProviderAdapter, Protocol):
+    """A provider whose physical scored index can be inspected exactly."""
+
+    def list_document_ids(self) -> set[str]: ...
+
+
 class BenchmarkRunner:
     """Run and gate the benchmark across every registered provider adapter."""
 
@@ -85,12 +91,14 @@ class BenchmarkRunner:
         adapters: Mapping[str, ProviderAdapter],
         allow_missing: bool = False,
         derive_on_query: bool = True,
+        close_adapters: bool = True,
     ) -> None:
         # zero-debt P0.3: retrieval bake-offs must warm the index BEFORE
         # timing queries (derive_on_query=False). When True (legacy
         # behaviour), each query may derive up to the adapter's cap —
         # which contaminates latency with index growth mid-run.
         self._derive_on_query = derive_on_query
+        self._close_adapters = close_adapters
         live_providers = [provider for provider in manifest.providers if not provider.vendor_reported_only]
         missing = [provider.id for provider in live_providers if provider.id not in adapters]
         if missing and not allow_missing:
@@ -273,7 +281,8 @@ class BenchmarkRunner:
                     }
                 )
         finally:
-            adapter.close()
+            if self._close_adapters:
+                adapter.close()
         # P0-D: populations are mandatory (manifest validator enforces
         # >= 1 of each). If they are missing anyway, FAIL LOUDLY — never
         # return a convenient 0.0/1.0 for an undefined metric.
@@ -381,6 +390,7 @@ def to_jsonable(result: BenchmarkResult) -> dict[str, Any]:
 __all__ = [
     "BenchmarkResult",
     "BenchmarkRunner",
+    "InspectableProviderAdapter",
     "ProviderAdapter",
     "ProviderQueryResponse",
     "ProviderResult",
