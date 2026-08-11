@@ -36,7 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from bench_provenance import collect_provenance  # type: ignore[import-not-found]  # noqa: E402
+from bench_provenance import collect_provenance  # noqa: E402
 
 from severian.benchmarks.embedding_runner import EmbeddingBakeoffRunner  # noqa: E402
 from severian.benchmarks.manifest import BenchmarkManifest  # noqa: E402

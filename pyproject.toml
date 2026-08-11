@@ -24,6 +24,7 @@ dev = [
     "pyyaml>=6.0",
     "pip-audit>=2.7",
     "httpx2>=2.10.0",
+    "setuptools>=83.0.0",
 ]
 
 [build-system]
@@ -76,6 +77,8 @@ module = [
     "severian_native",
     # Bench scripts imported by tests via sys.path (plain scripts, not
     # packages on mypy's search path) — same treat-as-optional treatment.
+    "aggregate_bakeoff_reps",
+    "bench_provenance",
     "build_semantic_quality_corpus",
     "run_embedding_benchmark",
 ]
