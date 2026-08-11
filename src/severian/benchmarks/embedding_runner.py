@@ -67,6 +67,8 @@ class EmbeddingLaneResult:
     quality: ProviderResult
     gate_passed: bool | None = None
     gate_failures: list[str] = field(default_factory=list)
+    throughput_complete: bool = True
+    throughput_error: str = ""
     skipped: bool = False
     skip_reason: str = ""
 
@@ -150,33 +152,63 @@ class EmbeddingBakeoffRunner:
     # -- lane lifecycle ----------------------------------------------------
 
     def _measure_lane(self, provider_id: str, spec: Any) -> EmbeddingLaneResult:
-        """Run one lane in a fresh subprocess and return its result.
+        """Run scoring and throughput in separately capped child processes.
 
-        A fresh process gives a true per-lane peak RSS (audit HIGH 7)
-        and isolates model-load crashes. The subprocess imports this
-        module and calls :meth:`_measure_lane_inline`.
+        One Qwen model fits under the locked 4 GiB cap. Two concurrent model
+        allocations do not. The score child therefore never constructs the
+        throughput adapter; the throughput child cannot mutate the scored
+        index because that process has already exited.
         """
-
-        # Serialise the manifest + factory registry path to the child.
-        manifest_path = self._manifest_path
-        if manifest_path is None:
-            # Inline fallback for in-memory manifests (tests): run in
-            # this process but with the fresh-process protocol.
+        if self._manifest_path is None:
             return self._measure_lane_inline(provider_id, spec)
 
-        payload = {
+        data, error = self._run_child(self._child_payload(provider_id, spec, "lane"))
+        if error is not None:
+            return self._skipped(provider_id, spec, error)
+        assert data is not None
+        lane = EmbeddingLaneResult(**data)
+        lane.quality = ProviderResult(**data["quality"]) if "quality" in data else lane.quality
+        if lane.skipped:
+            return lane
+
+        probe, error = self._run_child(self._child_payload(provider_id, spec, "throughput"))
+        if error is None and probe is not None:
+            try:
+                lane.encode_throughput_docs_per_sec = round(
+                    float(probe["encode_throughput_docs_per_sec"]), 1
+                )
+                if not bool(probe["throughput_clean"]):
+                    error = str(probe.get("throughput_error") or "probe declared unclean")
+            except (KeyError, TypeError, ValueError) as exc:
+                error = f"throughput result malformed: {exc}"
+        if error is not None:
+            lane.encode_throughput_docs_per_sec = 0.0
+            lane.throughput_complete = False
+            lane.throughput_error = error[:300]
+            lane.gate_passed = False
+            if "throughput_probe" not in lane.gate_failures:
+                lane.gate_failures.append("throughput_probe")
+        return lane
+
+    def _child_payload(self, provider_id: str, spec: Any, operation: str) -> dict[str, Any]:
+        """Serialise exactly one capped benchmark operation for a child."""
+        assert self._manifest_path is not None
+        return {
+            "operation": operation,
             "provider_id": provider_id,
-            "manifest_path": str(manifest_path),
+            "manifest_path": str(self._manifest_path),
             "corpus_path": str(self._corpus_path) if self._corpus_path else None,
             "lane_module": "scripts.run_embedding_benchmark",
-            # P0-F: capped-resource lanes — applied INSIDE the fresh child
-            # process (never the parent/tests). cpus = CPU affinity count,
-            # mem_mb = RLIMIT_AS cap in MiB.
             "resource_caps": {
                 "cpus": int(spec.config.get("cpus", 0)) or None,
                 "mem_mb": int(spec.config.get("mem_mb", 0)) or None,
             },
         }
+
+    @staticmethod
+    def _run_child(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        """Invoke one operation and preserve its machine-readable result."""
+        operation = str(payload["operation"])
         script = (
             "import json, sys; "
             "from severian.benchmarks.embedding_runner import _lane_child_entrypoint; "
@@ -185,24 +217,22 @@ class EmbeddingBakeoffRunner:
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", script, json.dumps(payload)],
-                capture_output=True, text=True, timeout=3600,
+                capture_output=True,
+                text=True,
+                timeout=3600,
                 cwd=str(Path(__file__).resolve().parents[2]),
             )
         except subprocess.TimeoutExpired:
-            return self._skipped(provider_id, spec, "lane timed out (3600s)")
+            return None, f"{operation} child timed out (3600s)"
         if proc.returncode != 0:
-            return self._skipped(
-                provider_id, spec,
-                f"lane subprocess failed (exit {proc.returncode}): "
-                f"{proc.stderr.strip()[:300]}",
+            return None, (
+                f"{operation} child failed (exit {proc.returncode}): "
+                f"{proc.stderr.strip()[:300]}"
             )
         try:
-            data = json.loads(proc.stdout.strip().splitlines()[-1])
+            return json.loads(proc.stdout.strip().splitlines()[-1]), None
         except Exception as exc:  # noqa: BLE001
-            return self._skipped(provider_id, spec, f"lane result unparseable: {exc}")
-        lane = EmbeddingLaneResult(**data)
-        lane.quality = ProviderResult(**data["quality"]) if "quality" in data else lane.quality
-        return lane
+            return None, f"{operation} result unparseable: {exc}"
 
     @staticmethod
     def _skipped(provider_id: str, spec: Any, reason: str) -> EmbeddingLaneResult:
@@ -231,11 +261,19 @@ class EmbeddingBakeoffRunner:
                 negative_false_positive_rate=0.0,
                 latency_p95_ms=0.0, cost_per_query_usd=0.0,
             ),
+            throughput_complete=False,
+            throughput_error=reason[:300],
             skipped=True,
             skip_reason=reason[:300],
         )
 
-    def _measure_lane_inline(self, provider_id: str, spec: Any) -> EmbeddingLaneResult:
+    def _measure_lane_inline(
+        self,
+        provider_id: str,
+        spec: Any,
+        *,
+        measure_throughput: bool = True,
+    ) -> EmbeddingLaneResult:
         """Measure one lane in-process (used by fresh-process child and
         in-memory test manifests)."""
         import resource
@@ -290,23 +328,30 @@ class EmbeddingBakeoffRunner:
             p50, p95, p99 = self._percentiles(latencies)
             peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
-            # Throughput in a SEPARATE fresh adapter (never the scored
-            # index — audit CRITICAL 3). The probe adapter gets its own
-            # workdir so enc-* rows cannot contaminate scoring.
-            # P1-G: snapshot the scored index's exact document IDs BEFORE
-            # the probe and require equality AFTER — throughput/warm-up
-            # probes must never change the scored index.
-            snapshot_before = self._snapshot_ids(built)
-            encode_tps, probe_clean = self._measure_throughput_fresh(provider_id, spec)
-            snapshot_after = self._snapshot_ids(built)
-            if snapshot_before is not None and snapshot_after != snapshot_before:
-                probe_clean = False
-                print(
-                    f"  [{provider_id}] scored index ID set changed during "
-                    "throughput probe — probe is not clean"
+            # Inline test runs may retain the old adapter-level probe. Real
+            # manifest-backed runs defer it to a second capped process, so the
+            # scorer never has two model allocations in its address space.
+            encode_tps = 0.0
+            probe_clean = True
+            probe_error = ""
+            scored_index_clean = True
+            if measure_throughput:
+                snapshot_before = self._snapshot_ids(built)
+                encode_tps, probe_clean, probe_error = self._measure_throughput_fresh(
+                    provider_id, spec
                 )
+                snapshot_after = self._snapshot_ids(built)
+                if snapshot_before is not None and snapshot_after != snapshot_before:
+                    scored_index_clean = False
+                    probe_clean = False
+                    probe_error = "scored index ID set changed during throughput probe"
+                    print(f"  [{provider_id}] {probe_error}")
 
             gate_passed, gate_failures = self._evaluate_lane_gate(provider_id, quality)
+            if not probe_clean:
+                gate_passed = False
+                if "throughput_probe" not in gate_failures:
+                    gate_failures.append("throughput_probe")
 
             return EmbeddingLaneResult(
                 provider_id=provider_id,
@@ -328,8 +373,14 @@ class EmbeddingBakeoffRunner:
                 quality=quality,
                 gate_passed=gate_passed,
                 gate_failures=gate_failures,
-                skipped=not probe_clean,
-                skip_reason="" if probe_clean else "throughput probe lane was not clean",
+                throughput_complete=probe_clean,
+                throughput_error=probe_error[:300],
+                skipped=not scored_index_clean,
+                skip_reason=(
+                    "scored index ID set changed during throughput probe"
+                    if not scored_index_clean
+                    else ""
+                ),
             )
         except Exception as exc:  # noqa: BLE001 — lane isolation
             return self._skipped(provider_id, spec, str(exc)[:200])
@@ -375,12 +426,11 @@ class EmbeddingBakeoffRunner:
 
     def _measure_throughput_fresh(
         self, provider_id: str, spec: Any
-    ) -> tuple[float, bool]:
-        """Encode throughput on a SEPARATE fresh adapter/index.
+    ) -> tuple[float, bool, str]:
+        """Measure throughput on one fresh adapter with no scored index.
 
-        Returns (docs_per_sec, clean) where clean=True when the probe
-        adapter started and finished with exactly the probe documents —
-        it never touches the scored index.
+        Returns ``(docs_per_sec, clean, error)``. In normal manifest-backed
+        operation this method runs inside its own capped process.
         """
         factory = self._lane_factory[provider_id]
         probe: ProviderAdapter | None = None
@@ -395,10 +445,11 @@ class EmbeddingBakeoffRunner:
                 probe.ingest(f"enc-{i:04d}", text, scope=scope)
             encode_elapsed = time.perf_counter() - t0
             tps = len(encode_texts) / encode_elapsed if encode_elapsed > 0 else 0.0
-            return tps, True
+            return tps, True, ""
         except Exception as exc:  # noqa: BLE001
-            print(f"  [{provider_id}] throughput probe failed: {exc}")
-            return 0.0, False
+            error = str(exc)
+            print(f"  [{provider_id}] throughput probe failed: {error}")
+            return 0.0, False, error
         finally:
             if probe is not None:
                 try:
@@ -547,7 +598,27 @@ def _lane_child_entrypoint(payload: dict[str, Any]) -> None:
         corpus_path=Path(payload["corpus_path"]) if payload.get("corpus_path") else None,
     )
     spec = next(s for pid, s in enumerate_providers(manifest) if pid == provider_id)
-    lane = runner._measure_lane_inline(provider_id, spec)  # noqa: SLF001
+    operation = str(payload.get("operation", "lane"))
+    if operation == "throughput":
+        encode_tps, clean, error = runner._measure_throughput_fresh(  # noqa: SLF001
+            provider_id, spec
+        )
+        print(
+            json.dumps(
+                {
+                    "encode_throughput_docs_per_sec": encode_tps,
+                    "throughput_clean": clean,
+                    "throughput_error": error,
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    if operation != "lane":
+        raise SystemExit(f"unsupported child operation: {operation}")
+    lane = runner._measure_lane_inline(  # noqa: SLF001
+        provider_id, spec, measure_throughput=False
+    )
     data = asdict(lane)
     data["quality"] = asdict(lane.quality)
     print(json.dumps(data, sort_keys=True))

@@ -136,6 +136,37 @@ def test_hash_lane_runs_and_records_model_tier(tmp_path: Path) -> None:
     assert lane.artifact_bytes == 0  # hash has no model artefact
 
 
+def test_scoring_child_can_defer_throughput_probe_without_a_second_model(
+    tmp_path: Path,
+) -> None:
+    """A capped scorer must not construct the probe model in the same process.
+
+    Qwen fits once under the locked 4 GiB cap but not twice.  Deferring the
+    probe is therefore required for a valid scored result, not an optimisation.
+    """
+    manifest = _manifest(tmp_path)
+    calls = 0
+
+    def one_model_factory() -> object:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise MemoryError("second model allocation must not happen in scorer")
+        return _hash_factory(tmp_path / "scored")
+
+    runner = EmbeddingBakeoffRunner(
+        manifest=manifest,
+        lane_factory={"hash": one_model_factory},
+    )
+    spec = next(spec for provider_id, spec in enumerate_providers(manifest) if provider_id == "hash")
+
+    lane = runner._measure_lane_inline("hash", spec, measure_throughput=False)  # noqa: SLF001
+
+    assert lane.skipped is False, lane.skip_reason
+    assert calls == 1
+    assert lane.encode_throughput_docs_per_sec == 0.0
+
+
 def test_missing_lane_factory_is_recorded_not_dropped(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     runner = EmbeddingBakeoffRunner(manifest=manifest, lane_factory={})
@@ -234,9 +265,15 @@ def test_manifest_path_forces_fresh_subprocess_lane(tmp_path: Path) -> None:
     finally:
         monkeypatch.undo()
 
-    # Lane measurement + throughput probe both run in fresh subprocesses
-    # (audit CRITICAL 3 / HIGH 7); at minimum the lane call must exist.
-    assert len(calls) >= 1, "lane must run via a subprocess when manifest_path is set"
-    assert "severian.benchmarks.embedding_runner" in " ".join(calls[0])
+    # Scoring and throughput must be independently capped children: a Qwen
+    # scorer fits within 4 GiB once, while a second in-process model does not.
+    child_calls = [
+        call
+        for call in calls
+        if "severian.benchmarks.embedding_runner" in " ".join(call)
+    ]
+    assert len(child_calls) == 2
+    payloads = [json.loads(call[-1]) for call in child_calls]
+    assert [payload["operation"] for payload in payloads] == ["lane", "throughput"]
     lane = result.lanes[0]
     assert lane.skipped is False, lane.skip_reason

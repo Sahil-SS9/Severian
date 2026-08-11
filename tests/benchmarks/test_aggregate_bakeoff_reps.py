@@ -19,6 +19,8 @@ def _lane(
     gate_passed: bool | None = True,
     skipped: bool = False,
     skip_reason: str = "",
+    throughput_complete: bool = True,
+    throughput_error: str = "",
     stale_fact_rate: float = 0.0,
     cross_scope_leakage: float = 0.0,
 ) -> dict[str, Any]:
@@ -29,6 +31,8 @@ def _lane(
         "peak_rss_mb": 100.0,
         "skipped": skipped,
         "skip_reason": skip_reason,
+        "throughput_complete": throughput_complete,
+        "throughput_error": throughput_error,
         "gate_passed": gate_passed,
         "gate_failures": [] if gate_passed else ["persisted_failure"],
         "quality": {
@@ -80,6 +84,32 @@ def test_aggregate_requires_every_frozen_gate_and_every_rep_to_pass(tmp_path: Pa
     assert "stale_fact_rate" in result["lanes"]["stale"]["gate_failures"]
     assert result["lanes"]["cross-scope"]["gate"]["cross_scope_leakage"] == 0.1
     assert "cross_scope_leakage" in result["lanes"]["cross-scope"]["gate_failures"]
+
+
+def test_aggregate_rejects_incomplete_throughput_evidence_in_any_rep(tmp_path: Path) -> None:
+    """A quality pass cannot select a model without all throughput proofs."""
+    for rep in (1, 2, 3):
+        _write_rep(
+            tmp_path,
+            rep,
+            [
+                _lane(
+                    "qwen-0.6b-1024",
+                    throughput_complete=rep != 2,
+                    throughput_error="probe timeout" if rep == 2 else "",
+                )
+            ],
+        )
+
+    result = aggregate.aggregate(tmp_path)
+    lane = result["lanes"]["qwen-0.6b-1024"]
+
+    assert lane["rep_throughput_complete"] == [True, False, True]
+    assert lane["throughput_complete"] is False
+    assert lane["throughput_errors"] == ["", "probe timeout", ""]
+    assert "rep2:throughput_incomplete" in lane["gate_failures"]
+    assert lane["gate_passed"] is False
+    assert result["verdict"]["model_selection"] == "NO MODEL SELECTED"
 
 
 def test_aggregate_retains_skipped_lanes_and_blocks_selection_for_incomplete_matrix(tmp_path: Path) -> None:

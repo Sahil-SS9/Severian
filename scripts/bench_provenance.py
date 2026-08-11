@@ -19,6 +19,49 @@ from pathlib import Path
 from typing import Any
 
 
+def _dirty_patch_sha256(repo_root: Path, status: str) -> str | None:
+    """Hash every uncommitted source byte represented by ``git status``.
+
+    ``git diff HEAD`` covers staged and unstaged tracked changes. Git does not
+    include untracked content in that diff, so append each untracked file's
+    relative path, mode and bytes under unambiguous binary delimiters.
+    """
+    if not status:
+        return None
+    tracked_diff = subprocess.run(
+        ["git", "diff", "--binary", "--no-ext-diff", "HEAD"],
+        check=True,
+        capture_output=True,
+        cwd=repo_root,
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        check=True,
+        capture_output=True,
+        cwd=repo_root,
+    ).stdout.split(b"\0")
+    digest = hashlib.sha256()
+    digest.update(b"severian-dirty-patch-v1\0status\0")
+    digest.update(status.encode())
+    digest.update(b"\0tracked-diff\0")
+    digest.update(tracked_diff)
+    for raw_path in sorted(path for path in untracked if path):
+        relative = raw_path.decode("utf-8", "surrogateescape")
+        path = repo_root / relative
+        stat = path.lstat()
+        digest.update(b"\0untracked-path\0")
+        digest.update(raw_path)
+        digest.update(b"\0mode\0")
+        digest.update(str(stat.st_mode).encode())
+        if path.is_symlink():
+            digest.update(b"\0symlink-target\0")
+            digest.update(os.readlink(path).encode("utf-8", "surrogateescape"))
+        else:
+            digest.update(b"\0contents\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def collect_provenance(
     repo_root: Path,
     command: list[str],
@@ -72,6 +115,7 @@ def collect_provenance(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=repo_root
         ).stdout.strip(),
         "dirty_patch": dirty if dirty else "clean",
+        "dirty_patch_sha256": _dirty_patch_sha256(repo_root, dirty),
         "model_revision": model_revision,
         "runtime_versions": runtime,
         "hardware": {"cpu": cpu_model, "cores": os.cpu_count()},

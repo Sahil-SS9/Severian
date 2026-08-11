@@ -92,7 +92,11 @@ def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     return summary
 
 
-def _gate_failures(gate_values: dict[str, float], rep_passes: list[bool]) -> list[str]:
+def _gate_failures(
+    gate_values: dict[str, float],
+    rep_passes: list[bool],
+    throughput_passes: list[bool],
+) -> list[str]:
     failures: list[str] = []
     for metric, threshold, operator in _GATE_RULES:
         value = gate_values[metric]
@@ -104,6 +108,11 @@ def _gate_failures(gate_values: dict[str, float], rep_passes: list[bool]) -> lis
         f"rep{rep}:persisted_gate_failed"
         for rep, passed in zip(REPS, rep_passes, strict=True)
         if not passed
+    )
+    failures.extend(
+        f"rep{rep}:throughput_incomplete"
+        for rep, complete in zip(REPS, throughput_passes, strict=True)
+        if not complete
     )
     return failures
 
@@ -133,14 +142,19 @@ def aggregate(base: Path) -> dict[str, Any]:
             continue
 
         rep_passes = [row.get("gate_passed") is True for row in rows]
+        throughput_passes = [row.get("throughput_complete") is True for row in rows]
+        throughput_errors = [str(row.get("throughput_error", "")) for row in rows]
         gate_values = _metric_values(rows)
-        failures = _gate_failures(gate_values, rep_passes)
+        failures = _gate_failures(gate_values, rep_passes, throughput_passes)
         lane = {
             "skipped": False,
             "n": len(rows),
             **_metric_summary(rows),
             "gate": gate_values,
             "rep_gate_passed": rep_passes,
+            "rep_throughput_complete": throughput_passes,
+            "throughput_complete": all(throughput_passes),
+            "throughput_errors": throughput_errors,
             "gate_failures": failures,
             "gate_passed": not failures,
         }
