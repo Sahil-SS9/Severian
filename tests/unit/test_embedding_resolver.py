@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import pytest  # noqa: E402
 
 from severian.infrastructure.embedding_resolver import (  # noqa: E402
+    EmbeddingSelectionError,
     parse_embedding_selector,
     resolve_embedding,
 )
@@ -30,10 +31,11 @@ def test_parse_canonical_selector() -> None:
     assert parse_embedding_selector("GRANITE") == "granite"
     assert parse_embedding_selector("  granite  ") == "granite"
     assert parse_embedding_selector("hash") == "hash"
-    # Unknown values never select a semantic space.
-    assert parse_embedding_selector("qwen3") == "hash"
-    assert parse_embedding_selector("granit") == "hash"
-    assert parse_embedding_selector("gpt") == "hash"
+    # Only the explicit default values choose hash. Unknown values must fail
+    # visibly: a Qwen typo must never create a fresh hash vector space.
+    for unknown in ("qwen3", "granit", "gpt"):
+        with pytest.raises(EmbeddingSelectionError, match="unsupported embedding selector"):
+            parse_embedding_selector(unknown)
 
 
 def test_hash_selector_returns_hash_embedding() -> None:

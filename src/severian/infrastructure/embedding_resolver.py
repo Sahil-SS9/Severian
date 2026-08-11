@@ -45,19 +45,19 @@ class EmbeddingSelectionError(RuntimeError):
 def parse_embedding_selector(value: str | None) -> str:
     """Canonical parse of the embedding selector (env value or None).
 
-    Returns ``"qwen"``, ``"granite"`` or ``"hash"``. Unknown values
-    are treated as ``hash`` — the deterministic default space — and are
-    never treated as a semantic selection. (A typo like
-    ``SEVERIAN_EMBEDDING=qwen3`` must not silently select hash for a
-    semantic index: the caller decides the space; the index fingerprint
-    guard enforces it.)
+    Returns ``"qwen"``, ``"granite"`` or ``"hash"``. Unset, blank,
+    and explicit ``"hash"`` select the deterministic default; any other
+    non-empty value raises :class:`EmbeddingSelectionError`. A typo such as
+    ``SEVERIAN_EMBEDDING=qwen3`` must never create a fresh hash vector space.
     """
     raw = (value or "").strip().lower()
+    if not raw or raw == HASH_ENV_VALUE:
+        return HASH_ENV_VALUE
     if raw == QWEN_ENV_VALUE:
         return QWEN_ENV_VALUE
     if raw == GRANITE_ENV_VALUE:
         return GRANITE_ENV_VALUE
-    return HASH_ENV_VALUE
+    raise EmbeddingSelectionError(f"unsupported embedding selector: {raw!r}")
 
 
 def resolve_embedding(selector: str | None = None, *, dimension: int | None = None) -> Any:

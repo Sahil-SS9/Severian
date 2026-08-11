@@ -104,7 +104,14 @@ class QwenEmbedding:
                 f"Qwen encoder returned {len(values)} dims, expected {self.dimension} "
                 f"(truncate_dim={self.dimension})"
             )
-        norm = math.sqrt(math.fsum(value * value for value in values))
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("Qwen encoded vector contains non-finite values")
+        try:
+            norm = math.sqrt(math.fsum(value * value for value in values))
+        except OverflowError as exc:
+            raise ValueError("Qwen encoded vector norm overflowed") from exc
+        if not math.isfinite(norm):
+            raise ValueError("Qwen encoded vector norm overflowed")
         if not norm > 0.0:
             raise ValueError("Qwen encoded vector has zero norm")
         normalised = [value / norm for value in values]

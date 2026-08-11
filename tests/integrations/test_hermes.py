@@ -477,31 +477,32 @@ def test_register_entry_point_hands_provider_to_context(tmp_path, monkeypatch):
 
 
 def test_resolve_embedding_default_is_hash(monkeypatch):
-    # P1: with SEVERIAN_EMBEDDING unset (or any non-granite value), the
-    # zero-arg env path must keep the deterministic hash embedding.
+    # P1: with SEVERIAN_EMBEDDING unset, the zero-arg env path keeps the
+    # explicit deterministic default hash embedding.
     from severian.infrastructure.vector import HashEmbedding
     from severian.integrations.hermes import _resolve_embedding
 
     monkeypatch.delenv("SEVERIAN_EMBEDDING", raising=False)
     assert isinstance(_resolve_embedding(), HashEmbedding)
 
+
+def test_resolve_embedding_rejects_unknown_selector(monkeypatch):
+    from severian.infrastructure.embedding_resolver import EmbeddingSelectionError
+    from severian.integrations.hermes import _resolve_embedding
+
     monkeypatch.setenv("SEVERIAN_EMBEDDING", "some-other-backend")
-    assert isinstance(_resolve_embedding(), HashEmbedding)
+    with pytest.raises(EmbeddingSelectionError, match="unsupported embedding selector"):
+        _resolve_embedding()
 
 
-def test_resolve_embedding_granite_selects_neural_or_hash(monkeypatch):
-    # P1: SEVERIAN_EMBEDDING=granite must select the Granite provider
-    # (dimension 384), degrading safely to hash when the neural deps /
-    # model are unavailable in this environment.
+def test_resolve_embedding_granite_stays_named_legacy_provider(monkeypatch):
+    # P1: the legacy explicit selection must remain Granite, never hash.
     from severian.infrastructure.granite_embedding import GraniteR2Embedding
-    from severian.infrastructure.vector import HashEmbedding
     from severian.integrations.hermes import _resolve_embedding
 
     monkeypatch.setenv("SEVERIAN_EMBEDDING", "granite")
     embedding = _resolve_embedding()
-    # or_hash() returns the neural provider when loaded, else hash at
-    # the same dimension. Either way it must expose dimension == 384.
-    assert isinstance(embedding, (GraniteR2Embedding, HashEmbedding))
+    assert isinstance(embedding, GraniteR2Embedding)
     assert embedding.dimension == 384
 
 

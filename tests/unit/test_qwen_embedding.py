@@ -80,6 +80,25 @@ def test_qwen_rejects_ignored_truncation() -> None:
         provider.encode("document")
 
 
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -float("inf")])
+def test_qwen_rejects_nonfinite_values(invalid_value: float) -> None:
+    provider = QwenEmbedding()
+    provider._model = _RecordingModel()
+    provider._model.encode = lambda _text, **_kwargs: [invalid_value] * QWEN_DIMENSION  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="non-finite"):
+        provider.encode("document")
+
+
+def test_qwen_rejects_finite_norm_overflow() -> None:
+    provider = QwenEmbedding()
+    provider._model = _RecordingModel()
+    provider._model.encode = lambda _text, **_kwargs: [1e154] * QWEN_DIMENSION  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="norm overflowed"):
+        provider.encode("document")
+
+
 def test_qwen_hash_fallback_preserves_384_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = QwenEmbedding()
     monkeypatch.setattr(provider, "load", lambda: False)
