@@ -103,6 +103,13 @@ class NativeAccelAdapter:
                 native_rows = [(mid, content, blob) for mid, content, blob in rows]
                 result = _native.exact_top_k(query_vector, native_rows, k)
                 return [VectorHit(memory_id=mid, score=float(score)) for mid, score in result]
+            except ValueError as exc:
+                # The Rust boundary uses ValueError for malformed vector input.
+                # Preserve LocalVectorIndex's public storage-contract error.
+                self.diagnostics.failures += 1
+                from severian.domain.errors import VectorFormatError
+
+                raise VectorFormatError(str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 - normalise + fail closed
                 self.diagnostics.failures += 1
                 if self.requested == "rust":
