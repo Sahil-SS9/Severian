@@ -27,6 +27,87 @@ def data_root(tmp_path: Path) -> Path:
     return root
 
 
+def test_rebuild_vectors_rebuilds_legacy_projection_without_opening_it_first(data_root: Path):
+    """The repair command must reach side-by-side rebuild when the live vector file is legacy."""
+    import sqlite3
+
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    scope_flags = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
+    assert runner.invoke(
+        cli,
+        [
+            "ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags,
+            "--content", "A rebuild command must preserve canonical memories.", "--source", "{}",
+        ],
+    ).exit_code == 0
+    assert runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    ).exit_code == 0
+
+    # Simulate the old unversioned vector projection.  Canonical data stays intact.
+    connection = sqlite3.connect(vectors)
+    connection.execute("DELETE FROM vector_space_meta")
+    connection.commit()
+    connection.close()
+
+    result = runner.invoke(
+        cli, ["rebuild-vectors", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope_flags]
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output.strip().splitlines()[-1])
+    assert body["status"] == "swapped"
+
+
+def test_rebuild_vectors_all_scopes_preserves_every_active_scope(data_root: Path):
+    """A whole-file swap must rebuild every scope, including a legacy projection."""
+    import sqlite3
+
+    from severian.domain.models import Scope
+    from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
+
+    runner = CliRunner()
+    db = data_root / "severian.db"
+    fts = data_root / "fts.db"
+    vectors = data_root / "vectors.db"
+    scope_a = ["--tenant", "t-a", "--profile", "p-a", "--collection", "c-a", "--agent", "a-a", "--session", "s-a"]
+    scope_b = ["--tenant", "t-b", "--profile", "p-b", "--collection", "c-b", "--agent", "a-b", "--session", "s-b"]
+    for scope, content in ((scope_a, "Memory from the first scope."), (scope_b, "Memory from the second scope.")):
+        result = runner.invoke(
+            cli,
+            [
+                "ingest", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), *scope,
+                "--content", content, "--source", "{}",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+    assert runner.invoke(
+        cli, ["work", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--max-jobs", "10"]
+    ).exit_code == 0
+
+    connection = sqlite3.connect(vectors)
+    connection.execute("DELETE FROM vector_space_meta")
+    connection.commit()
+    connection.close()
+
+    result = runner.invoke(
+        cli, ["rebuild-vectors", "--database", str(db), "--fts", str(fts), "--vectors", str(vectors), "--all-scopes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output.strip().splitlines()[-1])
+    assert body["status"] == "swapped"
+    scope_a_model = Scope(tenant_id="t-a", profile_id="p-a", collection_id="c-a", agent_id="a-a", session_id="s-a")
+    scope_b_model = Scope(tenant_id="t-b", profile_id="p-b", collection_id="c-b", agent_id="a-b", session_id="s-b")
+    index = LocalVectorIndex(vectors, HashEmbedding())
+    assert index.count(scope_a_model) == 1
+    assert index.count(scope_b_model) == 1
+    index.close()
+
+
 def test_ingest_command_writes_canonical_record_and_enqueues_job(data_root: Path):
     runner = CliRunner()
     result = runner.invoke(

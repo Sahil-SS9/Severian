@@ -469,11 +469,16 @@ def rebuild_vectors(
     database: Path = typer.Option(..., "--database"),
     fts: Path = typer.Option(..., "--fts"),
     vectors: Path = typer.Option(..., "--vectors"),
-    tenant: str = typer.Option(..., "--tenant"),
-    profile: str = typer.Option(..., "--profile"),
-    collection: str = typer.Option(..., "--collection"),
-    agent: str = typer.Option(..., "--agent"),
-    session: str = typer.Option(..., "--session"),
+    tenant: str | None = typer.Option(None, "--tenant"),
+    profile: str | None = typer.Option(None, "--profile"),
+    collection: str | None = typer.Option(None, "--collection"),
+    agent: str | None = typer.Option(None, "--agent"),
+    session: str | None = typer.Option(None, "--session"),
+    all_scopes: bool = typer.Option(
+        False,
+        "--all-scopes",
+        help="Rebuild every active canonical-memory scope in one projection swap.",
+    ),
     dsn: str | None = typer.Option(None, "--dsn"),
     keep_rollback: bool = typer.Option(
         True,
@@ -483,29 +488,63 @@ def rebuild_vectors(
 ) -> None:
     """Rebuild vector projections side-by-side, verify, then swap atomically.
 
-    The live index is never rebuilt in place. A candidate is built next
-    to it (new file for sqlite, new table for PG), verified (count,
-    digest, dimension/fingerprint, retrieval canaries, deterministic
-    ranking), then swapped atomically. The pre-swap index is kept as
-    rollback until cleanup. Honours SEVERIAN_EMBEDDING via the central
-    resolver — the rebuilt space always matches the gateways'.
+    This is an operator maintenance command.  Unlike normal CLI commands it
+    opens only canonical storage: a legacy or mismatched projection is the
+    object being replaced and must never be opened before the side-by-side
+    rebuild begins.  ``--all-scopes`` is required when a shared projection
+    holds multiple memory scopes.
     """
+    del fts  # Retained as an explicit legacy CLI flag; vector rebuild does not open lexical projections.
     from severian.infrastructure.embedding_resolver import embedding_from_env
     from severian.infrastructure.rebuild import rebuild_pg_vectors, rebuild_sqlite_vectors
 
-    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    scope_values = {
+        "tenant": tenant,
+        "profile": profile,
+        "collection": collection,
+        "agent": agent,
+        "session": session,
+    }
+    if all_scopes:
+        supplied = [name for name, value in scope_values.items() if value is not None]
+        if supplied:
+            raise typer.BadParameter("--all-scopes cannot be combined with individual scope flags")
+        scope: Scope | None = None
+    else:
+        missing = [name for name, value in scope_values.items() if not value]
+        if missing:
+            raise typer.BadParameter(
+                "individual rebuild requires all scope flags; use --all-scopes for the complete projection"
+            )
+        scope = _scope_from_flags(
+            tenant=tenant or "",
+            profile=profile or "",
+            collection=collection or "",
+            agent=agent or "",
+            session=session or "",
+        )
+
+    repository: Any
+    if dsn:
+        from severian.infrastructure.postgresql import PostgreSQLBackend
+
+        repository = PostgreSQLBackend(dsn=dsn)
+    else:
+        from severian.infrastructure.sqlite import SQLiteRepository
+
+        repository = SQLiteRepository(database)
+    repository.initialize()
     try:
-        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
         embedding = embedding_from_env()
         if dsn:
-            result = rebuild_pg_vectors(dsn, bundle.repository, scope, embedding, keep_rollback=keep_rollback)
+            result = rebuild_pg_vectors(dsn, repository, scope, embedding, keep_rollback=keep_rollback)
         else:
-            result = rebuild_sqlite_vectors(vectors, bundle.repository, scope, embedding, keep_rollback=keep_rollback)
+            result = rebuild_sqlite_vectors(vectors, repository, scope, embedding, keep_rollback=keep_rollback)
         payload: dict[str, object] = {
             "format": "severian-v1",
             "status": result.status,
             "provider_id": result.provider_id,
-            "scope": str(scope),
+            "scope": "all-active-memory-scopes" if scope is None else str(scope),
         }
         if result.verification is not None:
             payload["verification"] = {
@@ -526,7 +565,7 @@ def rebuild_vectors(
         if result.status != "swapped":
             raise typer.Exit(code=1)
     finally:
-        bundle.close()
+        repository.close()
 
 
 @cli.command("rollback")

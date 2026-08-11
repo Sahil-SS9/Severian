@@ -20,11 +20,12 @@ programme exists to prevent).
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from severian.domain.models import Memory, Scope
 
@@ -71,8 +72,123 @@ class RebuildResult:
     candidate_path: str | None = None
 
 
-def _canonical_rows(repository: RebuildSource, scope: Scope) -> list[Memory]:
-    return list(repository.list_memories(scope))
+@runtime_checkable
+class ScopeDiscoverySource(RebuildSource, Protocol):
+    """Operator-only discovery of every active-memory scope in a store."""
+
+    def list_memory_scopes(self) -> list[Scope]: ...
+
+
+def _scope_key(scope: Scope) -> tuple[str, str, str, str, str]:
+    values = scope.model_dump()
+    return (
+        values["tenant_id"],
+        values["profile_id"],
+        values["collection_id"],
+        values["agent_id"],
+        values["session_id"],
+    )
+
+
+def _rebuild_scopes(repository: RebuildSource, scope: Scope | None) -> list[Scope]:
+    """Resolve one explicit scope or every active scope, deterministically."""
+    if scope is not None:
+        return [scope]
+    if not isinstance(repository, ScopeDiscoverySource):
+        raise TypeError("all-scope rebuild requires a repository with list_memory_scopes()")
+    scopes = repository.list_memory_scopes()
+    by_key = {_scope_key(candidate): candidate for candidate in scopes}
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def _canonical_rows(repository: RebuildSource, scopes: list[Scope]) -> list[Memory]:
+    """Collect active canonical memories across the requested scopes once."""
+    rows: list[Memory] = []
+    memory_ids: set[str] = set()
+    for scope in scopes:
+        for memory in repository.list_memories(scope):
+            if memory.scope != scope:
+                raise ValueError("rebuild source returned a memory from the wrong scope")
+            if memory.id in memory_ids:
+                raise ValueError(f"duplicate memory id across rebuild scopes: {memory.id}")
+            memory_ids.add(memory.id)
+            rows.append(memory)
+    return rows
+
+
+def _sqlite_vector_scope_keys(path: Path) -> set[tuple[str, str, str, str, str]]:
+    """Read existing projection scope keys without opening it through an embedding."""
+    if not path.exists():
+        return set()
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_vectors'"
+            ).fetchone()
+            if table is None:
+                return set()
+            rows = connection.execute(
+                """SELECT DISTINCT tenant_id, profile_id, collection_id, agent_id, session_id
+                   FROM memory_vectors"""
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise ValueError(f"cannot inspect existing vector projection {path}: {exc}") from exc
+    return {
+        (str(row[0]), str(row[1]), str(row[2]), str(row[3]), str(row[4]))
+        for row in rows
+    }
+
+
+def _partial_sqlite_rebuild_error(path: Path, scopes: list[Scope]) -> str | None:
+    existing = _sqlite_vector_scope_keys(path)
+    requested = {_scope_key(scope) for scope in scopes}
+    if existing - requested:
+        return (
+            "refusing partial vector rebuild: the shared SQLite index contains other scopes; "
+            "rebuild all scopes together so one atomic swap cannot drop their vectors"
+        )
+    return None
+
+
+def _pg_vector_scope_keys(dsn: str) -> set[tuple[str, str, str, str, str]]:
+    """Read current PostgreSQL projection scopes without constructing an embedding index."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
+
+    engine = _pg_engine(dsn)
+    try:
+        try:
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """SELECT DISTINCT tenant_id, profile_id, collection_id, agent_id, session_id
+                           FROM memory_vectors"""
+                    )
+                ).all()
+        except ProgrammingError as exc:
+            if getattr(exc.orig, "sqlstate", "") == "42P01":
+                return set()
+            raise ValueError(f"cannot inspect existing vector projection: {exc}") from exc
+    finally:
+        engine.dispose()
+    return {
+        (str(row[0]), str(row[1]), str(row[2]), str(row[3]), str(row[4]))
+        for row in rows
+    }
+
+
+def _partial_pg_rebuild_error(dsn: str, scopes: list[Scope]) -> str | None:
+    existing = _pg_vector_scope_keys(dsn)
+    requested = {_scope_key(scope) for scope in scopes}
+    if existing - requested:
+        return (
+            "refusing partial vector rebuild: the shared PostgreSQL index contains other scopes; "
+            "rebuild all scopes together so one atomic swap cannot drop their vectors"
+        )
+    return None
 
 
 def _canonical_digest(memories: list[Memory]) -> str:
@@ -101,55 +217,67 @@ def _sample_canaries(memories: list[Memory], limit: int = 8) -> list[Memory]:
 def verify_candidate(
     vector: Any,
     repository: RebuildSource,
-    scope: Scope,
+    scopes: Scope | list[Scope],
     embedding: Any,
     memories: list[Memory],
 ) -> RebuildVerification:
-    """Run the full verification contract against a candidate index.
-
-    Count + digest + dimension/fingerprint + canary retrieval +
-    determinism. The candidate is built with the SAME embedding as the
-    live index (caller passes it), so the fingerprint check is a
-    defensive cross-check that the candidate was really built with the
-    intended space.
-    """
+    """Verify a rebuilt projection across every scope that will share its file/table."""
+    del repository  # callers prefetch canonical rows once; verification is projection-only.
+    requested_scopes: list[Scope]
+    if isinstance(scopes, Scope):
+        requested_scopes = [scopes]
+    else:
+        requested_scopes = scopes
+    if not requested_scopes:
+        raise ValueError("candidate verification requires at least one scope")
     from severian.infrastructure.embedding_registry import resolve_embedding_metadata
 
-    canonical_digest = _canonical_digest(memories)
-    vector_count = vector.count(scope)
-    vector_digest = vector.digest(scope)
+    grouped: dict[tuple[str, str, str, str, str], list[Memory]] = {
+        _scope_key(scope): [] for scope in requested_scopes
+    }
+    for memory in memories:
+        key = _scope_key(memory.scope)
+        if key not in grouped:
+            raise ValueError("candidate verification received a memory outside the rebuild scopes")
+        grouped[key].append(memory)
 
-    canaries = _sample_canaries(memories)
-    hits = 0
-    for memory in canaries:
-        # Query with a distinctive content fragment; expect the memory
-        # in the top-5. Content is opaque redacted text in benchmarks;
-        # in real stores the fragment is the memory's own text.
-        fragment = memory.content[:48]
-        if not fragment.strip():
-            continue
-        results = vector.search(scope, fragment, limit=5)
-        if any(hit.memory_id == memory.id for hit in results):
-            hits += 1
-        elif any(hit.memory_id == memory.id for hit in vector.search(scope, memory.content[:96], limit=5)):
-            hits += 1
+    vector_count = 0
+    digest_match = True
+    canary_hits = 0
+    canary_total = 0
+    deterministic = True
+    for scope in requested_scopes:
+        scoped_memories = grouped[_scope_key(scope)]
+        vector_count += vector.count(scope)
+        digest_match = digest_match and vector.digest(scope) == _canonical_digest(scoped_memories)
 
-    # Determinism: two identical queries must return identical ordering.
-    a = vector.search(scope, "determinism probe query", limit=10)
-    b = vector.search(scope, "determinism probe query", limit=10)
-    deterministic = [(h.memory_id, round(h.score, 6)) for h in a] == [
-        (h.memory_id, round(h.score, 6)) for h in b
-    ]
+        canaries = _sample_canaries(scoped_memories)
+        canary_total += len(canaries)
+        for memory in canaries:
+            fragment = memory.content[:48]
+            if not fragment.strip():
+                continue
+            results = vector.search(scope, fragment, limit=5)
+            if any(hit.memory_id == memory.id for hit in results):
+                canary_hits += 1
+            elif any(hit.memory_id == memory.id for hit in vector.search(scope, memory.content[:96], limit=5)):
+                canary_hits += 1
+
+        a = vector.search(scope, "determinism probe query", limit=10)
+        b = vector.search(scope, "determinism probe query", limit=10)
+        deterministic = deterministic and [
+            (hit.memory_id, round(hit.score, 6)) for hit in a
+        ] == [(hit.memory_id, round(hit.score, 6)) for hit in b]
 
     meta = resolve_embedding_metadata(embedding)
     return RebuildVerification(
         canonical_count=len(memories),
         vector_count=vector_count,
-        digest_match=vector_digest == canonical_digest,
+        digest_match=digest_match,
         dimension=meta.dimension,
         fingerprint=meta.fingerprint,
-        canary_hits=hits,
-        canary_total=len(canaries),
+        canary_hits=canary_hits,
+        canary_total=canary_total,
         deterministic=deterministic,
     )
 
@@ -160,16 +288,17 @@ def verify_candidate(
 def rebuild_sqlite_vectors(
     vectors_path: str | Path,
     repository: RebuildSource,
-    scope: Scope,
+    scope: Scope | None,
     embedding: Any,
     *,
     keep_rollback: bool = True,
 ) -> RebuildResult:
-    """Atomic side-by-side rebuild of a LocalVectorIndex file.
+    """Atomically rebuild one complete SQLite vector projection.
 
-    Builds ``<name>.rebuild-<nonce>.db`` next to the live file, verifies
-    it, then ``os.replace`` (atomic on POSIX). The old file is kept as
-    ``<name>.bak-<nonce>.db`` for rollback until cleanup.
+    ``scope`` rebuilds exactly one scope only when no other scope exists in
+    the shared projection.  ``scope=None`` discovers and rebuilds every active
+    canonical-memory scope together.  This prevents a file-level atomic swap
+    from silently discarding vectors that belong to another scope.
     """
     from severian.infrastructure.vector import LocalVectorIndex
 
@@ -177,17 +306,20 @@ def rebuild_sqlite_vectors(
     nonce = _nonce()
     candidate = path.with_name(f"{path.name}.rebuild-{nonce}.db")
     rollback = path.with_name(f"{path.name}.bak-{nonce}.db")
-
     result = RebuildResult(provider_id="sqlite", status="failed", candidate_path=str(candidate))
 
     try:
-        memories = _canonical_rows(repository, scope)
+        scopes = _rebuild_scopes(repository, scope)
+        partial_error = _partial_sqlite_rebuild_error(path, scopes)
+        if partial_error is not None:
+            result.status = "aborted"
+            result.error = partial_error
+            return result
+        memories = _canonical_rows(repository, scopes)
         index = LocalVectorIndex(candidate, embedding)
         try:
-            # LocalVectorIndex.rebuild is typed against the full canonical
-            # port; we only need list_memories, so cast the narrow source.
-            index.rebuild(cast(Any, repository), scope)
-            verification = verify_candidate(index, repository, scope, embedding, memories)
+            index.upsert_many(memories)
+            verification = verify_candidate(index, repository, scopes, embedding, memories)
             result.verification = verification
             if not verification.passed:
                 result.status = "aborted"
@@ -224,7 +356,7 @@ def rebuild_sqlite_vectors(
 def rebuild_pg_vectors(
     dsn: str,
     repository: RebuildSource,
-    scope: Scope,
+    scope: Scope | None,
     embedding: Any,
     *,
     keep_rollback: bool = True,
@@ -244,12 +376,18 @@ def rebuild_pg_vectors(
     result = RebuildResult(provider_id="postgres", status="failed", candidate_path=table_name)
 
     try:
-        memories = _canonical_rows(repository, scope)
+        scopes = _rebuild_scopes(repository, scope)
+        partial_error = _partial_pg_rebuild_error(dsn, scopes)
+        if partial_error is not None:
+            result.status = "aborted"
+            result.error = partial_error
+            return result
+        memories = _canonical_rows(repository, scopes)
         index = PGVectorIndex(dsn, embedding, table_name=table_name)
         try:
             index.initialize()
-            index.rebuild(cast(Any, repository), scope)
-            verification = verify_candidate(index, repository, scope, embedding, memories)
+            index.upsert_many(memories)
+            verification = verify_candidate(index, repository, scopes, embedding, memories)
             result.verification = verification
             if not verification.passed:
                 result.status = "aborted"

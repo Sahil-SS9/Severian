@@ -944,6 +944,39 @@ class SQLiteRepository:
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
 
+    def list_memory_scopes(self) -> list[Scope]:
+        """List every active-memory scope for local operator projection rebuilds."""
+        query = (
+            select(
+                records.c.tenant_id,
+                records.c.profile_id,
+                records.c.collection_id,
+                records.c.agent_id,
+                records.c.session_id,
+            )
+            .where(
+                records.c.record_type == "memory",
+                func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+            )
+            .distinct()
+            .order_by(
+                records.c.tenant_id,
+                records.c.profile_id,
+                records.c.collection_id,
+                records.c.agent_id,
+                records.c.session_id,
+            )
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(query).mappings().all()
+        scopes: list[Scope] = []
+        for row in rows:
+            values = {key: row[key] for key in ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")}
+            if any(not isinstance(value, str) or not value for value in values.values()):
+                raise ValueError("active memory has an invalid persisted scope")
+            scopes.append(Scope(**values))
+        return scopes
+
     def list_memories_history(self, scope: Scope) -> list[Memory]:
         """List ALL memories in scope, including superseded revisions."""
         self._require_scope(scope)

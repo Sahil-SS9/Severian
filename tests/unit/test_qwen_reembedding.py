@@ -49,6 +49,13 @@ class _Repository:
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [memory for memory in self._memories if memory.scope == scope]
 
+    def list_memory_scopes(self) -> list[Scope]:
+        scopes: dict[tuple[str, str, str, str, str], Scope] = {}
+        for memory in self._memories:
+            values = tuple(memory.scope.model_dump().values())
+            scopes[values] = memory.scope
+        return [scopes[key] for key in sorted(scopes)]
+
 
 def _vector(text: str) -> list[float]:
     digest = hashlib.sha256(text.encode()).digest()
@@ -58,14 +65,20 @@ def _vector(text: str) -> list[float]:
     return values
 
 
-def _scope() -> Scope:
-    return Scope(tenant_id="t", profile_id="p", collection_id="c", agent_id="a", session_id="s")
+def _scope(suffix: str = "") -> Scope:
+    return Scope(
+        tenant_id=f"t{suffix}",
+        profile_id=f"p{suffix}",
+        collection_id=f"c{suffix}",
+        agent_id=f"a{suffix}",
+        session_id=f"s{suffix}",
+    )
 
 
-def _memories(scope: Scope, count: int = 12) -> list[Memory]:
+def _memories(scope: Scope, count: int = 12, *, prefix: str = "memory") -> list[Memory]:
     return [
         Memory(
-            id=f"memory-{index:02d}",
+            id=f"{prefix}-{index:02d}",
             content=f"Qwen migration document {index} has its own distinct payload.",
             scope=scope,
             kind="fact",
@@ -84,9 +97,10 @@ def _qwen(model: object | None = None) -> QwenEmbedding:
     return provider
 
 
-def _seed_granite(path: Path, repository: _Repository, scope: Scope) -> None:
+def _seed_granite(path: Path, repository: _Repository, *scopes: Scope) -> None:
     index = LocalVectorIndex(path, _Granite384())
-    index.upsert_many(repository.list_memories(scope))
+    for scope in scopes:
+        index.upsert_many(repository.list_memories(scope))
     index.close()
 
 
@@ -133,4 +147,42 @@ def test_sqlite_qwen_reembedding_restarts_after_interruption_without_mixing(tmp_
     assert restarted.status == "swapped", restarted.error
     qwen = LocalVectorIndex(live, _qwen())
     assert qwen.count(scope) == len(repository.list_memories(scope))
+    qwen.close()
+
+
+def test_sqlite_rebuild_refuses_one_scope_when_live_index_has_other_scopes(tmp_path: Path) -> None:
+    scope_a = _scope("-a")
+    scope_b = _scope("-b")
+    repository = _Repository(
+        _memories(scope_a, count=3, prefix="scope-a") + _memories(scope_b, count=4, prefix="scope-b")
+    )
+    live = tmp_path / "vectors.db"
+    _seed_granite(live, repository, scope_a, scope_b)
+    before = live.read_bytes()
+
+    result = rebuild_sqlite_vectors(live, repository, scope_a, _qwen())
+
+    assert result.status == "aborted"
+    assert result.error is not None and "all scopes" in result.error
+    assert live.read_bytes() == before
+    assert not list(tmp_path.glob("*.rebuild-*"))
+    assert not list(tmp_path.glob("*.bak-*"))
+
+
+def test_sqlite_rebuild_all_scopes_preserves_every_scope(tmp_path: Path) -> None:
+    scope_a = _scope("-a")
+    scope_b = _scope("-b")
+    repository = _Repository(
+        _memories(scope_a, count=3, prefix="scope-a") + _memories(scope_b, count=4, prefix="scope-b")
+    )
+    live = tmp_path / "vectors.db"
+    _seed_granite(live, repository, scope_a, scope_b)
+
+    result = rebuild_sqlite_vectors(live, repository, None, _qwen())
+
+    assert result.status == "swapped", result.error
+    assert result.verification is not None and result.verification.passed
+    qwen = LocalVectorIndex(live, _qwen())
+    assert qwen.count(scope_a) == 3
+    assert qwen.count(scope_b) == 4
     qwen.close()
