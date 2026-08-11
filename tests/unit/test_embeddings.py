@@ -6,7 +6,12 @@ Granite provider degrades gracefully when its optional deps are absent.
 """
 from __future__ import annotations
 
+import logging
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 from severian.composition import build_bundle
 from severian.infrastructure.granite_embedding import GraniteR2Embedding
@@ -77,6 +82,25 @@ def test_default_embedding_is_hash(tmp_path: Path) -> None:
         assert isinstance(bundle.vector.embedding, HashEmbedding)
     finally:
         bundle.close()
+
+
+def test_granite_load_logs_status_without_writing_stdout(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _FakeSentenceTransformer:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _FakeSentenceTransformer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+    provider = GraniteR2Embedding()
+
+    with caplog.at_level(logging.INFO, logger="severian.infrastructure.granite_embedding"):
+        assert provider.load()
+
+    assert capsys.readouterr().out == ""
+    assert "Granite R2 embeddings loaded" in caplog.text
 
 
 def test_granite_falls_back_when_deps_missing() -> None:

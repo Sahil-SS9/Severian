@@ -76,12 +76,13 @@ class QwenEmbedding:
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name, revision=self.revision)
-            print(f"Qwen embeddings loaded (dim={self.dimension}, revision={self.revision[:12]})")
+            logger.info("Qwen embeddings loaded (dim=%s, revision=%s)", self.dimension, self.revision[:12])
             return True
         except Exception as exc:  # pragma: no cover - dependency/cache dependent
-            logger.warning("Qwen embedding load failed: %s", exc)
             if not self._announced_failure:
-                print("Qwen embeddings unavailable — explicit hash fallback remains available")
+                logger.warning(
+                    "Qwen embeddings unavailable; explicit hash fallback remains available: %s", exc
+                )
                 self._announced_failure = True
             return False
 

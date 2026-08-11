@@ -83,12 +83,11 @@ class GraniteR2Embedding:
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
-            print(f"✅ Granite R2 embeddings loaded (dim={self.dimension})")
+            logger.info("Granite R2 embeddings loaded (dim=%s)", self.dimension)
             return True
         except Exception as exc:  # pragma: no cover - env-dependent
-            logger.warning("Granite embedding load failed (%s); falling back to hash", exc)
             if not self._announced_failure:
-                print("⚠️ Granite R2 embeddings unavailable — using hash fallback")
+                logger.warning("Granite embeddings unavailable; using hash fallback: %s", exc)
                 self._announced_failure = True
             return False
 

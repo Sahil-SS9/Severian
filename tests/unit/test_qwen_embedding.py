@@ -6,8 +6,10 @@ instruction on queries only.
 """
 from __future__ import annotations
 
+import logging
 import math
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,25 @@ class _RecordingModel:
     def encode(self, text: str, **kwargs: object) -> list[float]:
         self.calls.append((text, kwargs))
         return [3.0] * QWEN_DIMENSION
+
+
+def test_qwen_load_logs_status_without_writing_stdout(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _FakeSentenceTransformer:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _FakeSentenceTransformer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+    provider = QwenEmbedding()
+
+    with caplog.at_level(logging.INFO, logger="severian.infrastructure.qwen_embedding"):
+        assert provider.load()
+
+    assert capsys.readouterr().out == ""
+    assert "Qwen embeddings loaded" in caplog.text
 
 
 def test_qwen_uses_query_only_instruction_and_384_projection() -> None:
