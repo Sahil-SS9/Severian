@@ -56,7 +56,8 @@ def resolve_embedding_metadata(embedding: Any) -> EmbeddingMetadata:
 
     Recognises:
     - :class:`HashEmbedding` (deterministic fallback space)
-    - :class:`GraniteR2Embedding` (sentence-transformers neural space)
+    - :class:`GraniteR2Embedding` (legacy sentence-transformers space)
+    - :class:`QwenEmbedding` (selected pinned sentence-transformers space)
     - any object exposing ``model_name``/``model_id`` + ``dimension`` +
       ``encode`` (generic sentence-transformers wrapper)
     """
@@ -79,6 +80,29 @@ def resolve_embedding_metadata(embedding: Any) -> EmbeddingMetadata:
             quantisation="none",
             params={"skip_stopwords": bool(getattr(embedding, "skip_stopwords", True)),
                     "stem": bool(getattr(embedding, "stem", True))},
+        )
+
+    # Qwen 0.6B embedding: the model revision and query-only prompt are
+    # code-pinned; never replace either with cache discovery at runtime.
+    if class_name == "QwenEmbedding":
+        model_id = str(getattr(embedding, "model_name", "")).strip() or "Qwen/Qwen3-Embedding-0.6B"
+        revision = str(getattr(embedding, "revision", "")).strip()
+        if not revision:
+            raise ValueError("Qwen embedding is missing its immutable revision")
+        prompt_contract = str(getattr(embedding, "prompt_contract", "") or "")
+        if not prompt_contract:
+            raise ValueError("Qwen embedding is missing its query prompt contract")
+        return EmbeddingMetadata(
+            provider="sentence-transformers",
+            model_id=model_id,
+            revision=revision,
+            dimension=int(embedding.dimension),
+            normalize=True,
+            pooling="mean",
+            prompt_contract=prompt_contract,
+            runtime="sentence-transformers",
+            quantisation="none",
+            params={"encode_query": "query-only", "truncate_dim": int(embedding.dimension)},
         )
 
     # Granite R2 embedding (sentence-transformers based).

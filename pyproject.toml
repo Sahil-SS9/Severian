@@ -61,14 +61,12 @@ python_version = "3.12"
 strict = true
 packages = ["severian"]
 
-# Optional neural-embedding dependency: sentence_transformers / onnxruntime
-# are imported lazily and only present when Granite R2 is installed. Without
-# stubs they fail strict import checking; the provider degrades to the
-# deterministic hash embedding when they are absent, so a missing stub is
-# expected and safe. numpy is a transitive runtime dep of sentence-transformers
-# (not a Severian direct dependency); its 2.x pyi files use `type` statements
-# that mypy's python_version=3.11 parser rejects, so it gets the same
-# treat-as-optional treatment.
+# Optional semantic-embedding runtime: sentence_transformers is imported
+# lazily and must be provisioned explicitly as a CPU-only runtime. Without
+# stubs it fails strict import checking; semantic selection then fails visibly
+# rather than silently changing spaces. numpy is a transitive runtime dependency
+# of sentence-transformers; its 2.x pyi files use syntax that requires the
+# Python 3.12 target, so it gets the same treat-as-optional treatment.
 [[tool.mypy.overrides]]
 module = [
     "sentence_transformers", "sentence_transformers.*",

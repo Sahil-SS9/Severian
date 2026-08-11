@@ -1,0 +1,90 @@
+"""Qwen 0.6B production embedding contract.
+
+The selected provider must preserve the bake-off's exact semantics:
+384-dimensional Matryoshka vectors, L2 normalisation, and the retrieval
+instruction on queries only.
+"""
+from __future__ import annotations
+
+import math
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from severian.infrastructure.embedding_registry import resolve_embedding_metadata  # noqa: E402
+from severian.infrastructure.qwen_embedding import (  # noqa: E402
+    QWEN_DIMENSION,
+    QWEN_MODEL,
+    QWEN_RETRIEVAL_PROMPT,
+    QWEN_REVISION,
+    QwenEmbedding,
+)
+from severian.infrastructure.vector import HashEmbedding  # noqa: E402
+
+
+class _RecordingModel:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def encode(self, text: str, **kwargs: object) -> list[float]:
+        self.calls.append((text, kwargs))
+        return [3.0] * QWEN_DIMENSION
+
+
+def test_qwen_uses_query_only_instruction_and_384_projection() -> None:
+    provider = QwenEmbedding()
+    model = _RecordingModel()
+    provider._model = model
+
+    document = provider.encode("The Kestrel thruster reaches 40 km/s.")
+    query = provider.encode_query("How fast is the Kestrel thruster?")
+
+    document_call, query_call = model.calls
+    assert document_call[1] == {
+        "normalize_embeddings": True,
+        "show_progress_bar": False,
+        "truncate_dim": QWEN_DIMENSION,
+    }
+    assert query_call[1] == {
+        "normalize_embeddings": True,
+        "show_progress_bar": False,
+        "truncate_dim": QWEN_DIMENSION,
+        "prompt": QWEN_RETRIEVAL_PROMPT,
+    }
+    assert len(document) == QWEN_DIMENSION
+    assert len(query) == QWEN_DIMENSION
+    assert math.isclose(sum(value * value for value in document), 1.0, abs_tol=1e-6)
+    assert math.isclose(sum(value * value for value in query), 1.0, abs_tol=1e-6)
+
+
+def test_qwen_metadata_is_pinned_and_has_prompt_contract() -> None:
+    metadata = resolve_embedding_metadata(QwenEmbedding())
+
+    assert metadata.model_id == QWEN_MODEL
+    assert metadata.revision == QWEN_REVISION
+    assert metadata.dimension == QWEN_DIMENSION
+    assert metadata.prompt_contract == QWEN_RETRIEVAL_PROMPT
+    assert metadata.fingerprint
+
+
+def test_qwen_rejects_ignored_truncation() -> None:
+    provider = QwenEmbedding()
+    provider._model = _RecordingModel()
+    provider._model.encode = lambda _text, **_kwargs: [1.0] * 1024  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="expected 384"):
+        provider.encode("document")
+
+
+def test_qwen_hash_fallback_preserves_384_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = QwenEmbedding()
+    monkeypatch.setattr(provider, "load", lambda: False)
+
+    fallback = provider.or_hash()
+
+    assert isinstance(fallback, HashEmbedding)
+    assert fallback.dimension == QWEN_DIMENSION

@@ -66,9 +66,11 @@ def _embedding_from_env() -> Any:
     CLI runs ``severian work`` which REBUILDS vector projections for
     touched scopes, so the selected space MUST match the gateways'.
     The resolver returns the hash embedding explicitly when unset (no
-    None + composition default split-brain), and Granite R2 when
-    selected — with NO silent hash substitution. Imported lazily so the
-    CLI stays fast and dependency-light when Granite is not configured.
+    None + composition default split-brain), and the selected pinned Qwen
+    provider when ``SEVERIAN_EMBEDDING=qwen`` — with NO silent hash
+    substitution. ``granite`` remains an explicit legacy selector for
+    migration and rollback. Imported lazily so the CLI stays fast and
+    dependency-light when a semantic provider is not configured.
     """
     from severian.infrastructure.embedding_resolver import embedding_from_env
 

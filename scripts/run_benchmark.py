@@ -73,14 +73,14 @@ def build_adapters(manifest: Any, args: argparse.Namespace) -> dict[str, Provide
     Vendor-reported providers (``vendor_reported_only``) are never run;
     their claimed metrics are carried in the evidence as citations only.
 
-    ``--embedding granite`` swaps the severian lanes to the pluggable
-    neural embedding (A-1); any load failure falls back to hash.
+    ``--embedding`` is resolved by the central production resolver. A
+    semantic selection therefore stays its named provider; a missing model
+    fails visibly during the canary instead of producing hash evidence
+    labelled as Qwen or Granite.
     """
-    embedding_provider = None
-    if getattr(args, "embedding", "hash") == "granite":
-        from severian.infrastructure.granite_embedding import GraniteR2Embedding
+    from severian.infrastructure.embedding_resolver import resolve_embedding
 
-        embedding_provider = GraniteR2Embedding().or_hash()
+    embedding_provider = resolve_embedding(getattr(args, "embedding", "hash"))
     adapters: dict[str, ProviderAdapter] = {}
     for provider in manifest.providers:
         pid = provider.id
@@ -166,7 +166,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--chroma-venv", type=Path)
     parser.add_argument("--pg-dsn", type=str)
-    parser.add_argument("--embedding", choices=["hash", "granite"], default="hash")
+    parser.add_argument("--embedding", choices=["hash", "qwen", "granite"], default="hash")
     parser.add_argument("--run-id", type=str, default=None,
                         help="unique run namespace for this benchmark invocation "
                              "(C-01: prevents Chroma collection collisions between runs)")

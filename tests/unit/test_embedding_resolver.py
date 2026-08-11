@@ -25,10 +25,13 @@ from severian.infrastructure.vector import HashEmbedding  # noqa: E402
 def test_parse_canonical_selector() -> None:
     assert parse_embedding_selector(None) == "hash"
     assert parse_embedding_selector("") == "hash"
+    assert parse_embedding_selector("QWEN") == "qwen"
+    assert parse_embedding_selector("  qwen  ") == "qwen"
     assert parse_embedding_selector("GRANITE") == "granite"
     assert parse_embedding_selector("  granite  ") == "granite"
     assert parse_embedding_selector("hash") == "hash"
     # Unknown values never select a semantic space.
+    assert parse_embedding_selector("qwen3") == "hash"
     assert parse_embedding_selector("granit") == "hash"
     assert parse_embedding_selector("gpt") == "hash"
 
@@ -45,16 +48,35 @@ def test_unset_selector_returns_default_hash() -> None:
     assert emb.dimension == 256
 
 
-def test_granite_selector_returns_granite_not_hash() -> None:
-    """The semantic selection NEVER resolves to hash in the resolver."""
+def test_qwen_selector_returns_qwen_not_hash() -> None:
+    """The default semantic selector resolves to the named Qwen provider."""
+    emb = resolve_embedding("qwen")
+    assert not isinstance(emb, HashEmbedding)
+    assert type(emb).__name__ == "QwenEmbedding"
+    assert emb.dimension == 384
+
+
+def test_granite_selector_remains_explicit_legacy_granite() -> None:
+    """Legacy selection stays Granite; it must never silently alias Qwen."""
     emb = resolve_embedding("granite")
     assert not isinstance(emb, HashEmbedding)
     assert type(emb).__name__ == "GraniteR2Embedding"
     assert emb.dimension == 384
 
 
-def test_no_silent_substitution_under_semantic_identity() -> None:
-    """A granite selection stays granite even when the model is missing.
+def test_no_silent_substitution_under_qwen_semantic_identity() -> None:
+    """A Qwen selection stays Qwen even when the model is missing."""
+    import severian.infrastructure.embedding_registry as registry
+
+    emb = resolve_embedding("qwen")
+    meta = registry.resolve_embedding_metadata(emb)
+    assert meta.provider == "sentence-transformers"
+    assert meta.dimension == 384
+    assert meta.model_id == "Qwen/Qwen3-Embedding-0.6B"
+
+
+def test_no_silent_substitution_under_legacy_granite_identity() -> None:
+    """A Granite selection stays Granite even when the model is missing.
 
     The resolver must not catch load failure and swap in hash — the
     incident class this programme exists to prevent. The provider is
@@ -72,6 +94,9 @@ def test_no_silent_substitution_under_semantic_identity() -> None:
 
 def test_env_entry_point_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     from severian.infrastructure.embedding_resolver import embedding_from_env
+
+    monkeypatch.setenv("SEVERIAN_EMBEDDING", "qwen")
+    assert type(embedding_from_env()).__name__ == "QwenEmbedding"
 
     monkeypatch.setenv("SEVERIAN_EMBEDDING", "granite")
     assert type(embedding_from_env()).__name__ == "GraniteR2Embedding"

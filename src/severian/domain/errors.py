@@ -39,4 +39,4 @@ class ForbiddenError(PermissionError):
     """Authorization failure: the principal may not access the scope."""
 
 
-__all__ = ["ConflictError", "ForbiddenError", "NotFoundError"]
+__all__ = ["ConflictError", "ForbiddenError", "NotFoundError", "VectorFormatError"]

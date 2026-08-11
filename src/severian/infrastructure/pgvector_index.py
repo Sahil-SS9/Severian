@@ -284,7 +284,11 @@ class PGVectorIndex:
 
     def search(self, scope: Scope, query: str, *, limit: int = 20) -> list[VectorHit]:
         self._require_scope(scope)
-        query_vector = self.embedding.encode(query)
+        # Match LocalVectorIndex: instruction-prompted providers expose a
+        # separate query contract. Documents are always upserted with
+        # encode(), while queries use encode_query() when available.
+        encode_query = getattr(self.embedding, "encode_query", None)
+        query_vector = encode_query(query) if encode_query is not None else self.embedding.encode(query)
         distance = self._table.c.vector.cosine_distance(query_vector)
         stmt = (
             select(

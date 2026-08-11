@@ -123,10 +123,12 @@ def _build_default_service_from_env() -> MemoryService:
     P1-4: enables zero-arg provider construction by the real Hermes
     loader. ``SEVERIAN_DSN`` selects PostgreSQL; otherwise SQLite
     storage is used with ``SEVERIAN_STORAGE`` (default: a temp dir).
-    ``SEVERIAN_EMBEDDING=granite`` selects the Granite R2 semantic
-    embedding (fallback-safe). The returned service is owned by the
-    caller (the provider), which must call ``shutdown()`` to release
-    bundle resources.
+    ``SEVERIAN_EMBEDDING=qwen`` selects the pinned Qwen 0.6B semantic
+    embedding. ``granite`` remains available only as an explicit legacy
+    migration/rollback selection; semantic load failure is never silently
+    substituted with hash. The returned service is owned by the caller
+    (the provider), which must call ``shutdown()`` to release bundle
+    resources.
     """
     import os
     import tempfile

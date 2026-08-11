@@ -6,15 +6,19 @@ adapter. No caller re-implements ``SEVERIAN_EMBEDDING`` parsing, and
 NO caller performs silent fallback substitution.
 
 Selection contract (canonical):
-- ``SEVERIAN_EMBEDDING`` unset or ``hash``  → HashEmbedding(dimension=256)
+- ``SEVERIAN_EMBEDDING`` unset or ``hash`` → HashEmbedding(dimension=256)
   (the deterministic fallback SPACE — opening an index in this space is
   always explicit).
-- ``SEVERIAN_EMBEDDING=granite``           → GraniteR2Embedding() — the
-  semantic SPACE. Model load is lazy; a load failure surfaces as a
-  visible error at encode time (guarded by the embedding-space
-  fingerprint from Task 2.1). The resolver NEVER swaps in hash vectors
-  under a semantic identity: that silent substitution is the exact
-  incident class this programme exists to prevent.
+- ``SEVERIAN_EMBEDDING=qwen`` → QwenEmbedding() — the selected semantic
+  SPACE: pinned Qwen3-Embedding-0.6B at 384 dimensions with its
+  query-only retrieval instruction.
+- ``SEVERIAN_EMBEDDING=granite`` → GraniteR2Embedding() — an explicit
+  legacy semantic SPACE, retained for migration and rollback only.
+
+Semantic model load is lazy; a load failure surfaces as a visible error
+at encode time (guarded by the embedding-space fingerprint). The resolver
+NEVER swaps in hash vectors under a semantic identity: that silent
+substitution is the exact incident class this programme exists to prevent.
 
 The returned provider carries a stable identity resolvable via
 ``embedding_registry.resolve_embedding_metadata``; the index open-time
@@ -26,6 +30,7 @@ import os
 from typing import Any
 
 DEFAULT_HASH_DIMENSION = 256
+QWEN_ENV_VALUE = "qwen"
 GRANITE_ENV_VALUE = "granite"
 HASH_ENV_VALUE = "hash"
 
@@ -40,13 +45,16 @@ class EmbeddingSelectionError(RuntimeError):
 def parse_embedding_selector(value: str | None) -> str:
     """Canonical parse of the embedding selector (env value or None).
 
-    Returns ``"granite"`` or ``"hash"``. Unknown values are treated as
-    ``hash`` — the deterministic default space — and are never treated
-    as a semantic selection. (A typo like ``SEVERIAN_EMBEDDING=granit``
-    must not silently select hash for a semantic index: the caller
-    decides the space; the index fingerprint guard enforces it.)
+    Returns ``"qwen"``, ``"granite"`` or ``"hash"``. Unknown values
+    are treated as ``hash`` — the deterministic default space — and are
+    never treated as a semantic selection. (A typo like
+    ``SEVERIAN_EMBEDDING=qwen3`` must not silently select hash for a
+    semantic index: the caller decides the space; the index fingerprint
+    guard enforces it.)
     """
     raw = (value or "").strip().lower()
+    if raw == QWEN_ENV_VALUE:
+        return QWEN_ENV_VALUE
     if raw == GRANITE_ENV_VALUE:
         return GRANITE_ENV_VALUE
     return HASH_ENV_VALUE
@@ -55,13 +63,18 @@ def parse_embedding_selector(value: str | None) -> str:
 def resolve_embedding(selector: str | None = None, *, dimension: int | None = None) -> Any:
     """Build the embedding for the given selector (env value or None).
 
-    Never substitutes a space: ``granite`` returns the Granite R2
-    provider (lazy load — failures surface at encode, guarded by the
-    space fingerprint); ``hash`` returns the deterministic
-    :class:`HashEmbedding`. Callers that need a guaranteed-working
-    provider for a NEW empty index must select hash EXPLICITLY.
+    Never substitutes a space: ``qwen`` returns the selected pinned Qwen
+    provider, ``granite`` returns the explicit legacy Granite provider,
+    and ``hash`` returns the deterministic :class:`HashEmbedding`.
+    Semantic load failures surface at encode time; callers that need a
+    guaranteed-working provider for a NEW empty index must select hash
+    EXPLICITLY.
     """
     space = parse_embedding_selector(selector)
+    if space == QWEN_ENV_VALUE:
+        from severian.infrastructure.qwen_embedding import QwenEmbedding
+
+        return QwenEmbedding()
     if space == GRANITE_ENV_VALUE:
         from severian.infrastructure.granite_embedding import GraniteR2Embedding
 
@@ -83,6 +96,9 @@ def embedding_from_env() -> Any:
 __all__ = [
     "DEFAULT_HASH_DIMENSION",
     "EmbeddingSelectionError",
+    "GRANITE_ENV_VALUE",
+    "HASH_ENV_VALUE",
+    "QWEN_ENV_VALUE",
     "embedding_from_env",
     "parse_embedding_selector",
     "resolve_embedding",

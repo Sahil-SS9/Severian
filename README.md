@@ -76,6 +76,16 @@ uv run severian work \
 
 Prerequisites: Python 3.12+ and [uv](https://docs.astral.sh/uv/). No network required after install — the default embedding is a local deterministic hash, and all storage is local.
 
+### Qwen semantic embedding (optional)
+
+Provision the benchmarked CPU-only `sentence-transformers==5.7.0` runtime
+explicitly, then select the pinned `Qwen/Qwen3-Embedding-0.6B` provider with
+`SEVERIAN_EMBEDDING=qwen`. It uses 384-dimensional Matryoshka vectors and the
+retrieval instruction only for queries. Existing Granite vectors are a different
+space despite sharing 384 dimensions: run `severian rebuild-vectors` against
+canonical memories before opening that index with Qwen. `granite` remains an
+explicit legacy selector for rollback or migration only.
+
 ### PostgreSQL backend (optional)
 
 ```bash
@@ -210,7 +220,7 @@ Honest limits: cold derive-on-read is super-linear (mitigated by the worker mode
    ┌──────────────────────────────────────────────────────────────┐
    │  DerivationService (worker drains derive/episode/dream jobs) │
    │  · policy-gated (cloud_allowed false by default)             │
-   │  · deterministic local gateway (hash) OR Granite R2 opt-in   │
+   │  · deterministic hash OR Qwen 0.6B semantic opt-in          │
    │  · skips superseded observations (P0-5)                      │
    │  · EntityExtractionService upserts entities + typed relations│
    └──────────────────────────────────────────────────────────────┘
@@ -218,7 +228,7 @@ Honest limits: cold derive-on-read is super-linear (mitigated by the worker mode
                  ├──────────────► ProjectionCoordinator
                  │                 ├──► FTS5 lexical projection (BM25)
                  │                 └──► vector projection (hash default;
-                 │                      Granite R2 opt-in, dim auto)
+                 │                      Qwen 0.6B semantic opt-in, 384-dim)
                  │
                  ▼
    ┌──────────────────────────────────────────────────────────────┐
@@ -282,7 +292,7 @@ Severian numbers exist, vendor-labelled otherwise). Full matrix:
 Where Severian leads (measured): correction/supersession, abstention,
 immutable audit + rollback, scope isolation, determinism, benchmark
 transparency. Where it trails (honest): hosted API (roadmap), default
-semantic embeddings (Granite opt-in pending A-3), LongMemEval
+semantic embeddings (Qwen 0.6B opt-in pending re-embedding activation), LongMemEval
 reproduction (not yet run), dreaming on dense corpora at 10k+ (LSH
 pre-filter shipped for diverse corpora — 3.3× consolidate speedup —
 dense lanes remain slower). Hindsight leads on structured-belief
@@ -321,7 +331,7 @@ Configuration is code-level and per-call, not a single config file:
 | Setting | Where | Default |
 |---|---|---|
 | Backend (sqlite/postgresql) | `build_bundle(backend=...)` | sqlite |
-| Embedding provider | `build_bundle(embedding=...)` | HashEmbedding (deterministic); Granite R2 opt-in |
+| Embedding provider | `build_bundle(embedding=...)` | HashEmbedding (deterministic); Qwen 0.6B semantic opt-in (`SEVERIAN_EMBEDDING=qwen`) |
 | Cloud derivation gate | Collection `policy: {"cloud_allowed": true}` | false (local only) |
 | Derivation mode | `search(derive=...)` or `severian work` | derive-on-read cold; worker hot |
 | Abstention gate (recommended) | `search(min_coverage=...)` | None (raw capability) |
