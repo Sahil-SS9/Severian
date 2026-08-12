@@ -54,6 +54,13 @@ class _Repository:
     def list_memories(self, scope: Scope) -> list[Memory]:
         return [memory for memory in self._memories if memory.scope == scope]
 
+    def list_memory_scopes(self) -> list[Scope]:
+        scopes: dict[tuple[str, str, str, str, str], Scope] = {}
+        for memory in self._memories:
+            values = tuple(memory.scope.model_dump().values())
+            scopes[values] = memory.scope
+        return [scopes[key] for key in sorted(scopes)]
+
 
 def _vector(text: str) -> list[float]:
     digest = hashlib.sha256(text.encode()).digest()
@@ -63,20 +70,20 @@ def _vector(text: str) -> list[float]:
     return values
 
 
-def _scope() -> Scope:
+def _scope(suffix: str = "") -> Scope:
     return Scope(
-        tenant_id="qwen-t",
-        profile_id="qwen-p",
-        collection_id="qwen-c",
-        agent_id="qwen-a",
-        session_id="qwen-s",
+        tenant_id=f"qwen-t{suffix}",
+        profile_id=f"qwen-p{suffix}",
+        collection_id=f"qwen-c{suffix}",
+        agent_id=f"qwen-a{suffix}",
+        session_id=f"qwen-s{suffix}",
     )
 
 
-def _memories(scope: Scope) -> list[Memory]:
+def _memories(scope: Scope, *, prefix: str = "qwen-pg") -> list[Memory]:
     return [
         Memory(
-            id=f"qwen-pg-{index:02d}",
+            id=f"{prefix}-{index:02d}",
             content=f"PostgreSQL Qwen migration document {index} with distinct content.",
             scope=scope,
             kind="fact",
@@ -130,6 +137,37 @@ def test_pg_qwen_migration_rejects_granite_then_swaps_with_query_prompt() -> Non
         reopened = PGVectorIndex(PG_DSN, qwen)
         assert reopened.count(scope) == len(repository.list_memories(scope))
         reopened.close()
+        assert any(call.get("prompt") == QWEN_RETRIEVAL_PROMPT for call in model.calls)
+        assert any("prompt" not in call for call in model.calls)
+    finally:
+        _drop_scratch_tables()
+
+
+@pytest.mark.skipif(not PG_DSN, reason="SEVERIAN_PG_DSN not set; requires disposable pgvector test DSN")
+@pytest.mark.skipif(not RESET_ACKNOWLEDGED, reason="SEVERIAN_PG_ALLOW_RESET=1 required for disposable PostgreSQL proof")
+def test_pg_qwen_all_scope_migration_preserves_every_active_scope() -> None:
+    scope_a = _scope("-a")
+    scope_b = _scope("-b")
+    repository = _Repository(_memories(scope_a, prefix="scope-a") + _memories(scope_b, prefix="scope-b"))
+    _drop_scratch_tables()
+    model = _RecordingQwenModel()
+    qwen = QwenEmbedding()
+    qwen._model = model
+    try:
+        granite = PGVectorIndex(PG_DSN, _Granite384())
+        granite.initialize()
+        granite.upsert_many(repository.list_memories(scope_a) + repository.list_memories(scope_b))
+        granite.close()
+
+        result = rebuild_pg_vectors(PG_DSN, repository, None, qwen)
+
+        assert result.status == "swapped", result.error
+        assert result.verification is not None and result.verification.passed
+        assert result.rollback_path is not None
+        rebuilt = PGVectorIndex(PG_DSN, qwen)
+        assert rebuilt.count(scope_a) == len(repository.list_memories(scope_a))
+        assert rebuilt.count(scope_b) == len(repository.list_memories(scope_b))
+        rebuilt.close()
         assert any(call.get("prompt") == QWEN_RETRIEVAL_PROMPT for call in model.calls)
         assert any("prompt" not in call for call in model.calls)
     finally:

@@ -150,6 +150,31 @@ def test_sqlite_qwen_reembedding_restarts_after_interruption_without_mixing(tmp_
     qwen.close()
 
 
+def test_sqlite_all_scope_rebuild_discards_orphaned_projection_scope(tmp_path: Path) -> None:
+    active_scope = _scope("-active")
+    orphan_scope = _scope("-orphan")
+    repository = _Repository(_memories(active_scope, count=3, prefix="active"))
+    orphan_memory = _memories(orphan_scope, count=1, prefix="orphan")[0]
+    live = tmp_path / "vectors.db"
+    _seed_granite(live, repository, active_scope)
+    old_index = LocalVectorIndex(live, _Granite384())
+    old_index.upsert(orphan_memory)
+    old_index.close()
+
+    result = rebuild_sqlite_vectors(live, repository, None, _qwen())
+
+    assert result.status == "swapped", result.error
+    assert result.verification is not None and result.verification.passed
+    qwen = LocalVectorIndex(live, _qwen())
+    assert qwen.count(active_scope) == 3
+    assert qwen.count(orphan_scope) == 0
+    qwen.close()
+    assert result.rollback_path is not None
+    rollback = LocalVectorIndex(result.rollback_path, _Granite384())
+    assert rollback.count(orphan_scope) == 1
+    rollback.close()
+
+
 def test_sqlite_rebuild_refuses_one_scope_when_live_index_has_other_scopes(tmp_path: Path) -> None:
     scope_a = _scope("-a")
     scope_b = _scope("-b")

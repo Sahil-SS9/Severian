@@ -310,7 +310,7 @@ def rebuild_sqlite_vectors(
 
     try:
         scopes = _rebuild_scopes(repository, scope)
-        partial_error = _partial_sqlite_rebuild_error(path, scopes)
+        partial_error = _partial_sqlite_rebuild_error(path, scopes) if scope is not None else None
         if partial_error is not None:
             result.status = "aborted"
             result.error = partial_error
@@ -377,7 +377,7 @@ def rebuild_pg_vectors(
 
     try:
         scopes = _rebuild_scopes(repository, scope)
-        partial_error = _partial_pg_rebuild_error(dsn, scopes)
+        partial_error = _partial_pg_rebuild_error(dsn, scopes) if scope is not None else None
         if partial_error is not None:
             result.status = "aborted"
             result.error = partial_error
