@@ -41,7 +41,7 @@ class RemoteQwenEmbedding(QwenEmbedding):
     local model loader or its explicit hash fallback.
     """
 
-    def __init__(self, socket_path: str | Path, *, timeout_seconds: float = 1.0) -> None:
+    def __init__(self, socket_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
             raise ValueError("remote Qwen timeout_seconds must be finite and positive")
         super().__init__()
