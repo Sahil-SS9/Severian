@@ -66,6 +66,18 @@ def _tool_scope_args(**overrides: str) -> dict[str, str]:
     return base
 
 
+def _bootstrap_scope(**overrides: str) -> Scope:
+    base = {
+        "tenant_id": "t1",
+        "profile_id": "p1",
+        "collection_id": "bootstrap",
+        "agent_id": "a1",
+        "session_id": "shared",
+    }
+    base.update(overrides)
+    return Scope(**base)
+
+
 @pytest.fixture
 def service_and_provider(tmp_path: Path):
     repo = SQLiteRepository(tmp_path / "severian.db")
@@ -144,17 +156,25 @@ def test_shutdown_clears_scope_without_closing_service(service_and_provider):
 def test_on_session_switch_re_establishes_scope(service_and_provider):
     _, provider, _ = service_and_provider
     provider.initialize(session_id="s1", **_scope_kwargs())
-    provider.on_session_switch(new_session_id="s2", tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1")
+    provider.on_session_switch(
+        new_session_id="s2",
+        tenant_id="untrusted-tenant",
+        profile_id="untrusted-profile",
+        collection_id="untrusted-collection",
+        agent_id="untrusted-agent",
+    )
     assert provider._scope is not None
     assert provider._scope.session_id == "s2"
+    assert provider._scope.tenant_id == "t1"
+    assert provider._scope.profile_id == "p1"
+    assert provider._scope.collection_id == "c1"
+    assert provider._scope.agent_id == "a1"
 
 
-def test_on_session_switch_fails_closed_on_incomplete_scope(service_and_provider):
+def test_on_session_switch_fails_closed_without_prior_scope(service_and_provider):
     _, provider, _ = service_and_provider
-    provider.initialize(session_id="s1", **_scope_kwargs())
     with pytest.raises(ScopeNotEstablishedError):
-        provider.on_session_switch(new_session_id="s2", tenant_id="t1")  # incomplete
-    # After failed switch, scope is cleared (fail closed).
+        provider.on_session_switch(new_session_id="s2")
     assert provider._scope is None
 
 
@@ -206,6 +226,58 @@ def test_prefetch_without_scope_fails_closed(service_and_provider):
     _, provider, _ = service_and_provider
     with pytest.raises(ScopeNotEstablishedError):
         provider.prefetch("Ada")
+
+
+def test_prefetch_combines_current_session_and_profile_bootstrap(service_and_provider):
+    service, provider, _ = service_and_provider
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    provider.sync_turn("CURRENT-SESSION-FACT", "")
+    service.ingest_observation(
+        _bootstrap_scope(),
+        content="PROFILE-BOOTSTRAP-FACT",
+        source={"uri": "test://bootstrap"},
+    )
+
+    context = provider.prefetch("FACT", derive=True, limit=10)
+
+    assert "CURRENT-SESSION-FACT" in context
+    assert "PROFILE-BOOTSTRAP-FACT" in context
+    assert "Profile bootstrap reference" in context
+    assert "Current system and user instructions take priority" in context
+
+
+def test_prefetch_excludes_other_profile_bootstrap(service_and_provider):
+    service, provider, _ = service_and_provider
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    service.ingest_observation(
+        _bootstrap_scope(profile_id="p2", agent_id="a2"),
+        content="OTHER-PROFILE-SECRET",
+        source={"uri": "test://other-profile"},
+    )
+
+    context = provider.prefetch("OTHER-PROFILE-SECRET", derive=True, limit=10)
+
+    assert "OTHER-PROFILE-SECRET" not in context
+
+
+def test_prefetch_bootstrap_context_respects_combined_char_limit(service_and_provider):
+    service, provider, _ = service_and_provider
+    provider = SeverianMemoryProvider(
+        service=service,
+        gateway=FakeGateway(),
+        max_context_chars=160,
+    )
+    provider.initialize(session_id="s1", **_scope_kwargs())
+    provider.sync_turn("CURRENT-" + "a" * 200, "")
+    service.ingest_observation(
+        _bootstrap_scope(),
+        content="BOOTSTRAP-" + "b" * 200,
+        source={"uri": "test://bounded-bootstrap"},
+    )
+
+    context = provider.prefetch("a b", derive=True, limit=10)
+
+    assert len(context) <= 160
 
 
 # -- sync_turn ------------------------------------------------------------

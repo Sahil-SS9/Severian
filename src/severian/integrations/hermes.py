@@ -298,15 +298,31 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         rewound: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Switch the active session scope.
+        """Rotate only the session dimension of an already trusted scope.
 
-        Re-establishes scope with the new session id. Other scope
-        dimensions are taken from kwargs; if any are missing, the
-        provider fails closed. The lifecycle metadata is accepted for
-        compatibility but never used to infer scope.
+        Hermes lifecycle hooks do not carry the four stable scope dimensions.
+        Reusing the scope accepted by :meth:`initialize` prevents a session
+        change from becoming a new, model-selectable identity binding. A
+        provider that has never established a scope still fails closed.
         """
-        del parent_session_id, reset, rewound
-        self.initialize(session_id=new_session_id, **kwargs)
+        del parent_session_id, reset, rewound, kwargs
+        scope = self._require_scope()
+        try:
+            next_scope = _ProviderScope.model_validate(
+                {
+                    "tenant_id": scope.tenant_id,
+                    "profile_id": scope.profile_id,
+                    "collection_id": scope.collection_id,
+                    "agent_id": scope.agent_id,
+                    "session_id": new_session_id,
+                }
+            ).to_domain()
+        except ValidationError as exc:
+            self._scope = None
+            self._session_id = None
+            raise ScopeNotEstablishedError("cannot switch to an empty session scope") from exc
+        self._scope = next_scope
+        self._session_id = new_session_id
 
     def on_delegation(
         self,
@@ -377,16 +393,53 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         if not isinstance(derive_value, bool):
             raise ValueError("invalid prefetch derive flag")
         derive = derive_value
-        hits = self._service.search(
+        bootstrap_scope = Scope(
+            tenant_id=scope.tenant_id,
+            profile_id=scope.profile_id,
+            collection_id="bootstrap",
+            agent_id=scope.agent_id,
+            session_id="shared",
+        )
+        session_hits = self._service.search(
             scope,
             query=query,
             limit=limit,
             derive=derive,
             gateway=self._gateway,
         )
-        if not hits:
-            return ""
-        return self._service.assemble_context(scope, hits, max_chars=self._max_context_chars)
+        bootstrap_hits = self._service.search(
+            bootstrap_scope,
+            query=query,
+            limit=limit,
+            derive=derive,
+            gateway=self._gateway,
+        )
+        if not bootstrap_hits:
+            return self._service.assemble_context(
+                scope,
+                session_hits,
+                max_chars=self._max_context_chars,
+            ) if session_hits else ""
+
+        header = "[Profile bootstrap reference — Current system and user instructions take priority.]\n"
+        session_budget = max(0, self._max_context_chars // 2)
+        session_context = self._service.assemble_context(
+            scope,
+            session_hits,
+            max_chars=session_budget,
+        ) if session_hits else ""
+        separator = "\n\n" if session_context else ""
+        bootstrap_budget = self._max_context_chars - len(session_context) - len(separator) - len(header)
+        if bootstrap_budget <= 0:
+            return session_context[:self._max_context_chars]
+        bootstrap_context = self._service.assemble_context(
+            bootstrap_scope,
+            bootstrap_hits,
+            max_chars=bootstrap_budget,
+        )
+        if not bootstrap_context:
+            return session_context
+        return f"{session_context}{separator}{header}{bootstrap_context}"[:self._max_context_chars]
 
     def sync_turn(
         self,
