@@ -42,9 +42,11 @@ class QwenEmbedding:
         model_name: str = QWEN_MODEL,
         *,
         revision: str = QWEN_REVISION,
+        device: str | None = None,
     ) -> None:
         self.model_name = model_name
         self.revision = revision
+        self.device = device
         self.dimension = QWEN_DIMENSION
         self.prompt_contract = QWEN_RETRIEVAL_PROMPT
         self._model: Any | None = None
@@ -75,7 +77,10 @@ class QwenEmbedding:
 
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name, revision=self.revision)
+            kwargs: dict[str, object] = {"revision": self.revision}
+            if self.device is not None:
+                kwargs["device"] = self.device
+            self._model = SentenceTransformer(self.model_name, **kwargs)
             logger.info("Qwen embeddings loaded (dim=%s, revision=%s)", self.dimension, self.revision[:12])
             return True
         except Exception as exc:  # pragma: no cover - dependency/cache dependent

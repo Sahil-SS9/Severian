@@ -56,6 +56,25 @@ def test_qwen_load_logs_status_without_writing_stdout(
     assert "Qwen embeddings loaded" in caplog.text
 
 
+def test_qwen_explicit_device_is_forwarded_without_changing_default_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _FakeSentenceTransformer:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _FakeSentenceTransformer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+
+    assert QwenEmbedding().load()
+    assert "device" not in calls[-1]
+    assert QwenEmbedding(device="cpu").load()
+    assert calls[-1]["device"] == "cpu"
+
+
 def test_qwen_uses_query_only_instruction_and_384_projection() -> None:
     provider = QwenEmbedding()
     model = _RecordingModel()

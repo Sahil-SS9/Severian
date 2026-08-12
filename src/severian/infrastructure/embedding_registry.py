@@ -82,9 +82,13 @@ def resolve_embedding_metadata(embedding: Any) -> EmbeddingMetadata:
                     "stem": bool(getattr(embedding, "stem", True))},
         )
 
-    # Qwen 0.6B embedding: the model revision and query-only prompt are
-    # code-pinned; never replace either with cache discovery at runtime.
-    if class_name == "QwenEmbedding":
+    # RemoteQwenEmbedding is deliberately the sole named transport variant
+    # sharing Qwen's identity. Exact class identity prevents an arbitrary
+    # class-name/subclass spoof from inheriting this persisted vector space.
+    from severian.infrastructure.qwen_embedding import QwenEmbedding
+    from severian.infrastructure.remote_qwen_embedding import RemoteQwenEmbedding
+
+    if type(embedding) in {QwenEmbedding, RemoteQwenEmbedding}:
         model_id = str(getattr(embedding, "model_name", "")).strip() or "Qwen/Qwen3-Embedding-0.6B"
         revision = str(getattr(embedding, "revision", "")).strip()
         if not revision:

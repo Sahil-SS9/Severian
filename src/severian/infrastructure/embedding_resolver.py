@@ -12,6 +12,9 @@ Selection contract (canonical):
 - ``SEVERIAN_EMBEDDING=qwen`` → QwenEmbedding() — the selected semantic
   SPACE: pinned Qwen3-Embedding-0.6B at 384 dimensions with its
   query-only retrieval instruction.
+- ``SEVERIAN_EMBEDDING=remote-qwen`` → RemoteQwenEmbedding() — the same
+  selected Qwen SPACE served only through the required private Unix socket
+  named by ``SEVERIAN_EMBED_SOCKET``. It never falls back in-process.
 - ``SEVERIAN_EMBEDDING=granite`` → GraniteR2Embedding() — an explicit
   legacy semantic SPACE, retained for migration and rollback only.
 
@@ -31,8 +34,10 @@ from typing import Any
 
 DEFAULT_HASH_DIMENSION = 256
 QWEN_ENV_VALUE = "qwen"
+REMOTE_QWEN_ENV_VALUE = "remote-qwen"
 GRANITE_ENV_VALUE = "granite"
 HASH_ENV_VALUE = "hash"
+REMOTE_QWEN_SOCKET_ENV = "SEVERIAN_EMBED_SOCKET"
 
 
 class EmbeddingSelectionError(RuntimeError):
@@ -45,16 +50,19 @@ class EmbeddingSelectionError(RuntimeError):
 def parse_embedding_selector(value: str | None) -> str:
     """Canonical parse of the embedding selector (env value or None).
 
-    Returns ``"qwen"``, ``"granite"`` or ``"hash"``. Unset, blank,
-    and explicit ``"hash"`` select the deterministic default; any other
-    non-empty value raises :class:`EmbeddingSelectionError`. A typo such as
-    ``SEVERIAN_EMBEDDING=qwen3`` must never create a fresh hash vector space.
+    Returns ``"qwen"``, ``"remote-qwen"``, ``"granite"`` or ``"hash"``.
+    Unset, blank, and explicit ``"hash"`` select the deterministic default;
+    any other non-empty value raises :class:`EmbeddingSelectionError`. A typo
+    such as ``SEVERIAN_EMBEDDING=qwen3`` must never create a fresh hash vector
+    space.
     """
     raw = (value or "").strip().lower()
     if not raw or raw == HASH_ENV_VALUE:
         return HASH_ENV_VALUE
     if raw == QWEN_ENV_VALUE:
         return QWEN_ENV_VALUE
+    if raw == REMOTE_QWEN_ENV_VALUE:
+        return REMOTE_QWEN_ENV_VALUE
     if raw == GRANITE_ENV_VALUE:
         return GRANITE_ENV_VALUE
     raise EmbeddingSelectionError(f"unsupported embedding selector: {raw!r}")
@@ -75,6 +83,17 @@ def resolve_embedding(selector: str | None = None, *, dimension: int | None = No
         from severian.infrastructure.qwen_embedding import QwenEmbedding
 
         return QwenEmbedding()
+    if space == REMOTE_QWEN_ENV_VALUE:
+        socket_path = os.environ.get(REMOTE_QWEN_SOCKET_ENV, "").strip()
+        if not socket_path:
+            raise EmbeddingSelectionError(
+                f"{REMOTE_QWEN_SOCKET_ENV} is required when SEVERIAN_EMBEDDING=remote-qwen"
+            )
+        if not os.path.isabs(socket_path):
+            raise EmbeddingSelectionError(f"{REMOTE_QWEN_SOCKET_ENV} must be an absolute Unix socket path")
+        from severian.infrastructure.remote_qwen_embedding import RemoteQwenEmbedding
+
+        return RemoteQwenEmbedding(socket_path)
     if space == GRANITE_ENV_VALUE:
         from severian.infrastructure.granite_embedding import GraniteR2Embedding
 
@@ -99,6 +118,8 @@ __all__ = [
     "GRANITE_ENV_VALUE",
     "HASH_ENV_VALUE",
     "QWEN_ENV_VALUE",
+    "REMOTE_QWEN_ENV_VALUE",
+    "REMOTE_QWEN_SOCKET_ENV",
     "embedding_from_env",
     "parse_embedding_selector",
     "resolve_embedding",
