@@ -13,3 +13,4 @@ dist/
 native/target/
 native/.venv/
 *.whl
+.hermes/
