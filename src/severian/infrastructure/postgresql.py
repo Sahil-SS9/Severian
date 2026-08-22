@@ -1564,6 +1564,22 @@ class PostgreSQLBackend:
                         )
                     )
                 reaped += 1
+        # HG follow-up (2026-08-22): stale outbox claims return to
+        # ``pending`` so a crashed worker's projecting events are retried
+        # instead of stranding. Events have no attempt budget — apply()
+        # is idempotent, so unlimited retries converge.
+        with self.engine.begin() as connection:
+            stale = connection.execute(
+                update(records)
+                .where(
+                    records.c.record_type == "outbox",
+                    records.c.status == "projecting",
+                    records.c.lease_until.is_not(None),
+                    records.c.lease_until < now_iso,
+                )
+                .values(status="pending", lease_until=None)
+            )
+            reaped += stale.rowcount
         return reaped
 
     def list_dead_letter_jobs(self) -> list[Job]:
@@ -1619,11 +1635,67 @@ class PostgreSQLBackend:
             ).scalars()
             return [Event.model_validate(value) for value in values]
 
+    def claim_outbox(
+        self,
+        worker_id: str,
+        *,
+        limit: int = 500,
+        lease_seconds: int = 300,
+    ) -> list[Event]:
+        """Atomically claim up to ``limit`` pending events (HG follow-up).
+
+        Fetch-and-mark in ONE transaction — each event row flips
+        ``pending`` -> ``projecting`` and records the lease, so a second
+        concurrent worker's claim transaction cannot see or flip the same
+        rows. Mirrors :meth:`claim_job`'s atomic-update-then-return
+        pattern. Stale ``projecting`` rows are returned to ``pending``
+        by :meth:`reap_expired_jobs`.
+        """
+        now_value = datetime.now(UTC)
+        lease_iso = _iso(now_value + timedelta(seconds=lease_seconds))
+        claimed_ids = (
+            select(records.c.id)
+            .where(records.c.record_type == "outbox", records.c.status == "pending")
+            .order_by(records.c.id)
+            .limit(limit)
+            .scalar_subquery()
+        )
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                update(records)
+                .where(records.c.id.in_(claimed_ids), records.c.status == "pending")
+                .values(status="projecting", lease_until=lease_iso)
+                .returning(records.c.id, records.c.payload)
+            ).mappings().all()
+        return [Event.model_validate(row["payload"]) for row in rows]
+
+    def release_outbox(self, event_ids: list[str]) -> None:
+        """Return claimed events to ``pending`` immediately (idempotent).
+
+        HG follow-up (2026-08-22): a failed batch must not hold its
+        ``projecting`` claim until lease expiry — release lets the next
+        pass retry at once. Only ``projecting`` rows are touched, so an
+        ack racing a release still wins or loses cleanly.
+        """
+        if not event_ids:
+            return
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(records)
+                .where(
+                    records.c.id.in_(event_ids),
+                    records.c.record_type == "outbox",
+                    records.c.status == "projecting",
+                )
+                .values(status="pending", lease_until=None)
+            )
+
     def ack_outbox(self, event_id: str) -> None:
         with self.engine.begin() as connection:
             result = connection.execute(
                 update(records)
-                .where(records.c.id == event_id, records.c.record_type == "outbox", records.c.status == "pending")
+                .where(records.c.id == event_id, records.c.record_type == "outbox",
+                       records.c.status.in_(("pending", "projecting")))
                 .values(status="acked")
             )
             if result.rowcount != 1:
@@ -1653,7 +1725,7 @@ class PostgreSQLBackend:
                     .where(
                         records.c.id.in_(chunk),
                         records.c.record_type == "outbox",
-                        records.c.status == "pending",
+                        records.c.status.in_(("pending", "projecting")),
                     )
                     .values(status="acked")
                 )

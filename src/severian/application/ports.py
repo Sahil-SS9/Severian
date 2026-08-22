@@ -221,6 +221,29 @@ class OutboxPort(Protocol):
 
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event: ...
     def pending_outbox(self) -> list[Event]: ...
+    def claim_outbox(
+        self,
+        worker_id: str,
+        *,
+        limit: int = 500,
+        lease_seconds: int = 300,
+    ) -> list[Event]:
+        """Atomically claim up to ``limit`` pending events for one worker.
+
+        HG follow-up (2026-08-22): fetch-and-mark in ONE transaction
+        (``pending`` -> ``projecting``, lease recorded) so two concurrent
+        workers can never apply the same event twice. Stale claims are
+        returned to ``pending`` by ``reap_expired_jobs``.
+        """
+        ...
+    def release_outbox(self, event_ids: list[str]) -> None:
+        """Return claimed events to ``pending`` immediately (idempotent).
+
+        Called when a claimed batch failed to converge: without this the
+        events would sit ``projecting`` until lease expiry (300s stall on
+        poison events). Release lets the next pass retry at once.
+        """
+        ...
     def ack_outbox(self, event_id: str) -> None: ...
     def ack_outbox_many(self, event_ids: list[str]) -> None:
         """Ack a batch in ONE transaction (zero-debt 3.3); idempotent."""

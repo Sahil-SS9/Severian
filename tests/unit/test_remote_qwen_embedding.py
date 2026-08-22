@@ -29,6 +29,9 @@ from severian.infrastructure.embedding_daemon import EmbeddingSocketDaemon  # no
 from severian.infrastructure.embedding_registry import resolve_embedding_metadata  # noqa: E402
 from severian.infrastructure.qwen_embedding import QWEN_DIMENSION, QwenEmbedding  # noqa: E402
 from severian.infrastructure.remote_qwen_embedding import (  # noqa: E402
+    RemoteEmbeddingConnectError,
+    RemoteEmbeddingProtocolError,
+    RemoteEmbeddingTimeoutError,
     RemoteEmbeddingTransportError,
     RemoteQwenEmbedding,
 )
@@ -165,14 +168,54 @@ def test_unrecognised_qwen_subclass_cannot_inherit_remote_space_identity() -> No
 def test_remote_fails_loudly_when_socket_is_unavailable(tmp_path: Path) -> None:
     remote = RemoteQwenEmbedding(tmp_path / "missing.sock", timeout_seconds=0.05)
 
+    # The subclass pins the connect failure mode; the common base still catches.
+    with pytest.raises(RemoteEmbeddingConnectError, match="unavailable"):
+        remote.encode("do not silently fall back")
+
+
+def test_remote_unavailable_socket_still_satisfies_common_base(tmp_path: Path) -> None:
+    remote = RemoteQwenEmbedding(tmp_path / "missing.sock", timeout_seconds=0.05)
+
     with pytest.raises(RemoteEmbeddingTransportError, match="unavailable"):
         remote.encode("do not silently fall back")
+
+
+@contextmanager
+def _silent_server(path: Path) -> Iterator[None]:
+    """Accept one connection and never respond, forcing a client read timeout."""
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    os.chmod(path, 0o600)
+    server.listen(1)
+
+    def _serve() -> None:
+        connection, _ = server.accept()
+        time.sleep(0.5)  # hold the connection open past the client timeout
+        connection.close()
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        thread.join(timeout=1)
+        server.close()
+        if path.exists():
+            path.unlink()
+
+
+def test_remote_timeout_raises_timeout_error(tmp_path: Path) -> None:
+    path = tmp_path / "silent.sock"
+    with _silent_server(path):
+        remote = RemoteQwenEmbedding(path, timeout_seconds=0.05, max_attempts=1)
+        with pytest.raises(RemoteEmbeddingTimeoutError, match="did not respond"):
+            remote.encode("a sidecar that never answers")
 
 
 def test_remote_health_rejects_an_invalid_ready_response(tmp_path: Path) -> None:
     path = tmp_path / "invalid-health.sock"
     with _scripted_server(path, {"ok": True, "status": "anything-else"}):
-        with pytest.raises(RemoteEmbeddingTransportError, match="invalid health"):
+        with pytest.raises(RemoteEmbeddingProtocolError, match="invalid health"):
             RemoteQwenEmbedding(path).health()
 
 
@@ -191,7 +234,7 @@ def test_remote_rejects_malformed_or_non_qwen_response(
     path = tmp_path / "scripted.sock"
     with _scripted_server(path, payload):
         remote = RemoteQwenEmbedding(path)
-        with pytest.raises(RemoteEmbeddingTransportError, match=expected):
+        with pytest.raises(RemoteEmbeddingProtocolError, match=expected):
             remote.encode("validate the wire response")
 
 

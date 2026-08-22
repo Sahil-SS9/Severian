@@ -158,7 +158,7 @@ class DerivationWorker:
         # idempotently. Aborting here instead left jobs ``running`` with
         # expired leases, which reaped into dead-letter (the 2026-08-20
         # fleet incident) while stranding every touched scope's outbox.
-        applied_events = self._project_outbox(touched)
+        applied_events = self._project_outbox(touched, worker_id)
         projection_failed = 1 if applied_events is None else 0
         applied_events = applied_events or []
         backlog_attempted = False
@@ -173,15 +173,31 @@ class DerivationWorker:
         # full pending list (bounded by the stranded backlog, which the
         # drain now converges every idle tick).
         if processed == 0 and failed == 0:
-            backlog = self._repository.pending_outbox()[:_MAX_BACKLOG_EVENTS_PER_PASS]
+            # HG follow-up (2026-08-22): claim events atomically
+            # (pending -> projecting with lease) so concurrent workers can
+            # never apply the same event twice. Stale claims are returned
+            # to pending by reap_expired_jobs.
+            backlog = self._repository.claim_outbox(
+                worker_id, limit=_MAX_BACKLOG_EVENTS_PER_PASS,
+            )
             backlog = [e for e in backlog if e not in applied_events]
             backlog_attempted = bool(backlog)
             if backlog:
                 converged = self._apply_batch(backlog)
                 if converged:
                     applied_events = applied_events + converged
-                else:
+                if converged is None or len(converged) < len(backlog):
                     projection_failed = 1
+                    # Release whatever did not converge (poison events
+                    # isolated by bisection) so they retry next pass
+                    # instead of holding projecting claims until lease
+                    # expiry.
+                    applied_ids = {e.id for e in (converged or [])}
+                    stranded = [e for e in backlog if e.id not in applied_ids]
+                    try:
+                        self._repository.release_outbox([e.id for e in stranded])
+                    except Exception:
+                        logger.warning("failed to release outbox claims", exc_info=True)
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
         # OPS-01: the outbox projector. Ack only events whose projections
@@ -207,7 +223,7 @@ class DerivationWorker:
             projection_failed=projection_failed,
         )
 
-    def _project_outbox(self, touched: dict[str, Scope]) -> list[Event] | None:
+    def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> list[Event] | None:
         """Apply pending outbox events for touched scopes incrementally.
 
         The outbox is the projection delta contract (zero-debt 3.2):
@@ -225,10 +241,31 @@ class DerivationWorker:
         if not touched:
             return []
         touched_set = set(touched.keys())
-        pending = [e for e in self._repository.pending_outbox() if e.scope.model_dump_json() in touched_set]
+        # HG follow-up (2026-08-22): claim instead of peek. Only events
+        # this worker atomically claimed (pending -> projecting) are
+        # applied; a concurrent worker's claim cannot overlap.
+        claimed = self._repository.claim_outbox(worker_id, limit=10_000)
+        pending = [e for e in claimed if e.scope.model_dump_json() in touched_set]
+        skipped = [e for e in claimed if e.scope.model_dump_json() not in touched_set]
+        if skipped:
+            # Not ours this pass: return them to pending immediately so a
+            # later pass (or the sweep) can take them without waiting for
+            # lease expiry.
+            try:
+                self._repository.release_outbox([e.id for e in skipped])
+            except Exception:
+                logger.warning("failed to release unclaimed outbox events", exc_info=True)
         if not pending:
             return []
-        return pending if self._apply_batch(pending) else None
+        result = pending if self._apply_batch(pending) else None
+        if result is None:
+            # Batch failed: release claims so events retry next pass
+            # rather than stalling until lease expiry.
+            try:
+                self._repository.release_outbox([e.id for e in pending])
+            except Exception:
+                logger.warning("failed to release outbox claims", exc_info=True)
+        return result
 
     def _apply_batch(self, events: list[Event]) -> list[Event] | None:
         """Apply one bounded batch of outbox events to the projections.
