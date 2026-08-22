@@ -30,7 +30,26 @@ _RETRY_BACKOFF_SECONDS = 0.25
 
 
 class RemoteEmbeddingTransportError(RuntimeError):
-    """The required local embedding sidecar is unavailable or invalid."""
+    """The required local embedding sidecar is unavailable or invalid.
+
+    Common base for every remote-embedding failure so existing ``except``
+    handlers keep working unchanged.  Operators that need finer granularity
+    catch :class:`RemoteEmbeddingConnectError`,
+    :class:`RemoteEmbeddingTimeoutError` or
+    :class:`RemoteEmbeddingProtocolError` instead.
+    """
+
+
+class RemoteEmbeddingConnectError(RemoteEmbeddingTransportError):
+    """The sidecar socket could not be reached (missing, refused, not listening)."""
+
+
+class RemoteEmbeddingTimeoutError(RemoteEmbeddingTransportError):
+    """The sidecar did not respond within the configured socket timeout."""
+
+
+class RemoteEmbeddingProtocolError(RemoteEmbeddingTransportError):
+    """The sidecar returned a malformed or rejected response."""
 
 
 class RemoteEmbeddingTextTooLongError(ValueError):
@@ -79,7 +98,7 @@ class RemoteQwenEmbedding(QwenEmbedding):
     def health(self) -> bool:
         response = self._request({"op": "health"})
         if response.get("status") != "ready":
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar returned an invalid health response")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar returned an invalid health response")
         return True
 
     def encode(self, text: str) -> list[float]:
@@ -119,7 +138,7 @@ class RemoteQwenEmbedding(QwenEmbedding):
                     with client.makefile("rb") as stream:
                         response_line = stream.readline(MAX_REQUEST_BYTES + 1)
                 break
-            except (OSError, TimeoutError) as exc:
+            except TimeoutError as exc:
                 last_exc = exc
                 # Transient contention on the single sidecar (burst drains,
                 # gateway traffic) surfaces as a timeout; a short backoff and
@@ -128,21 +147,29 @@ class RemoteQwenEmbedding(QwenEmbedding):
                 # cover genuine transport transience.
                 if _attempt < self.max_attempts - 1:
                     time.sleep(_RETRY_BACKOFF_SECONDS * (_attempt + 1))
+            except OSError as exc:
+                last_exc = exc
+                if _attempt < self.max_attempts - 1:
+                    time.sleep(_RETRY_BACKOFF_SECONDS * (_attempt + 1))
         else:
-            raise RemoteEmbeddingTransportError(
+            if isinstance(last_exc, TimeoutError):
+                raise RemoteEmbeddingTimeoutError(
+                    "remote Qwen sidecar did not respond within the timeout"
+                ) from last_exc
+            raise RemoteEmbeddingConnectError(
                 "remote Qwen sidecar is unavailable"
             ) from last_exc
 
         if not response_line or len(response_line) > MAX_REQUEST_BYTES or not response_line.endswith(b"\n"):
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar returned an invalid response")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar returned an invalid response")
         try:
             response = json.loads(response_line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar returned invalid JSON") from exc
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar returned invalid JSON") from exc
         if not isinstance(response, dict):
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar returned an invalid response")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar returned an invalid response")
         if response.get("ok") is not True:
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar rejected the request")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar rejected the request")
         return response
 
     def _require_private_socket(self) -> None:
@@ -159,31 +186,34 @@ class RemoteQwenEmbedding(QwenEmbedding):
 
     def _validated_vector(self, response: dict[str, Any]) -> list[float]:
         if "vector" not in response:
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar response is missing vector")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar response is missing vector")
         raw_values = response["vector"]
         if not isinstance(raw_values, list) or len(raw_values) != self.dimension:
             actual = len(raw_values) if isinstance(raw_values, list) else "non-list"
-            raise RemoteEmbeddingTransportError(
+            raise RemoteEmbeddingProtocolError(
                 f"remote Qwen sidecar returned {actual} dims, expected {self.dimension}"
             )
         if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_values):
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar vector has non-numeric values")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar vector has non-numeric values")
         values = [float(value) for value in raw_values]
         if not all(math.isfinite(value) for value in values):
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar vector contains non-finite values")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar vector contains non-finite values")
         try:
             norm = math.sqrt(math.fsum(value * value for value in values))
         except OverflowError as exc:
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar vector norm overflowed") from exc
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar vector norm overflowed") from exc
         if not math.isfinite(norm) or not math.isclose(norm, 1.0, rel_tol=0.0, abs_tol=1e-6):
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar vector is not normalised")
+            raise RemoteEmbeddingProtocolError("remote Qwen sidecar vector is not normalised")
         return values
 
 
 __all__ = [
     "MAX_REQUEST_BYTES",
     "MAX_TEXT_CHARS",
+    "RemoteEmbeddingConnectError",
+    "RemoteEmbeddingProtocolError",
     "RemoteEmbeddingTextTooLongError",
+    "RemoteEmbeddingTimeoutError",
     "RemoteEmbeddingTransportError",
     "RemoteQwenEmbedding",
 ]
