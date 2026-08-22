@@ -14,16 +14,27 @@ import math
 import os
 import socket
 import stat
+import time
 from pathlib import Path
 from typing import Any
 
 from severian.infrastructure.qwen_embedding import QwenEmbedding
 
 MAX_REQUEST_BYTES = 64 * 1024
+# Encode cost scales linearly with characters (~1.3ms/char pinned CPU): texts
+# beyond this cap cannot complete inside any sane socket timeout, so they are
+# rejected up front instead of wedging a drain pass into dead-letter territory.
+MAX_TEXT_CHARS = 8000
+# Linear backoff between transport retries: 0.25s, 0.5s, 0.75s, ...
+_RETRY_BACKOFF_SECONDS = 0.25
 
 
 class RemoteEmbeddingTransportError(RuntimeError):
     """The required local embedding sidecar is unavailable or invalid."""
+
+
+class RemoteEmbeddingTextTooLongError(ValueError):
+    """The supplied text exceeds the sidecar's encodable length contract."""
 
 
 def _validated_absolute_socket_path(socket_path: str | Path) -> Path:
@@ -41,12 +52,21 @@ class RemoteQwenEmbedding(QwenEmbedding):
     local model loader or its explicit hash fallback.
     """
 
-    def __init__(self, socket_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        socket_path: str | Path,
+        *,
+        timeout_seconds: float = 5.0,
+        max_attempts: int = 3,
+    ) -> None:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
             raise ValueError("remote Qwen timeout_seconds must be finite and positive")
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError("remote Qwen max_attempts must be a positive integer")
         super().__init__()
         self.socket_path = _validated_absolute_socket_path(socket_path)
         self.timeout_seconds = timeout_seconds
+        self.max_attempts = max_attempts
 
     def load(self) -> bool:
         """Refuse a local model load: this provider is sidecar-only."""
@@ -71,6 +91,11 @@ class RemoteQwenEmbedding(QwenEmbedding):
     def _encode(self, operation: str, text: str) -> list[float]:
         if not isinstance(text, str):
             raise TypeError("remote Qwen embedding text must be a string")
+        if len(text) > MAX_TEXT_CHARS:
+            raise RemoteEmbeddingTextTooLongError(
+                f"remote Qwen embedding text exceeds {MAX_TEXT_CHARS} characters "
+                f"(got {len(text)}); truncate before encoding"
+            )
         response = self._request({"op": operation, "text": text})
         return self._validated_vector(response)
 
@@ -83,16 +108,30 @@ class RemoteQwenEmbedding(QwenEmbedding):
             raise RemoteEmbeddingTransportError("remote Qwen request exceeds the sidecar limit")
         self._require_private_socket()
 
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(self.timeout_seconds)
-                client.connect(str(self.socket_path))
-                client.sendall(encoded)
-                client.shutdown(socket.SHUT_WR)
-                with client.makefile("rb") as stream:
-                    response_line = stream.readline(MAX_REQUEST_BYTES + 1)
-        except (OSError, TimeoutError) as exc:
-            raise RemoteEmbeddingTransportError("remote Qwen sidecar is unavailable") from exc
+        last_exc: Exception | None = None
+        for _attempt in range(self.max_attempts):
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(self.timeout_seconds)
+                    client.connect(str(self.socket_path))
+                    client.sendall(encoded)
+                    client.shutdown(socket.SHUT_WR)
+                    with client.makefile("rb") as stream:
+                        response_line = stream.readline(MAX_REQUEST_BYTES + 1)
+                break
+            except (OSError, TimeoutError) as exc:
+                last_exc = exc
+                # Transient contention on the single sidecar (burst drains,
+                # gateway traffic) surfaces as a timeout; a short backoff and
+                # retry absorbs it instead of failing the whole pass. The
+                # socket-permission guard above already ran, so retries only
+                # cover genuine transport transience.
+                if _attempt < self.max_attempts - 1:
+                    time.sleep(_RETRY_BACKOFF_SECONDS * (_attempt + 1))
+        else:
+            raise RemoteEmbeddingTransportError(
+                "remote Qwen sidecar is unavailable"
+            ) from last_exc
 
         if not response_line or len(response_line) > MAX_REQUEST_BYTES or not response_line.endswith(b"\n"):
             raise RemoteEmbeddingTransportError("remote Qwen sidecar returned an invalid response")
@@ -141,4 +180,10 @@ class RemoteQwenEmbedding(QwenEmbedding):
         return values
 
 
-__all__ = ["MAX_REQUEST_BYTES", "RemoteEmbeddingTransportError", "RemoteQwenEmbedding"]
+__all__ = [
+    "MAX_REQUEST_BYTES",
+    "MAX_TEXT_CHARS",
+    "RemoteEmbeddingTextTooLongError",
+    "RemoteEmbeddingTransportError",
+    "RemoteQwenEmbedding",
+]

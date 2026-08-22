@@ -273,6 +273,7 @@ def work(
             {
                 "processed": summary.processed,
                 "failed": summary.failed,
+                "projection_failed": summary.projection_failed,
                 "touched_scopes": [scope.model_dump() for scope in summary.touched_scopes],
             }
         )
@@ -535,7 +536,10 @@ def rebuild_vectors(
         repository = SQLiteRepository(database)
     repository.initialize()
     try:
-        embedding = embedding_from_env()
+        # Rebuilds are destructive projection swaps: the embedding MUST be
+        # stated explicitly (fail closed on unset/hash — the 2026-08-22
+        # live-index incident class).
+        embedding = embedding_from_env(require_explicit=True)
         if dsn:
             result = rebuild_pg_vectors(dsn, repository, scope, embedding, keep_rollback=keep_rollback)
         else:

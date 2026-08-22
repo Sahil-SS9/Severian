@@ -341,7 +341,7 @@ def rebuild_sqlite_vectors(
         return result
     except Exception as exc:  # noqa: BLE001 — surfaced in result.error
         result.status = "failed"
-        result.error = str(exc)
+        result.error = f"{type(exc).__name__}: {exc}"
         candidate.unlink(missing_ok=True)
         # If we moved the original to rollback but failed before the
         # candidate landed, restore it.

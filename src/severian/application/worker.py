@@ -46,12 +46,19 @@ from severian.domain.models import Event, Job, Scope
 
 logger = logging.getLogger(__name__)
 
+# OPS-01b: upper bound on outbox events applied per idle backlog sweep.
+_MAX_BACKLOG_EVENTS_PER_PASS = 500
+
 
 @dataclass(frozen=True)
 class WorkerSummary:
     processed: int = 0
     failed: int = 0
     touched_scopes: tuple[Scope, ...] = ()
+    # Projection failures are isolated per pass (a transport outage must not
+    # dead-letter derivations that already succeeded); this counter surfaces
+    # them so callers and cron summaries can alarm on a stuck projection.
+    projection_failed: int = 0
 
     @property
     def total(self) -> int:
@@ -143,7 +150,38 @@ class DerivationWorker:
         # outbox delta INCREMENTALLY (apply), never a scope-wide
         # clear+reinsert — the outbox is the projection delta contract
         # and every canonical write already appended its event.
+        #
+        # A projection failure (e.g. embedding transport outage) must NOT
+        # abort the pass: derivations already succeeded, so completing
+        # those jobs is correct — the canonical records are durable and
+        # their outbox events stay pending for a later pass to re-apply
+        # idempotently. Aborting here instead left jobs ``running`` with
+        # expired leases, which reaped into dead-letter (the 2026-08-20
+        # fleet incident) while stranding every touched scope's outbox.
         applied_events = self._project_outbox(touched)
+        projection_failed = 1 if applied_events is None else 0
+        applied_events = applied_events or []
+        backlog_attempted = False
+        # OPS-01b: idle-pass backlog sweep. Events stranded by earlier
+        # failing passes belong to scopes whose jobs ALREADY completed;
+        # the touched-scope rule above would never revisit them once the
+        # queue drains (the 2026-08-22 incident left 258 such events).
+        # An idle pass opportunistically applies pending events: apply()
+        # is idempotent (upserts keyed by current memory head state) and
+        # scope isolation is enforced at read time. The cap bounds the
+        # per-pass APPLY size only — pending_outbox() itself fetches the
+        # full pending list (bounded by the stranded backlog, which the
+        # drain now converges every idle tick).
+        if processed == 0 and failed == 0:
+            backlog = self._repository.pending_outbox()[:_MAX_BACKLOG_EVENTS_PER_PASS]
+            backlog = [e for e in backlog if e not in applied_events]
+            backlog_attempted = bool(backlog)
+            if backlog:
+                converged = self._apply_batch(backlog)
+                if converged:
+                    applied_events = applied_events + converged
+                else:
+                    projection_failed = 1
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
         # OPS-01: the outbox projector. Ack only events whose projections
@@ -156,13 +194,20 @@ class DerivationWorker:
                 self._repository.ack_outbox_many([e.id for e in applied_events])
             except Exception:
                 logger.warning("failed to ack outbox batch", exc_info=True)
+        # OPS-01b alarm: after ack, any STILL-pending event that this pass
+        # attempted means bisection isolated poison events — the alarm must
+        # fire so the operator quarantines them; a silent partial is how
+        # backlogs rot.
+        if processed == 0 and failed == 0 and backlog_attempted:
+            projection_failed = 1 if self._repository.pending_outbox() else projection_failed
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
+            projection_failed=projection_failed,
         )
 
-    def _project_outbox(self, touched: dict[str, Scope]) -> list[Event]:
+    def _project_outbox(self, touched: dict[str, Scope]) -> list[Event] | None:
         """Apply pending outbox events for touched scopes incrementally.
 
         The outbox is the projection delta contract (zero-debt 3.2):
@@ -172,14 +217,62 @@ class DerivationWorker:
         them). Returns the applied events so the caller can ack them
         only after the projections converged (crash between apply and
         ack → event stays pending → next pass re-applies, idempotent).
+
+        Returns ``None`` when projection failed outright: the caller
+        completes the already-derived jobs (canonical records are
+        durable) but acks nothing — events stay pending for retry.
         """
         if not touched:
             return []
         touched_set = set(touched.keys())
         pending = [e for e in self._repository.pending_outbox() if e.scope.model_dump_json() in touched_set]
-        if pending:
-            self._projection.apply(pending)
-        return pending
+        if not pending:
+            return []
+        return pending if self._apply_batch(pending) else None
+
+    def _apply_batch(self, events: list[Event]) -> list[Event] | None:
+        """Apply one bounded batch of outbox events to the projections.
+
+        Shared by both projection paths (touched-scope delta and idle
+        backlog sweep) so failure handling cannot drift between them.
+
+        On a batch failure, bisects (then falls back to per-event) so ONE
+        poison event cannot wedge the whole backlog behind it head-of-line
+        — apply() is fail-fast, and the sweep's [:500] slice would other-
+        wise retry the identical failing batch every idle pass forever.
+
+        Returns the subset of ``events`` whose projection converged
+        (caller acks exactly those); ``None`` means NOTHING applied and
+        even isolation failed. Canonical data is safe on every path:
+        failed events simply stay pending for later passes.
+        """
+        try:
+            if not events:
+                return []
+            self._projection.apply(events)
+            return events
+        except Exception:
+            if len(events) == 1:
+                logger.warning(
+                    "projection apply failed for event %s; leaving it pending",
+                    events[0].id, exc_info=True,
+                )
+                return None
+            logger.warning(
+                "projection batch of %d failed; bisecting to isolate the "
+                "poison event(s)", len(events), exc_info=True,
+            )
+        # Bisection: halves first, then single-event fallback. The good
+        # half still converges; only genuinely poisoned events stay.
+        mid = len(events) // 2
+        applied: list[Event] = []
+        left = self._apply_batch(events[:mid])
+        if left is not None:
+            applied.extend(left)
+        right = self._apply_batch(events[mid:])
+        if right is not None:
+            applied.extend(right)
+        return applied or None
 
     def _derive(
         self,

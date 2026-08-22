@@ -27,10 +27,16 @@ def data_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_rebuild_vectors_rebuilds_legacy_projection_without_opening_it_first(data_root: Path):
+def test_rebuild_vectors_rebuilds_legacy_projection_without_opening_it_first(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+):
     """The repair command must reach side-by-side rebuild when the live vector file is legacy."""
     import sqlite3
 
+    # Explicit hash selector: this test rebuilds a deliberately legacy
+    # (unversioned) projection in the deterministic space. The require_explicit
+    # guard blocks only the SILENT unset-env default.
+    monkeypatch.setenv("SEVERIAN_EMBEDDING", "hash")
     runner = CliRunner()
     db = data_root / "severian.db"
     fts = data_root / "fts.db"
@@ -62,10 +68,13 @@ def test_rebuild_vectors_rebuilds_legacy_projection_without_opening_it_first(dat
     assert body["status"] == "swapped"
 
 
-def test_rebuild_vectors_all_scopes_preserves_every_active_scope(data_root: Path):
+def test_rebuild_vectors_all_scopes_preserves_every_active_scope(data_root: Path, monkeypatch: pytest.MonkeyPatch):
     """A whole-file swap must rebuild every scope, including a legacy projection."""
     import sqlite3
 
+    # This test exercises the hash-space rebuild path explicitly; without a
+    # selector the fail-closed guard (require_semantic) would refuse to run.
+    monkeypatch.setenv("SEVERIAN_EMBEDDING", "hash")
     from severian.domain.models import Scope
     from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
 

@@ -103,13 +103,29 @@ def resolve_embedding(selector: str | None = None, *, dimension: int | None = No
     return HashEmbedding(dimension=dimension or DEFAULT_HASH_DIMENSION)
 
 
-def embedding_from_env() -> Any:
+def embedding_from_env(*, require_explicit: bool = False) -> Any:
     """Build the embedding selected by ``SEVERIAN_EMBEDDING``.
 
     The single entry point every caller uses; the only place the
     environment variable is read.
+
+    ``require_explicit=True`` (rebuild/migration paths) refuses the
+    SILENT hash default: a projection swap against an existing store must
+    never fall back to the deterministic space merely because the env is
+    unset — that is how the 2026-08-22 live index got swapped to hash/256
+    while every gateway queried remote-qwen/384. An explicit
+    ``SEVERIAN_EMBEDDING=hash`` remains honoured for callers that
+    genuinely operate a hash space.
     """
-    return resolve_embedding(os.environ.get("SEVERIAN_EMBEDDING"))
+    raw = os.environ.get("SEVERIAN_EMBEDDING")
+    if require_explicit and not (raw or "").strip():
+        raise EmbeddingSelectionError(
+            "SEVERIAN_EMBEDDING is unset: refusing to rebuild projections "
+            "via the silent hash default. Set SEVERIAN_EMBEDDING explicitly "
+            "(e.g. remote-qwen, or hash if you truly mean the deterministic "
+            "space)."
+        )
+    return resolve_embedding(raw)
 
 
 __all__ = [
