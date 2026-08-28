@@ -356,6 +356,20 @@ class _FakeRepository:
     def pending_outbox(self) -> list[Event]:
         return []
 
+    def claim_outbox(
+        self,
+        worker_id: str,
+        *,
+        limit: int = 500,
+        lease_seconds: int = 300,
+    ) -> list[Event]:
+        # Minimal fake: no outbox state, so nothing is ever claimable.
+        return []
+
+    def release_outbox(self, event_ids: list[str]) -> None:
+        # No-op: the fake holds no outbox claims to release.
+        return None
+
     def export_json(self) -> str:
         return "{}"
 
