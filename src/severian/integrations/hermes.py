@@ -9,9 +9,10 @@ Severian remains fully independent of Hermes.
 
 Design rules:
 
-- **Explicit scope only.** The provider fails closed when the
-  five-dimensional scope cannot be established. It never guesses a
-  tenant, profile, collection, agent or session.
+- **Never a guessed scope.** The five-dimensional scope is either given
+  in full by the host or derived deterministically from the Hermes
+  profile identity (``agent_identity``). Missing or blank values fail
+  closed, and a partial explicit scope is never completed.
 - **Injected service.** All reads/writes go through the injected
   :class:`MemoryService`. The provider never touches the repository
   or indexes directly.
@@ -26,6 +27,7 @@ Design rules:
 from __future__ import annotations
 
 import json
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,6 +41,17 @@ from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
 
 _SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
+_EXPLICIT_DIMS = _SCOPE_DIMS[:-1]  # all but session_id
+
+# Hermes-derived scope (used when the host passes ``agent_identity`` instead of
+# explicit dimensions). One profile-wide memory per profile: every chat of the
+# profile reads and writes the same scope, and the chat id is provenance.
+HERMES_DEFAULT_TENANT = "kensei"
+HERMES_TENANT_ENV = "SEVERIAN_TENANT"
+HERMES_PROFILE_COLLECTION = "profile"
+HERMES_PROFILE_SESSION = "shared"
+# Hermes ``agent_context`` values whose turns must not be written.
+_NON_PRIMARY_CONTEXTS = frozenset({"cron", "subagent", "flush"})
 
 
 class _ProviderScope(BaseModel):
@@ -122,7 +135,8 @@ def _build_default_service_from_env() -> MemoryService:
 
     P1-4: enables zero-arg provider construction by the real Hermes
     loader. ``SEVERIAN_DSN`` selects PostgreSQL; otherwise SQLite
-    storage is used with ``SEVERIAN_STORAGE`` (default: a temp dir).
+    storage is used with ``SEVERIAN_STORAGE`` (default: the shared Hermes
+    store, see :func:`_default_storage_root`).
     ``SEVERIAN_EMBEDDING=qwen`` selects the pinned Qwen 0.6B semantic
     embedding. ``granite`` remains available only as an explicit legacy
     migration/rollback selection; semantic load failure is never silently
@@ -130,9 +144,6 @@ def _build_default_service_from_env() -> MemoryService:
     (the provider), which must call ``shutdown()`` to release bundle
     resources.
     """
-    import os
-    import tempfile
-
     from severian.composition import build_bundle
 
     embedding = _resolve_embedding()
@@ -141,10 +152,8 @@ def _build_default_service_from_env() -> MemoryService:
         bundle = build_bundle(backend="postgresql", dsn=dsn, embedding=embedding)
     else:
         storage = os.environ.get("SEVERIAN_STORAGE", "").strip()
-        if storage:
-            root = Path(storage)
-        else:
-            root = Path(tempfile.mkdtemp(prefix="severian-provider-"))
+        root = Path(storage) if storage else _default_storage_root()
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
         bundle = build_bundle(
             backend="sqlite",
             database=root / "severian.db",
@@ -155,6 +164,21 @@ def _build_default_service_from_env() -> MemoryService:
     # Keep the bundle reachable so shutdown() can release it.
     provider_bundles.append(bundle)
     return bundle.service
+
+
+def _default_storage_root() -> Path:
+    """The shared Hermes store, ``<hermes root>/severian``.
+
+    Used when ``SEVERIAN_STORAGE`` is unset. Every profile shares one store
+    (``search_shared`` and team memory need that), so a profile home
+    (``<root>/profiles/<name>``) resolves to its root. A throwaway temp dir
+    used to be the fallback: writes then vanished without any error.
+    """
+    raw = os.environ.get("HERMES_HOME", "").strip()
+    home = Path(raw).expanduser() if raw else Path.home() / ".hermes"
+    if home.parent.name == "profiles":
+        home = home.parent.parent
+    return home / "severian"
 
 
 # Module-level registry of bundles created for zero-arg providers, so
@@ -199,7 +223,12 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         self._service = service
         self._gateway = gateway
         self._scope: Scope | None = None
+        # The host's chat/session id. Equal to ``_scope.session_id`` for an
+        # explicit scope; provenance only for a Hermes-derived profile scope.
         self._session_id: str | None = None
+        self._derived_scope = False
+        self._writes_enabled = True
+        self._platform: str | None = None
         self._max_context_chars = max_context_chars
         # SEC-01: construct-time principal binding. When set, the
         # provider's scope is fixed to the principal's tenant/profile;
@@ -207,6 +236,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         self._principal = principal
         if principal is not None:
             self._scope = principal
+            self._session_id = principal.session_id
 
     # -- lifecycle --------------------------------------------------------
 
@@ -225,25 +255,51 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Establish the five-dimensional scope for this session.
 
-        Required kwargs: ``tenant_id``, ``profile_id``, ``collection_id``,
-        ``agent_id``. ``session_id`` is taken from the argument (not
-        the scope) unless also present in kwargs. If any dimension is
-        missing or blank, the provider fails closed: no scope is
-        stored and subsequent operations raise.
+        Two contracts, never mixed:
+
+        - **Explicit:** any of ``tenant_id``, ``profile_id``,
+          ``collection_id`` or ``agent_id`` in kwargs selects it, and then
+          all four are required. ``session_id`` (the argument) is the
+          session dimension.
+        - **Hermes-derived:** with no explicit dimension, ``agent_identity``
+          (the Hermes profile name) yields one profile-wide scope:
+          tenant ``SEVERIAN_TENANT`` (default ``kensei``), profile = agent =
+          identity, collection ``profile``, session ``shared``. Every chat
+          of the profile shares it; ``session_id`` is kept as provenance.
+
+        Missing or blank values fail closed: no scope is stored and later
+        operations raise. ``agent_context`` of ``cron``, ``subagent`` or
+        ``flush`` disables automatic writes (``sync_turn``,
+        ``on_delegation``); reads stay available.
 
         SEC-01: when a principal is bound at construction, the
         tenant/profile MUST match it. A mismatch fails closed.
         """
-        scope_kwargs = {
-            "tenant_id": kwargs.get("tenant_id", ""),
-            "profile_id": kwargs.get("profile_id", ""),
-            "collection_id": kwargs.get("collection_id", ""),
-            "agent_id": kwargs.get("agent_id", ""),
-            "session_id": session_id,
-        }
+        derived = "agent_identity" in kwargs and kwargs.keys().isdisjoint(_EXPLICIT_DIMS)
+        if derived:
+            identity = kwargs.get("agent_identity")
+            identity = identity.strip() if isinstance(identity, str) else ""
+            tenant = os.environ.get(HERMES_TENANT_ENV, "").strip() or HERMES_DEFAULT_TENANT
+            scope_kwargs = {
+                "tenant_id": tenant,
+                "profile_id": identity,
+                "collection_id": HERMES_PROFILE_COLLECTION,
+                "agent_id": identity,
+                "session_id": HERMES_PROFILE_SESSION,
+            }
+        else:
+            scope_kwargs = {
+                "tenant_id": kwargs.get("tenant_id", ""),
+                "profile_id": kwargs.get("profile_id", ""),
+                "collection_id": kwargs.get("collection_id", ""),
+                "agent_id": kwargs.get("agent_id", ""),
+                "session_id": session_id,
+            }
         try:
             scope = _ProviderScope.model_validate(scope_kwargs)
-        except ValidationError as exc:
+            if not isinstance(session_id, str) or not session_id.strip():
+                raise ValueError("session id must not be empty")
+        except (ValidationError, ValueError) as exc:
             # Fail closed: clear any existing scope.
             self._scope = None
             self._session_id = None
@@ -263,8 +319,13 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                     f"scope outside principal: tenant/profile must be "
                     f"{self._principal.tenant_id}/{self._principal.profile_id}"
                 )
+        context = kwargs.get("agent_context", "primary")
+        platform = kwargs.get("platform")
         self._scope = new_scope
         self._session_id = session_id
+        self._derived_scope = derived
+        self._writes_enabled = not (isinstance(context, str) and context in _NON_PRIMARY_CONTEXTS)
+        self._platform = platform if isinstance(platform, str) and platform.strip() else None
 
     def shutdown(self) -> None:
         """Release provider-local state.
@@ -304,9 +365,18 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         Reusing the scope accepted by :meth:`initialize` prevents a session
         change from becoming a new, model-selectable identity binding. A
         provider that has never established a scope still fails closed.
+        A Hermes-derived profile scope has no per-chat dimension: it is kept
+        unchanged and only the tracked chat id moves.
         """
         del parent_session_id, reset, rewound, kwargs
         scope = self._require_scope()
+        if self._derived_scope:
+            if not isinstance(new_session_id, str) or not new_session_id.strip():
+                self._scope = None
+                self._session_id = None
+                raise ScopeNotEstablishedError("cannot switch to an empty session scope")
+            self._session_id = new_session_id
+            return
         try:
             next_scope = _ProviderScope.model_validate(
                 {
@@ -343,6 +413,8 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             raise ValueError("delegation task must not be blank")
         if not isinstance(result, str) or not result.strip():
             raise ValueError("delegation result must not be blank")
+        if not self._writes_enabled:
+            return
         source_value = kwargs.get("source", {})
         if not isinstance(source_value, Mapping):
             raise ValueError("source must be an object")
@@ -350,6 +422,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         source.setdefault("provider", self.PROVIDER_NAME)
         source.setdefault("provider_version", self.PROVIDER_VERSION)
         source.setdefault("event", "delegation")
+        self._add_session_provenance(source)
         if child_session_id:
             source.setdefault("child_session_id", child_session_id)
         delegatee = kwargs.get("delegatee")
@@ -364,13 +437,22 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     # -- prompt + context -------------------------------------------------
 
     def system_prompt_block(self) -> str:
-        """Return a system-prompt block describing the memory provider."""
-        return (
+        """Return a system-prompt block describing the memory provider.
+
+        Memory tools require the exact active scope as arguments, so the
+        block names it once a scope is established; without it the model
+        could not form a valid tool call.
+        """
+        block = (
             f"[{self.PROVIDER_NAME} v{self.PROVIDER_VERSION}] "
             "Severian memory engine is active. Use the provided memory "
             "tools to ingest observations and search the memory store. "
             "All operations are scoped to the established session."
         )
+        if self._scope is None:
+            return block
+        scope_args = ", ".join(f"{dimension}={getattr(self._scope, dimension)}" for dimension in _SCOPE_DIMS)
+        return f"{block} Pass these exact scope arguments to every memory tool: {scope_args}."
 
     def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
         """Search and return source-cited bounded context.
@@ -381,7 +463,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         runs before search.
         """
         scope = self._require_scope()
-        if session_id and session_id != scope.session_id:
+        if session_id and session_id != self._session_id:
             raise ScopeNotEstablishedError("prefetch session does not match active scope")
         if not isinstance(query, str) or not query.strip():
             return ""
@@ -457,12 +539,14 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         and a ``turn`` marker if provided.
         """
         scope = self._require_scope()
-        if session_id and session_id != scope.session_id:
+        if session_id and session_id != self._session_id:
             raise ScopeNotEstablishedError("sync session does not match active scope")
         if not isinstance(user_content, str) or not user_content.strip():
             raise ValueError("user content must not be blank")
         if not isinstance(assistant_content, str):
             raise ValueError("assistant content must be text")
+        if not self._writes_enabled:
+            return
         source_value = kwargs.get("source", {})
         if not isinstance(source_value, Mapping):
             raise ValueError("source must be an object")
@@ -472,8 +556,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         source.setdefault("provider_version", self.PROVIDER_VERSION)
         if "turn" in kwargs and "turn" not in source:
             source["turn"] = kwargs["turn"]
-        if session_id:
-            source.setdefault("session_id", session_id)
+        self._add_session_provenance(source)
         content = user_content.strip()
         if assistant_content.strip():
             content = f"user: {content}\nassistant: {assistant_content.strip()}"
@@ -730,10 +813,15 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
 
     def _require_scope(self) -> Scope:
         if self._scope is None:
-            raise ScopeNotEstablishedError(
-                "scope not established: call initialize with explicit scope dimensions first"
-            )
+            raise ScopeNotEstablishedError("scope not established: call initialize first")
         return self._scope
+
+    def _add_session_provenance(self, source: dict[str, Any]) -> None:
+        """Record which chat (and platform) produced a write."""
+        if self._session_id:
+            source.setdefault("session_id", self._session_id)
+        if self._platform:
+            source.setdefault("platform", self._platform)
 
 
 def register(ctx: Any) -> None:

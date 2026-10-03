@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import importlib
 import shutil
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -61,6 +63,44 @@ def test_real_hermes_loader_activates_severian(tmp_path, monkeypatch, hermes_plu
         shutdown = getattr(provider, "shutdown", None)
         if callable(shutdown):
             shutdown()
+
+
+def test_real_hermes_loader_provider_accepts_hermes_scope_kwargs(tmp_path, monkeypatch, hermes_plugins):
+    # Live repro: Hermes passes the profile name as ``agent_identity``, not
+    # scope dimensions, so every profile failed closed and wrote nothing.
+    # Uses MemoryManager.initialize_all's call shape and the default store.
+    root = tmp_path / "hermes"
+    home = root / "profiles" / "octacon"
+    plugin_dir = home / "plugins" / "severian"
+    plugin_dir.mkdir(parents=True)
+    for name in ("__init__.py", "plugin.yaml"):
+        shutil.copy2(SEVERIAN_PLUGIN / name, plugin_dir / name)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    hermes_kwargs = {
+        "platform": "discord",
+        "hermes_home": str(home),
+        "agent_context": "primary",
+        "user_id": "u-1",
+        "chat_id": "c-1",
+        "chat_type": "dm",
+        "agent_identity": "octacon",
+        "agent_workspace": "hermes",
+    }
+
+    provider = hermes_plugins.load_memory_provider("severian")
+    try:
+        provider.initialize(session_id="chat-1", **hermes_kwargs)
+        provider.sync_turn("ZEBRA-DEPLOY-WINDOW is Thursdays", "noted", session_id="chat-1")
+    finally:
+        provider.shutdown()
+
+    database = root / "severian" / "severian.db"
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
+        rows = db.execute(
+            "SELECT tenant_id, profile_id, collection_id, agent_id, session_id"
+            " FROM records WHERE record_type = 'observation'"
+        ).fetchall()
+    assert rows == [("kensei", "octacon", "profile", "octacon", "shared")]
 
 
 def test_real_hermes_loader_discover_includes_severian(tmp_path, monkeypatch, hermes_plugins):
