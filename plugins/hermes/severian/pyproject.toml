@@ -1,0 +1,17 @@
+# Hermes catalog wrapper, not a distribution. Hermes PM reads
+# [project].dependencies and installs them into its managed environment.
+#
+# Severian is not on a package index, so the pinned wheel ships inside this
+# plugin dir: scripts/build_hermes_plugin.py builds it from a clean commit.
+# PM copies the plugin dir with the workspace member, so the relative path
+# below stays valid. tests/integrations/test_hermes_plugin_packaging.py keeps
+# the pin, the wheel path and the versions in step with the package.
+[project]
+name = "severian-plugin"
+version = "0.3.1"
+description = "Severian memory provider for Hermes Agent, catalog wrapper"
+requires-python = ">=3.11"
+dependencies = ["severian==0.3.1"]
+
+[tool.uv.sources]
+severian = { path = "wheels/severian-0.3.1-py3-none-any.whl" }

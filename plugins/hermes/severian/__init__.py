@@ -8,8 +8,9 @@ it as ``$HERMES_HOME/plugins/severian/`` (or bundle it under
 ``register_memory_provider`` context hook.
 
 The plugin is a thin shim: all behaviour lives in
-:mod:`severian.integrations.hermes`, which is importable when the
-``severian`` package is installed (this checkout, or via pip).
+:mod:`severian.integrations.hermes`. Hermes PM installs the ``severian``
+package from the pinned wheel this directory's ``pyproject.toml`` declares
+(built by ``scripts/build_hermes_plugin.py``).
 """
 from __future__ import annotations
 
