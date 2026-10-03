@@ -22,7 +22,7 @@ from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.domain.errors import ConflictError, NotFoundError
-from severian.domain.models import Memory, Observation, Scope
+from severian.domain.models import ERASED, Memory, Observation, Scope
 
 
 @dataclass(frozen=True)
@@ -160,11 +160,14 @@ class MemoryService:
         """Revise a source observation and propagate the correction (P0-5).
 
         Memories derived from the OLD head are superseded (dropped from
-        default reads and projections); the revised head is re-derived
-        through the same canonical pipeline on the next derive pass.
+        default reads and projections) and graph facts lose that source
+        (retracted when it was their last). The revision's derive job is
+        queued in the same transaction as the revision, so the corrected
+        fact replaces the old one on the next drain instead of vanishing.
         """
-        revision = self._repository.revise_observation(scope, observation_id, content)
+        revision = self._repository.revise_observation(scope, observation_id, content, derive=True)
         superseded = self._repository.supersede_memories_for_source(scope, observation_id)
+        self._repository.retract_relations_for_source(scope, observation_id)
         if superseded:
             # The worker's per-scope rebuild will drop the tombstones;
             # the revise path also converges now so search cannot return
@@ -207,7 +210,7 @@ class MemoryService:
             prompt_version=f"{original.prompt_version}:erased",
             confidence=0.0,
             revision_of_id=original.id,
-            superseded_by_id=":erased",
+            superseded_by_id=ERASED,
         )
         inserted = self._repository.add_memory(tombstone)
         erased = self._repository.supersede_memory(scope, memory_id, inserted.id)
@@ -226,24 +229,24 @@ class MemoryService:
     ) -> Observation:
         """Erase a source observation and everything derived from it (OPS-02).
 
-        The observation is superseded (tombstoned) and all active
-        memories derived from it are erased via the same tombstone path —
-        the erasure propagates through the derivation lineage so search
-        stops returning facts whose only source was erased. History is
-        preserved for audit.
+        The observation is superseded by an erasure tombstone that is itself
+        never active (so it is never pending derivation and never surfaces),
+        every active memory derived from it is erased via the same tombstone
+        path, and graph facts lose it as a source (retracted when it was
+        their last). Search stops returning facts whose only source was
+        erased; history keeps the records for audit.
         """
         original = self._repository.get_observation(scope, observation_id)
         if original.superseded_by_id is not None:
             raise ConflictError("observation is already superseded")
-        # Tombstone the observation via the revision machinery (marks the
-        # old head superseded with a synthetic ``[erased]`` revision).
-        self._repository.revise_observation(scope, observation_id, f"[{reason}]")
+        self._repository.revise_observation(scope, observation_id, f"[{reason}]", tombstone=True)
         for memory in self._repository.list_memories(scope):
             if (
                 memory.superseded_by_id is None
                 and observation_id in memory.source_observation_ids
             ):
                 self.erase_memory(scope, memory.id, reason=reason)
+        self._repository.retract_relations_for_source(scope, observation_id)
         self._projection.rebuild(scope)
         return self._repository.get_observation(scope, observation_id)
 

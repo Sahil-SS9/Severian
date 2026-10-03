@@ -98,7 +98,25 @@ class ScopedCanonicalPort(Protocol):
         correction?") where the active-only view would hide the answer.
         """
         ...
-    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation: ...
+    def revise_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        content: str,
+        *,
+        derive: bool = False,
+        tombstone: bool = False,
+    ) -> Observation:
+        """Supersede an observation with a revision, in one transaction.
+
+        ``derive=True`` also enqueues the revision's derive job, so a
+        correction is re-derived on the next drain instead of vanishing.
+        ``tombstone=True`` creates an erasure marker that is itself
+        superseded (``superseded_by_id=":erased"``): never active, never
+        pending derivation, kept in history for audit. The two are
+        mutually exclusive.
+        """
+        ...
 
     def add_memory(self, memory: Memory) -> Memory: ...
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]: ...
@@ -109,12 +127,35 @@ class ScopedCanonicalPort(Protocol):
         entities: list[tuple[str, str]],
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
-    ) -> list[Memory]: ...
+        source_observation_id: str | None = None,
+    ) -> list[Memory]:
+        """Atomically publish graph extraction + derived memories.
+
+        ``source_observation_id`` is recorded as relation lineage: a new
+        relation starts with it; an existing identical relation gains it
+        (and is reinstated if it had been retracted).
+        """
+        ...
+    def retract_relations_for_source(self, scope: Scope, observation_id: str) -> int:
+        """Drop ``observation_id`` from every relation's lineage.
+
+        A relation left with no supporting observation is retracted
+        (``retracted_at`` set) and leaves the current graph; history keeps
+        it. Relations without lineage (added manually) are untouched.
+        Returns the number of relations retracted.
+        """
+        ...
     def get_memory(self, scope: Scope, memory_id: str) -> Memory: ...
     def count_memories(self, scope: Scope) -> int: ...
     def list_memories(self, scope: Scope) -> list[Memory]: ...
     def list_memories_history(self, scope: Scope) -> list[Memory]: ...
-    def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]: ...
+    def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
+        """Every revision in the memory's lineage, oldest first.
+
+        The lineage is the whole ``revision_of_id`` family, so a head
+        demoted by rollback is still listed.
+        """
+        ...
     def record_memory_usage(self, scope: Scope, memory_id: str) -> Memory:
         """Increment a memory's usage_count by one (retrieval hit).
 

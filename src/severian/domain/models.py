@@ -11,6 +11,12 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+# ``superseded_by_id`` of an erasure tombstone (memory or observation): the
+# marker is itself superseded, so it is never an active head, never pending
+# derivation and never projected, while history keeps it for audit.
+ERASED = ":erased"
+
+
 # Source-identity keys probed (in order) when building the idempotency
 # identity for an observation. The identity must be STABLE across
 # re-ingests of the same evidence, and DIFFERENT for evidence from
@@ -143,6 +149,34 @@ class Memory(BaseModel):
     usage_count: int = 0
 
 
+def revision_lineage(memories: dict[str, Memory], memory_id: str) -> list[Memory]:
+    """Every memory in ``memory_id``'s revision family, oldest first.
+
+    The family is everything linked by ``revision_of_id``: walk back to the
+    root, then collect all descendants. Following ``superseded_by_id`` instead
+    loses any head that rollback demoted (its forward pointer is cleared), and
+    an erasure tombstone stays listed for audit. Cycle-safe.
+    """
+    root = memories[memory_id]
+    visited: set[str] = set()
+    while root.revision_of_id is not None and root.revision_of_id in memories and root.id not in visited:
+        visited.add(root.id)
+        root = memories[root.revision_of_id]
+    children: dict[str, list[Memory]] = {}
+    for memory in memories.values():
+        if memory.revision_of_id is not None:
+            children.setdefault(memory.revision_of_id, []).append(memory)
+    family: dict[str, Memory] = {}
+    stack = [root]
+    while stack:
+        memory = stack.pop()
+        if memory.id in family:
+            continue
+        family[memory.id] = memory
+        stack.extend(children.get(memory.id, []))
+    return sorted(family.values(), key=lambda memory: (memory.created_at, memory.id))
+
+
 class Entity(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
@@ -159,7 +193,40 @@ class Relation(BaseModel):
     object_id: str
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+    # Belief lineage, kept apart from world-time validity: the observations
+    # a derived relation was extracted from. When the last of them is
+    # revised or erased, ``retracted_at`` is set and the relation leaves the
+    # current graph; history keeps it. Manually added relations have no
+    # lineage and are never retracted by source corrections.
+    source_observation_ids: list[str] = Field(default_factory=list)
+    retracted_at: datetime | None = None
     created_at: datetime = Field(default_factory=now)
+
+    def supported_by(self, observation_id: str | None) -> Relation | None:
+        """This relation with ``observation_id`` added to its lineage; None when unchanged.
+
+        A retracted relation is reinstated with that single support. A
+        relation without lineage (legacy or manual) is left as it is: its
+        support is unknown, so one source's correction must never retract it.
+        """
+        if observation_id is None:
+            return None
+        if self.retracted_at is not None:
+            return self.model_copy(update={"source_observation_ids": [observation_id], "retracted_at": None})
+        if not self.source_observation_ids or observation_id in self.source_observation_ids:
+            return None
+        return self.model_copy(update={"source_observation_ids": [*self.source_observation_ids, observation_id]})
+
+    def unsupported_by(self, observation_id: str, *, at: datetime) -> Relation | None:
+        """This relation without ``observation_id`` in its lineage; None when it never cited it.
+
+        Losing its last support retracts it as of ``at``.
+        """
+        if observation_id not in self.source_observation_ids:
+            return None
+        lineage = [source for source in self.source_observation_ids if source != observation_id]
+        retracted_at = self.retracted_at if lineage else (self.retracted_at or at)
+        return self.model_copy(update={"source_observation_ids": lineage, "retracted_at": retracted_at})
 
     @model_validator(mode="after")
     def valid_interval(self) -> Relation:

@@ -28,6 +28,7 @@ from severian.backends import (
 )
 from severian.domain.errors import ConflictError
 from severian.domain.models import (
+    ERASED,
     AuditEvent,
     Collection,
     Entity,
@@ -37,6 +38,7 @@ from severian.domain.models import (
     Observation,
     Relation,
     Scope,
+    revision_lineage,
 )
 from severian.infrastructure.postgresql import PostgreSQLBackend
 from severian.infrastructure.sqlite import SQLiteRepository
@@ -129,16 +131,29 @@ class _FakeRepository:
         # original is left untouched) — history == full list here.
         return [o for (rid, *s), o in self._observations.items() if tuple(s) == tuple(scope.model_dump().values())]
 
-    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
+    def revise_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        content: str,
+        *,
+        derive: bool = False,
+        tombstone: bool = False,
+    ) -> Observation:
+        if derive and tombstone:
+            raise ValueError("an erasure tombstone is never derived")
         original = self.get_observation(scope, observation_id)
         revision = original.model_copy(
             update={
                 "id": Observation(scope=scope, content=content).id,
                 "content": content,
                 "revision_of_id": original.id,
+                "superseded_by_id": ERASED if tombstone else None,
             }
         )
         self._observations[self._key(scope, revision.id)] = revision
+        if derive:
+            self.enqueue_job(scope, "derive", {"observation_id": revision.id})
         return revision
 
     def add_memory(self, memory: Memory) -> Memory:
@@ -264,10 +279,12 @@ class _FakeRepository:
         entities: list[tuple[str, str]],
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
+        source_observation_id: str | None = None,
     ) -> list[Memory]:
         # In-memory analogue of the backend atomic publish (DATA-04).
         # The fake's add_entity/add_relation are no-op shapes (no storage),
-        # so this mirrors the call pattern without graph resolution.
+        # so this mirrors the call pattern without graph resolution or lineage.
+        del source_observation_id
         for kind, name in entities:
             self.add_entity(scope, kind, name)
         for subject, predicate, obj in relations:
@@ -276,9 +293,20 @@ class _FakeRepository:
             self.add_relation(scope, subject_ent.id, predicate, object_ent.id)
         return self.add_memories_batch(memories)
 
+    def retract_relations_for_source(self, scope: Scope, observation_id: str) -> int:
+        # No relation storage in the fake: nothing can lose its support.
+        del scope, observation_id
+        return 0
+
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
-        memory = self.get_memory(scope, memory_id)
-        return [memory]
+        in_scope = {
+            memory.id: memory
+            for (rid, *s), memory in self._memories.items()
+            if tuple(s) == tuple(scope.model_dump().values())
+        }
+        if memory_id not in in_scope:
+            raise NotFoundError("memory not found")
+        return revision_lineage(in_scope, memory_id)
 
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
         superseded = 0

@@ -54,6 +54,7 @@ from sqlalchemy.exc import IntegrityError
 
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import (
+    ERASED,
     AuditEvent,
     Collection,
     Entity,
@@ -63,6 +64,8 @@ from severian.domain.models import (
     Observation,
     Relation,
     Scope,
+    now,
+    revision_lineage,
     source_identity,
 )
 from severian.infrastructure.snapshot import validate_snapshot
@@ -719,7 +722,17 @@ class PostgreSQLBackend:
         del observation_id, content
         raise ConflictError("observations are immutable; create a revision")
 
-    def revise_observation(self, scope: Scope, observation_id: str, content: str) -> Observation:
+    def revise_observation(
+        self,
+        scope: Scope,
+        observation_id: str,
+        content: str,
+        *,
+        derive: bool = False,
+        tombstone: bool = False,
+    ) -> Observation:
+        if derive and tombstone:
+            raise ValueError("an erasure tombstone is never derived")
         original = self.get_observation(scope, observation_id)
         if original.superseded_by_id is not None:
             raise ConflictError("observation is already superseded")
@@ -730,6 +743,7 @@ class PostgreSQLBackend:
             content_hash=digest,
             source=original.source,
             revision_of_id=original.id,
+            superseded_by_id=ERASED if tombstone else None,
         )
         changed = original.model_copy(update={"superseded_by_id": revision.id})
         with self.engine.begin() as connection:
@@ -756,6 +770,18 @@ class PostgreSQLBackend:
                 )
             )
             self._insert_events_in_transaction(connection, "observation", revision, operation="revise")
+            if derive:
+                # Same job shape and identity as ingest, in the same transaction:
+                # a correction can never commit without its re-derivation queued.
+                job_payload = {"observation_id": revision.id}
+                job = Job(scope=scope, kind="derive", payload=job_payload)
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values(
+                            "job", job, identity_key=self._identity("derive", job_payload), status="pending"
+                        )
+                    )
+                )
         return revision
 
     # -- memories ----------------------------------------------------------
@@ -884,6 +910,7 @@ class PostgreSQLBackend:
         entities: list[tuple[str, str]],
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
+        source_observation_id: str | None = None,
     ) -> list[Memory]:
         """Atomically publish graph extraction + derived memories (DATA-04).
 
@@ -892,7 +919,8 @@ class PostgreSQLBackend:
         graph can never be orphaned from the memory it came from (or
         vice versa). Entity/relation upserts are identity-deduped exactly
         like ``add_entity``/``add_relation``; memory insert matches
-        ``add_memories_batch`` semantics.
+        ``add_memories_batch`` semantics. ``source_observation_id`` is
+        recorded as relation lineage (``Relation.supported_by``).
         """
         self._require_scope(scope)
         self._require_collection(scope)
@@ -954,18 +982,26 @@ class PostgreSQLBackend:
                     subject_id=subject_id,
                     predicate=predicate,
                     object_id=object_id,
+                    source_observation_ids=[source_observation_id] if source_observation_id else [],
                 )
                 identity_key = self._identity(
                     "relation", relation.subject_id, relation.predicate, relation.object_id
                 )
                 existing = connection.execute(
-                    select(records.c.payload).where(
+                    select(records.c.id, records.c.payload).where(
                         records.c.record_type == "relation",
                         *self._scope_predicates(scope),
                         records.c.identity_key == identity_key,
                     )
-                ).scalar_one_or_none()
+                ).mappings().one_or_none()
                 if existing is not None:
+                    supported = Relation.model_validate(existing["payload"]).supported_by(source_observation_id)
+                    if supported is not None:
+                        connection.execute(
+                            update(records)
+                            .where(records.c.id == existing["id"])
+                            .values(payload=supported.model_dump(mode="json"))
+                        )
                     continue
                 connection.execute(
                     records.insert().values(
@@ -1128,7 +1164,7 @@ class PostgreSQLBackend:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
 
     def list_memory_revisions(self, scope: Scope, memory_id: str) -> list[Memory]:
-        """Return the revision chain for a memory (oldest first)."""
+        """Return every revision in the memory's lineage, oldest first (``revision_lineage``)."""
         self._require_scope(scope)
         chain: dict[str, Memory] = {}
         with self.engine.connect() as connection:
@@ -1140,19 +1176,41 @@ class PostgreSQLBackend:
                 chain[memory.id] = memory
         if memory_id not in chain:
             raise NotFoundError("memory not found")
-        ordered: list[Memory] = []
-        current = chain[memory_id]
-        while current.revision_of_id is not None and current.revision_of_id in chain:
-            current = chain[current.revision_of_id]
-        seen: set[str] = set()
-        while current.id not in seen and current.id in chain:
-            seen.add(current.id)
-            ordered.append(current)
-            if current.superseded_by_id is not None and current.superseded_by_id in chain:
-                current = chain[current.superseded_by_id]
-            else:
-                break
-        return ordered
+        return revision_lineage(chain, memory_id)
+
+    def retract_relations_for_source(self, scope: Scope, observation_id: str) -> int:
+        """Drop ``observation_id`` from relation lineage; retract relations left unsupported."""
+        self._require_scope(scope)
+        sql = sa_text(
+            """
+            SELECT r.id, r.payload FROM records r
+            WHERE r.record_type = 'relation'
+              AND r.tenant_id = :tenant_id
+              AND r.profile_id = :profile_id
+              AND r.collection_id = :collection_id
+              AND r.agent_id = :agent_id
+              AND r.session_id = :session_id
+              AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(r.payload->'source_observation_ids') je
+                WHERE je = :observation_id
+              )
+            """
+        )
+        stamp = now()
+        retracted = 0
+        with self.engine.begin() as connection:
+            rows = connection.execute(sql, {**scope.model_dump(), "observation_id": observation_id}).mappings().all()
+            for row in rows:
+                relation = Relation.model_validate(row["payload"])
+                changed = relation.unsupported_by(observation_id, at=stamp)
+                if changed is None:
+                    continue
+                if relation.retracted_at is None and changed.retracted_at is not None:
+                    retracted += 1
+                connection.execute(
+                    update(records).where(records.c.id == row["id"]).values(payload=changed.model_dump(mode="json"))
+                )
+        return retracted
 
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
         """Mark active memories derived from an observation as superseded (P0-5)."""

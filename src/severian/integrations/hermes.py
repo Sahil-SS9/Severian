@@ -37,11 +37,22 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope
 
 _SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
 _EXPLICIT_DIMS = _SCOPE_DIMS[:-1]  # all but session_id
+_DEFAULT_FORGET_REASON = "user requested erasure"
+_WRITE_TOOLS = frozenset({"severian_ingest", "severian_correct", "severian_forget"})
+
+
+def _single_target(arguments: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Return exactly one non-empty mutation target, or None."""
+    observation = arguments.get("observation_id")
+    memory = arguments.get("memory_id")
+    present = [("observation", observation), ("memory", memory)]
+    selected = [(kind, value.strip()) for kind, value in present if isinstance(value, str) and value.strip()]
+    return selected[0] if len(selected) == 1 else None
 
 # Hermes-derived scope (used when the host passes ``agent_identity`` instead of
 # explicit dimensions). One profile-wide memory per profile: every chat of the
@@ -446,8 +457,8 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         block = (
             f"[{self.PROVIDER_NAME} v{self.PROVIDER_VERSION}] "
             "Severian memory engine is active. Use the provided memory "
-            "tools to ingest observations and search the memory store. "
-            "All operations are scoped to the established session."
+            "tools include severian_correct when a fact is wrong and severian_forget when the user asks to forget it. "
+            "Give exactly one target from a search hit (observation_id or memory_id), not both."
         )
         if self._scope is None:
             return block
@@ -640,6 +651,45 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                     ["agent_ids", "query"],
                 ),
             },
+            {
+                "name": "severian_correct",
+                "description": (
+                    "Correct a remembered fact when the user says it is wrong. Give exactly one target "
+                    "from a severian_search hit: observation_id (one of its source_observation_ids; the "
+                    "source is replaced by your corrected text and re-derived on the next memory pass) or "
+                    "memory_id (that memory is replaced at once). The old version is no longer recalled; "
+                    "the history keeps it."
+                ),
+                "parameters": schema(
+                    {
+                        "observation_id": {"type": "string", "minLength": 1},
+                        "memory_id": {"type": "string", "minLength": 1},
+                        "content": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The corrected fact, stated in full.",
+                        },
+                    },
+                    ["content"],
+                ),
+            },
+            {
+                "name": "severian_forget",
+                "description": (
+                    "Forget a remembered fact when the user asks you to. Give exactly one target from a "
+                    "severian_search hit: observation_id (preferred: forgets that source and everything "
+                    "derived from it) or memory_id (forgets that one memory). It is no longer recalled "
+                    "anywhere; the original stays in the audit history."
+                ),
+                "parameters": schema(
+                    {
+                        "observation_id": {"type": "string", "minLength": 1},
+                        "memory_id": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string", "minLength": 1, "default": _DEFAULT_FORGET_REASON},
+                    },
+                    [],
+                ),
+            },
         ]
 
     def handle_tool_call(
@@ -663,6 +713,9 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         scope_result = self._validate_tool_scope(arguments, scope)
         if scope_result is not None:
             return _encode_tool_result(scope_result)
+        if tool_name in _WRITE_TOOLS and not self._writes_enabled:
+            # Same contract as turn sync: cron, subagent and flush runs read only.
+            return _encode_tool_result({"error": "memory writes are disabled in this context"})
 
         if tool_name == "severian_search":
             if set(arguments) - {*_SCOPE_DIMS, "query", "limit"}:
@@ -768,6 +821,56 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                     for hit in shared_hits
                 ]
             })
+
+        if tool_name == "severian_correct":
+            if set(arguments) - {*_SCOPE_DIMS, "observation_id", "memory_id", "content"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            target = _single_target(arguments)
+            if target is None:
+                return _encode_tool_result({"error": "give exactly one of observation_id or memory_id"})
+            content = arguments.get("content")
+            if not isinstance(content, str) or not content.strip():
+                return _encode_tool_result({"error": "content must not be empty"})
+            kind, target_id = target
+            try:
+                if kind == "observation":
+                    revised = self._service.revise_observation(scope, target_id, content.strip())
+                    return _encode_tool_result(
+                        {"corrected": "observation", "id": revised.id, "revision_of": target_id}
+                    )
+                corrected = self._service.correct_memory(
+                    scope,
+                    target_id,
+                    content=content.strip(),
+                    model_id=f"hermes-tool/{scope.agent_id}",
+                    prompt_version="severian_correct",
+                )
+            except NotFoundError:
+                return _encode_tool_result({"error": "not found in scope"})
+            except ConflictError:
+                return _encode_tool_result({"error": "already corrected or forgotten"})
+            return _encode_tool_result({"corrected": "memory", "id": corrected.id, "revision_of": target_id})
+
+        if tool_name == "severian_forget":
+            if set(arguments) - {*_SCOPE_DIMS, "observation_id", "memory_id", "reason"}:
+                return _encode_tool_result({"error": "invalid arguments"})
+            target = _single_target(arguments)
+            if target is None:
+                return _encode_tool_result({"error": "give exactly one of observation_id or memory_id"})
+            reason = arguments.get("reason", _DEFAULT_FORGET_REASON)
+            if not isinstance(reason, str) or not reason.strip():
+                return _encode_tool_result({"error": "reason must not be empty"})
+            kind, target_id = target
+            try:
+                if kind == "observation":
+                    self._service.erase_observation(scope, target_id, reason=reason.strip())
+                else:
+                    self._service.erase_memory(scope, target_id, reason=reason.strip())
+            except NotFoundError:
+                return _encode_tool_result({"error": "not found in scope"})
+            except ConflictError:
+                return _encode_tool_result({"error": "already corrected or forgotten"})
+            return _encode_tool_result({"forgotten": kind, "id": target_id})
 
         return _encode_tool_result({"error": "unknown tool"})
 

@@ -156,4 +156,5 @@ class DerivationService:
             entities=extracted_entities,
             relations=extracted_relations,
             memories=validated,
+            source_observation_id=observation.id,
         )

@@ -5,8 +5,12 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from severian.application.ports import CanonicalRepository, LexicalIndex
+from severian.domain.errors import NotFoundError
 from severian.domain.hits import VectorHit
 from severian.domain.models import Event, Memory, Scope
+
+# Outbox event kinds that touch the memory projections (see ProjectionCoordinator.apply).
+_PROJECTED_EVENTS = frozenset({"memory.created", "memory.revised", "memory.rolled_back"})
 
 
 @runtime_checkable
@@ -83,37 +87,52 @@ class ProjectionCoordinator:
         because every event carries its own scope and we address rows
         by memory id.
 
-        Event semantics:
-        - ``memory.created``     → upsert the named memory
-        - ``memory.revised``     → upsert revision, delete old head
-          (``revision_of_id`` — superseded rows must leave projections)
-        - ``memory.rolled_back`` → upsert restored memory, delete the
-          demoted head (the memory whose ``superseded_by_id`` points at
-          the restored id)
-        - anything else          → ignored (no projection impact)
+        Event semantics (which memory ids an event touches):
+        - ``memory.created``     → the named memory
+        - ``memory.revised``     → the revision and its old head
+          (``revision_of_id``)
+        - ``memory.rolled_back`` → the restored memory and the demoted
+          head (the memory whose ``superseded_by_id`` points at it)
+        - anything else          → nothing (no projection impact)
+
+        Every touched id then converges to its CURRENT canonical state:
+        an active head is upserted, anything else (superseded, erased,
+        tombstone, missing) is deleted. Deciding by canonical state rather
+        than by event kind keeps the projection to active heads only, so
+        a late ``memory.created`` for a memory corrected since, or an
+        erasure tombstone's own creation event, can never re-index a
+        stale fact, and the result does not depend on event order.
 
         zero-debt 3.3: all upserts in the batch are collected and
         committed via ``upsert_many`` — ONE transaction, never per
         event.
         """
-        upserts: list[Memory] = []
-        deletes: list[str] = []
+        touched: dict[str, Scope] = {}
         for event in events:
-            if event.kind == "memory.created":
-                upserts.append(self.repository.get_memory(event.scope, str(event.payload["id"])))
-            elif event.kind == "memory.revised":
-                memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
-                upserts.append(memory)
-                if memory.revision_of_id is not None:
-                    deletes.append(memory.revision_of_id)
+            if event.kind not in _PROJECTED_EVENTS:
+                continue
+            memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
+            touched.setdefault(memory.id, event.scope)
+            if event.kind == "memory.revised" and memory.revision_of_id is not None:
+                touched.setdefault(memory.revision_of_id, event.scope)
             elif event.kind == "memory.rolled_back":
-                memory = self.repository.get_memory(event.scope, str(event.payload["id"]))
-                upserts.append(memory)
                 # The demoted head is now SUPERSEDED, so it is invisible
                 # to list_memories (active-only) — scan the full history.
                 for candidate in self.repository.list_memories_history(event.scope):
                     if candidate.superseded_by_id == memory.id:
-                        deletes.append(candidate.id)
+                        touched.setdefault(candidate.id, event.scope)
+        upserts: list[Memory] = []
+        deletes: list[str] = []
+        for memory_id, scope in touched.items():
+            try:
+                current = self.repository.get_memory(scope, memory_id)
+            except NotFoundError:
+                deletes.append(memory_id)
+                continue
+            if current.superseded_by_id is None:
+                upserts.append(current)
+            else:
+                deletes.append(memory_id)
         if upserts:
             self.lexical.upsert_many(upserts)
             self.vector.upsert_many(upserts)

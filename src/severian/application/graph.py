@@ -202,12 +202,15 @@ class GraphRetrievalService:
     # -- helpers ------------------------------------------------------------
 
     def _is_current(self, relation: Relation) -> bool:
-        """A relation is current when its validity window is open at now.
+        """A relation is current when it is believed and its validity window is open at now.
 
+        - retracted (its last source was corrected or erased) -> exclude
         - valid_from in the future  -> not yet valid (exclude)
         - valid_to in the past      -> expired (exclude)
         - open windows (None)       -> current
         """
+        if relation.retracted_at is not None:
+            return False
         if relation.valid_from is not None and relation.valid_from > self._now:
             return False
         if relation.valid_to is not None and relation.valid_to < self._now:

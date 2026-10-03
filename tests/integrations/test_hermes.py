@@ -320,6 +320,8 @@ def test_get_tool_schemas_returns_four_tools(service_and_provider):
         "severian_ingest",
         "severian_get_observation",
         "severian_search_shared",
+        "severian_correct",
+        "severian_forget",
     }
     for schema in schemas:
         assert "parameters" in schema
