@@ -12,6 +12,7 @@ backed by on-disk SQLite is the production wiring.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,9 +22,9 @@ from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
-from severian.application.statements import drop_replaced
+from severian.application.statements import assess_truth, drop_replaced
 from severian.domain.errors import ConflictError, NotFoundError
-from severian.domain.models import ERASED, Memory, Observation, Scope
+from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,21 @@ class SearchHitView:
     vector_score: float
     fused_score: float
     scope: Scope
+    # Step 1 truth state; ``current`` unless the truth-state view labelled it otherwise.
+    truth_state: str = TruthState.CURRENT.value
+    replaced_by_id: str | None = None
+    # Contents this hit replaced (the "changes" view).
+    previous: tuple[str, ...] = ()
 
     @classmethod
-    def from_result(cls, result: RetrievalResult) -> SearchHitView:
+    def from_result(
+        cls,
+        result: RetrievalResult,
+        *,
+        truth_state: TruthState = TruthState.CURRENT,
+        replaced_by_id: str | None = None,
+        previous: tuple[str, ...] = (),
+    ) -> SearchHitView:
         return cls(
             memory_id=result.memory.id,
             content=result.memory.content,
@@ -71,7 +84,18 @@ class SearchHitView:
             vector_score=result.vector_score,
             fused_score=result.fused_score,
             scope=result.memory.scope,
+            truth_state=truth_state.value,
+            replaced_by_id=replaced_by_id,
+            previous=previous,
         )
+
+
+SEARCH_VIEWS = ("now", "history", "changes")
+
+
+def truth_state_enabled() -> bool:
+    """``SEVERIAN_TRUTH_STATE`` switches the Step 1 truth-state rules on (off = the legacy rule)."""
+    return os.environ.get("SEVERIAN_TRUTH_STATE", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
 @dataclass(frozen=True)
@@ -93,7 +117,9 @@ class MemoryService:
         context: ContextAssembler,
         *,
         lexical: LexicalIndex | None = None,
+        truth_state: bool | None = None,
     ) -> None:
+        self._truth_state = truth_state_enabled() if truth_state is None else truth_state
         self._repository = repository
         self._ingestion = ingestion
         self._retrieval = retrieval
@@ -343,7 +369,10 @@ class MemoryService:
         salience_halflife_h: float = 720.0,
         track_usage: bool = False,
         derive_max_observations: int = 50,
+        view: str = "now",
     ) -> list[SearchHitView]:
+        if view not in SEARCH_VIEWS:
+            raise ValueError(f"view must be one of {', '.join(SEARCH_VIEWS)}")
         if derive and gateway is None:
             raise ValueError("derive=True requires a derivation gateway")
         if derive:
@@ -406,19 +435,53 @@ class MemoryService:
             salience_weight=salience_weight,
             salience_halflife_h=salience_halflife_h,
         )
-        results = drop_replaced(
-            pool,
-            content=lambda item: item.memory.content,
-            created_at=lambda item: item.memory.created_at,
-            key=lambda item: item.memory.id,
-        )[:limit]
+        if self._truth_state or view != "now":
+            results, labels = self._truth_view(pool, view=view, limit=limit)
+        else:
+            results = drop_replaced(
+                pool,
+                content=lambda item: item.memory.content,
+                created_at=lambda item: item.memory.created_at,
+                key=lambda item: item.memory.id,
+            )[:limit]
+            labels = {}
         # Tier 2 usage tracking: record a hit for each returned memory so
         # curation salience reflects real retrieval usage. Opt-in (a
         # benchmark read must not mutate state by default).
         if track_usage:
             for item in results:
                 self._repository.record_memory_usage(scope, item.memory.id)
-        return [SearchHitView.from_result(item) for item in results]
+        return [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
+
+    @staticmethod
+    def _truth_view(
+        pool: list[RetrievalResult], *, view: str, limit: int
+    ) -> tuple[list[RetrievalResult], dict[str, dict[str, Any]]]:
+        """Apply the Step 1 truth state to a ranked pool (``now`` | ``history`` | ``changes``)."""
+        assessed = assess_truth(
+            pool,
+            content=lambda item: item.memory.content,
+            created_at=lambda item: item.memory.created_at,
+            key=lambda item: item.memory.id,
+        )
+        contents = {item.memory.id: item.memory.content for item in pool}
+        labels = {
+            memory_id: {
+                "truth_state": truth.state,
+                "replaced_by_id": truth.replaced_by,
+                "previous": tuple(contents[old] for old in truth.previous),
+            }
+            for memory_id, truth in assessed.items()
+        }
+        if view == "history":
+            kept = list(pool)
+        elif view == "changes":
+            kept = [item for item in pool if assessed[item.memory.id].previous]
+            for item in kept:
+                labels[item.memory.id]["truth_state"] = TruthState.TRANSITION
+        else:
+            kept = [item for item in pool if assessed[item.memory.id].state is not TruthState.HISTORICAL]
+        return kept[:limit], labels
 
     def assemble_context(
         self,

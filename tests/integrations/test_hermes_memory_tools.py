@@ -178,3 +178,22 @@ def test_forgetting_twice_reports_it_is_already_gone(bundle):
 
     assert first == {"forgotten": "memory", "id": hit["memory_id"]}
     assert second == {"error": "already corrected or forgotten"}
+
+
+def test_search_history_view_labels_replaced_facts_previously(bundle):
+    """Step 1: the plugin's history view marks a replaced fact "(previously)"; the default view is unchanged."""
+    remember(bundle, "The meeting is on Tuesday")
+    remember(bundle, "The meeting is now on Thursday")
+    agent = provider(bundle, chat="chat-2")
+
+    now = call(agent, "severian_search", query="meeting")["hits"]
+    history = call(agent, "severian_search", query="meeting", view="history")["hits"]
+    changes = call(agent, "severian_search", query="meeting", view="changes")["hits"]
+
+    assert all("truth_state" not in hit for hit in now)
+    assert {hit["content"]: hit["truth_state"] for hit in history} == {
+        "(previously) The meeting is on Tuesday": "historical",
+        "The meeting is now on Thursday": "transition",
+    }
+    assert [hit["previously"] for hit in changes] == [["The meeting is on Tuesday"]]
+    assert call(agent, "severian_search", query="meeting", view="soon") == {"error": "invalid view"}

@@ -21,6 +21,7 @@ from typing import Any
 
 import typer
 
+from severian.application.service import SEARCH_VIEWS
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Scope
@@ -191,8 +192,11 @@ def search(
     query: str = typer.Option(..., "--query"),
     limit: int = typer.Option(20, "--limit", min=1, max=200),
     derive: bool = typer.Option(False, "--derive", help="Run derivation before searching."),
+    view: str = typer.Option("now", "--view", help="now (current facts), history (with replaced ones) or changes."),
 ) -> None:
     """Search the scope and emit JSON hits."""
+    if view not in SEARCH_VIEWS:
+        raise typer.BadParameter(f"must be one of {', '.join(SEARCH_VIEWS)}", param_hint="--view")
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
         try:
@@ -208,6 +212,7 @@ def search(
                 limit=limit,
                 derive=derive,
                 gateway=bundle.gateway,
+                view=view,
             )
         except NotFoundError:
             _emit({"hits": []})
@@ -223,6 +228,7 @@ def search(
                         "vector_score": hit.vector_score,
                         "fused_score": hit.fused_score,
                         "scope": hit.scope.model_dump(),
+                        **({"truth_state": hit.truth_state, "previous": list(hit.previous)} if view != "now" else {}),
                     }
                     for hit in hits
                 ]

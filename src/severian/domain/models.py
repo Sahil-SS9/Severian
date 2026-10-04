@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +19,21 @@ ERASED = ":erased"
 # Predicates that hold one current value per subject: a newer value ends the
 # older one (kept in history with valid_to). Everything else accumulates.
 SINGLE_VALUED_PREDICATES = frozenset({"works_at", "located_in", "based_in"})
+
+
+class TruthState(StrEnum):
+    """Where a stored statement stands in time (Step 1 of the next-improvements plan).
+
+    ``current``     the latest word on the subject.
+    ``historical``  was true, then replaced by a newer, certain statement; kept, never deleted.
+    ``transition``  the change itself: a newer statement that replaced an older one.
+    ``concurrent``  several values are true together (\"open Mondays\" and \"open Fridays\").
+    """
+
+    CURRENT = "current"
+    HISTORICAL = "historical"
+    TRANSITION = "transition"
+    CONCURRENT = "concurrent"
 
 
 # Source-identity keys probed (in order) when building the idempotency
@@ -248,6 +264,11 @@ class Relation(BaseModel):
             return None
         valid_to = at if self.valid_from is None or at >= self.valid_from else self.valid_from
         return self.model_copy(update={"valid_to": valid_to})
+
+    @property
+    def truth_state(self) -> TruthState:
+        """``historical`` once a newer value ended it (``valid_to`` set), else ``current``."""
+        return TruthState.HISTORICAL if self.valid_to is not None else TruthState.CURRENT
 
     def reopened(self) -> Relation | None:
         """This relation made current again when restated after being replaced; None when already open."""

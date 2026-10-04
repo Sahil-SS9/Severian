@@ -36,7 +36,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from severian.application.derivation import DerivationGateway
-from severian.application.service import MemoryService
+from severian.application.service import SEARCH_VIEWS, MemoryService
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope
 
@@ -599,11 +599,16 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         return [
             {
                 "name": "severian_search",
-                "description": "Search the Severian memory store within the active scope.",
+                "description": (
+                    "Search the Severian memory store within the active scope. view: now (default, "
+                    "current facts), history (current facts plus replaced ones, marked previously) or "
+                    "changes (only the facts that replaced an older one)."
+                ),
                 "parameters": schema(
                     {
                         "query": {"type": "string", "minLength": 1},
                         "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200},
+                        "view": {"type": "string", "enum": ["now", "history", "changes"], "default": "now"},
                     },
                     ["query"],
                 ),
@@ -718,7 +723,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             return _encode_tool_result({"error": "memory writes are disabled in this context"})
 
         if tool_name == "severian_search":
-            if set(arguments) - {*_SCOPE_DIMS, "query", "limit"}:
+            if set(arguments) - {*_SCOPE_DIMS, "query", "limit", "view"}:
                 return _encode_tool_result({"error": "invalid arguments"})
             query = arguments.get("query")
             if not isinstance(query, str) or not query.strip():
@@ -727,24 +732,33 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 limit = self._validated_limit(arguments.get("limit", 10))
             except ValueError:
                 return _encode_tool_result({"error": "invalid limit"})
+            view = arguments.get("view", "now")
+            if view not in SEARCH_VIEWS:
+                return _encode_tool_result({"error": "invalid view"})
             hits = self._service.search(
                 scope,
                 query=query,
                 limit=limit,
                 derive=False,
                 gateway=self._gateway,
+                view=view,
             )
-            return _encode_tool_result({
-                "hits": [
-                    {
-                        "memory_id": hit.memory_id,
-                        "content": hit.content,
-                        "source_observation_ids": list(hit.source_observation_ids),
-                        "fused_score": hit.fused_score,
-                    }
-                    for hit in hits
-                ]
-            })
+            entries = []
+            for hit in hits:
+                entry: dict[str, Any] = {
+                    "memory_id": hit.memory_id,
+                    "content": hit.content,
+                    "source_observation_ids": list(hit.source_observation_ids),
+                    "fused_score": hit.fused_score,
+                }
+                if view != "now":
+                    entry["truth_state"] = hit.truth_state
+                    if hit.truth_state == "historical":
+                        entry["content"] = f"(previously) {hit.content}"
+                    if hit.previous:
+                        entry["previously"] = list(hit.previous)
+                entries.append(entry)
+            return _encode_tool_result({"hits": entries})
 
         if tool_name == "severian_ingest":
             if set(arguments) - {*_SCOPE_DIMS, "content", "source"}:
