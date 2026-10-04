@@ -5,6 +5,7 @@ SEVERIAN_EMBEDDING parsing; no caller performs silent hash
 substitution for a semantic selection. Load failure must surface
 visibly (guarded by the Task 2.1 fingerprint), never as a space swap.
 """
+
 from __future__ import annotations
 
 import sys
@@ -130,3 +131,45 @@ def test_cli_delegates_no_local_parsing() -> None:
     source = inspect.getsource(cli._embedding_from_env)
     assert "embedding_resolver" in source
     assert "os.environ" not in source
+
+
+# -- worker time limit (04/10/2026): long memories take 6-8 s on CPU, over the
+# 5 s default, and retries only re-queue the same work on the sidecar. The
+# background worker can opt into a longer limit; chat paths keep the default.
+
+
+def _remote(monkeypatch: pytest.MonkeyPatch, **env: str):
+    monkeypatch.setenv("SEVERIAN_EMBED_SOCKET", "/run/severian/embed.sock")
+    for key in ("SEVERIAN_EMBED_TIMEOUT", "SEVERIAN_EMBED_ATTEMPTS"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return resolve_embedding("remote-qwen")
+
+
+def test_remote_defaults_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    embedding = _remote(monkeypatch)
+    assert (embedding.timeout_seconds, embedding.max_attempts) == (5.0, 3)
+
+
+def test_remote_time_limit_and_attempts_come_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    embedding = _remote(monkeypatch, SEVERIAN_EMBED_TIMEOUT="60", SEVERIAN_EMBED_ATTEMPTS="1")
+    assert (embedding.timeout_seconds, embedding.max_attempts) == (60.0, 1)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("SEVERIAN_EMBED_TIMEOUT", "0"),
+        ("SEVERIAN_EMBED_TIMEOUT", "-1"),
+        ("SEVERIAN_EMBED_TIMEOUT", "nan"),
+        ("SEVERIAN_EMBED_TIMEOUT", "601"),
+        ("SEVERIAN_EMBED_TIMEOUT", "soon"),
+        ("SEVERIAN_EMBED_ATTEMPTS", "0"),
+        ("SEVERIAN_EMBED_ATTEMPTS", "11"),
+        ("SEVERIAN_EMBED_ATTEMPTS", "1.5"),
+    ],
+)
+def test_bad_remote_settings_are_refused_not_ignored(monkeypatch: pytest.MonkeyPatch, key: str, value: str) -> None:
+    with pytest.raises(EmbeddingSelectionError, match=key):
+        _remote(monkeypatch, **{key: value})

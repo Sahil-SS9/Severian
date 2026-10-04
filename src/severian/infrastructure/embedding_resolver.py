@@ -27,8 +27,10 @@ The returned provider carries a stable identity resolvable via
 ``embedding_registry.resolve_embedding_metadata``; the index open-time
 guard refuses to write a different space into a non-empty index.
 """
+
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -38,6 +40,36 @@ REMOTE_QWEN_ENV_VALUE = "remote-qwen"
 GRANITE_ENV_VALUE = "granite"
 HASH_ENV_VALUE = "hash"
 REMOTE_QWEN_SOCKET_ENV = "SEVERIAN_EMBED_SOCKET"
+# Optional per-process limits for the remote sidecar client. Unset keeps the
+# client defaults (5 s, 3 attempts) used by chat paths. The background worker
+# sets a longer limit and one attempt: long memories take several seconds on
+# CPU, and a timed-out attempt keeps running on the sidecar, so retrying only
+# multiplies its load.
+REMOTE_QWEN_TIMEOUT_ENV = "SEVERIAN_EMBED_TIMEOUT"
+REMOTE_QWEN_ATTEMPTS_ENV = "SEVERIAN_EMBED_ATTEMPTS"
+_MAX_TIMEOUT_SECONDS = 600.0
+_MAX_ATTEMPTS = 10
+
+
+def _remote_client(socket_path: str) -> Any:
+    from severian.infrastructure.remote_qwen_embedding import RemoteQwenEmbedding
+
+    timeout = 5.0
+    attempts = 3
+    raw_timeout = os.environ.get(REMOTE_QWEN_TIMEOUT_ENV, "").strip()
+    if raw_timeout:
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            timeout = math.nan
+        if not math.isfinite(timeout) or not 0.0 < timeout <= _MAX_TIMEOUT_SECONDS:
+            raise EmbeddingSelectionError(f"{REMOTE_QWEN_TIMEOUT_ENV} must be seconds in (0, {_MAX_TIMEOUT_SECONDS:g}]")
+    raw_attempts = os.environ.get(REMOTE_QWEN_ATTEMPTS_ENV, "").strip()
+    if raw_attempts:
+        if not raw_attempts.isdigit() or not 1 <= int(raw_attempts) <= _MAX_ATTEMPTS:
+            raise EmbeddingSelectionError(f"{REMOTE_QWEN_ATTEMPTS_ENV} must be a whole number 1-{_MAX_ATTEMPTS}")
+        attempts = int(raw_attempts)
+    return RemoteQwenEmbedding(socket_path, timeout_seconds=timeout, max_attempts=attempts)
 
 
 class EmbeddingSelectionError(RuntimeError):
@@ -86,14 +118,10 @@ def resolve_embedding(selector: str | None = None, *, dimension: int | None = No
     if space == REMOTE_QWEN_ENV_VALUE:
         socket_path = os.environ.get(REMOTE_QWEN_SOCKET_ENV, "").strip()
         if not socket_path:
-            raise EmbeddingSelectionError(
-                f"{REMOTE_QWEN_SOCKET_ENV} is required when SEVERIAN_EMBEDDING=remote-qwen"
-            )
+            raise EmbeddingSelectionError(f"{REMOTE_QWEN_SOCKET_ENV} is required when SEVERIAN_EMBEDDING=remote-qwen")
         if not os.path.isabs(socket_path):
             raise EmbeddingSelectionError(f"{REMOTE_QWEN_SOCKET_ENV} must be an absolute Unix socket path")
-        from severian.infrastructure.remote_qwen_embedding import RemoteQwenEmbedding
-
-        return RemoteQwenEmbedding(socket_path)
+        return _remote_client(socket_path)
     if space == GRANITE_ENV_VALUE:
         from severian.infrastructure.granite_embedding import GraniteR2Embedding
 
