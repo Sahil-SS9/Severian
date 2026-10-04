@@ -15,9 +15,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from severian.application.derivation import DerivationGateway, DerivationService
+from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
@@ -66,6 +68,9 @@ class SearchHitView:
     replaced_by_id: str | None = None
     # Contents this hit replaced (the "changes" view).
     previous: tuple[str, ...] = ()
+    # Event time (Step 3): the period the memory says the thing happened in, when known.
+    occurred_at: datetime | None = None
+    occurred_until: datetime | None = None
 
     @classmethod
     def from_result(
@@ -87,10 +92,21 @@ class SearchHitView:
             truth_state=truth_state.value,
             replaced_by_id=replaced_by_id,
             previous=previous,
+            occurred_at=result.memory.occurred_at,
+            occurred_until=result.memory.occurred_until,
         )
 
 
 SEARCH_VIEWS = ("now", "history", "changes")
+
+
+def _as_of_moment(as_of: datetime | date | None) -> datetime | None:
+    """A UTC moment for ``as_of``: a date means the end of that day, a datetime is used as given."""
+    if as_of is None:
+        return None
+    if isinstance(as_of, datetime):
+        return as_utc(as_of)
+    return datetime(as_of.year, as_of.month, as_of.day, tzinfo=UTC) + timedelta(days=1) - timedelta(microseconds=1)
 
 
 def truth_state_enabled() -> bool:
@@ -118,8 +134,10 @@ class MemoryService:
         *,
         lexical: LexicalIndex | None = None,
         truth_state: bool | None = None,
+        event_time: bool | None = None,
     ) -> None:
         self._truth_state = truth_state_enabled() if truth_state is None else truth_state
+        self._event_time = event_time_enabled() if event_time is None else event_time
         self._repository = repository
         self._ingestion = ingestion
         self._retrieval = retrieval
@@ -370,7 +388,10 @@ class MemoryService:
         track_usage: bool = False,
         derive_max_observations: int = 50,
         view: str = "now",
+        as_of: datetime | date | None = None,
     ) -> list[SearchHitView]:
+        """Search. ``as_of`` (a date or datetime) answers as the store stood then: only memories whose
+        source message was written by that moment, so a later correction does not yet exist."""
         if view not in SEARCH_VIEWS:
             raise ValueError(f"view must be one of {', '.join(SEARCH_VIEWS)}")
         if derive and gateway is None:
@@ -425,9 +446,15 @@ class MemoryService:
         # Improvement 2: a newer statement of the same fact replaces the older
         # one in active results. Over-fetch so a replaced memory never costs
         # the caller a result slot.
+        as_of_moment = _as_of_moment(as_of)
+        window = None
+        if self._event_time and query.strip() not in {"", "*"}:
+            window = query_window(query, as_of_moment or datetime.now(UTC))
         pool = self._retrieval.search(
             scope,
             query,
+            as_of=as_of_moment,
+            window=window,
             limit=min(limit * 3, limit + 50),
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
+from severian.application.eventtime import TimeWindow, as_utc, message_time
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
+from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS, porter_stem
 
@@ -64,12 +66,14 @@ class SearchTuning:
     neighbours: int = 0
     neighbour_weight: float = 0.5
     neighbour_seeds: int = 5
+    # Step 3: score multiplier for a memory whose event time falls in the period the question names.
+    time_boost: float = 2.0
 
     def __post_init__(self) -> None:
         if self.fusion_k < 1:
             raise ValueError("fusion_k must be at least 1")
-        if self.lexical_weight < 0 or self.vector_weight < 0 or self.neighbour_weight < 0:
-            raise ValueError("search weights must not be negative")
+        if self.lexical_weight < 0 or self.vector_weight < 0 or self.neighbour_weight < 0 or self.time_boost < 1:
+            raise ValueError("search weights must not be negative and time_boost must be at least 1")
         if self.neighbours < 0 or self.neighbour_seeds < 1:
             raise ValueError("neighbours must not be negative and neighbour_seeds must be at least 1")
 
@@ -85,6 +89,7 @@ class SearchTuning:
             neighbours=int(env.get("SEVERIAN_NEIGHBOURS", defaults.neighbours)),
             neighbour_weight=float(env.get("SEVERIAN_NEIGHBOUR_WEIGHT", defaults.neighbour_weight)),
             neighbour_seeds=int(env.get("SEVERIAN_NEIGHBOUR_SEEDS", defaults.neighbour_seeds)),
+            time_boost=float(env.get("SEVERIAN_TIME_BOOST", defaults.time_boost)),
         )
 
 
@@ -122,7 +127,10 @@ class RetrievalService:
         salience_weight: float = 0.0,
         salience_halflife_h: float = 720.0,
         now: datetime | None = None,
+        as_of: datetime | None = None,
+        window: TimeWindow | None = None,
     ) -> list[RetrievalResult]:
+        """Hybrid search. ``as_of`` keeps only memories known by then; ``window`` boosts memories from that period."""
         stripped = query.strip()
         # Recall-all path: the admin graph (and CLI `list`-style flows)
         # need "everything in this scope", not a ranked query. Empty and
@@ -197,6 +205,10 @@ class RetrievalService:
         # (the stable key across runs), then by memory UUID as the final
         # total-order safety net. Content is unique for distinct facts.
         ranked.sort(key=lambda item: (-item.fused_score, item.memory.content, item.memory.id))
+        if as_of is not None:
+            ranked = [item for item in ranked if self._known_by(scope, item.memory, as_of)]
+        if window is not None and tuning.time_boost > 1.0:
+            ranked = self._boost_window(ranked, window)
         # Salience-weighted ranking (Tier 2, opt-in): when salience_weight
         # > 0, boost memories that are recent and/or frequently used. The
         # salience factor is deterministic (computed from created_at +
@@ -250,11 +262,35 @@ class RetrievalService:
             if not ranked:
                 return []
         if tuning.neighbours:
-            ranked = self._with_neighbours(scope, ranked, limit=limit)
+            ranked = self._with_neighbours(scope, ranked, limit=limit, as_of=as_of)
         return ranked[:limit]
 
+    def _known_by(self, scope: Scope, memory: Memory, as_of: datetime) -> bool:
+        """True when the memory's source message was written by ``as_of`` (message time, else save time)."""
+        moments = []
+        for observation_id in memory.source_observation_ids:
+            try:
+                observation = self.repository.get_observation(scope, observation_id)
+            except NotFoundError:
+                continue
+            moments.append(message_time(observation.source, observation.created_at))
+        known_at = min(moments) if moments else memory.created_at
+        return known_at <= as_utc(as_of)
+
+    def _boost_window(self, ranked: list[RetrievalResult], window: TimeWindow) -> list[RetrievalResult]:
+        """Lift memories whose event time overlaps the period the question names; others are untouched."""
+        boosted = [
+            replace(item, fused_score=item.fused_score * self.tuning.time_boost)
+            if item.memory.occurred_at is not None
+            and window.overlaps(item.memory.occurred_at, item.memory.occurred_until or item.memory.occurred_at)
+            else item
+            for item in ranked
+        ]
+        boosted.sort(key=lambda item: (-item.fused_score, item.memory.content, item.memory.id))
+        return boosted
+
     def _with_neighbours(
-        self, scope: Scope, ranked: list[RetrievalResult], *, limit: int
+        self, scope: Scope, ranked: list[RetrievalResult], *, limit: int, as_of: datetime | None = None
     ) -> list[RetrievalResult]:
         """Add the conversation neighbours of the best matches (MemMachine "nucleus + neighbours").
 
@@ -292,7 +328,7 @@ class RetrievalService:
                 low, high = max(0, index - tuning.neighbours), min(len(turns), index + tuning.neighbours + 1)
                 for _order, neighbour_id in turns[low:high]:
                     for memory in memories_by_observation.get(neighbour_id, ()):
-                        if memory.id in present:
+                        if memory.id in present or (as_of is not None and not self._known_by(scope, memory, as_of)):
                             continue
                         present.add(memory.id)
                         added.append(

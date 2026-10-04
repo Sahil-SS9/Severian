@@ -36,6 +36,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from severian.application.derivation import DerivationGateway
+from severian.application.eventtime import parse_time
 from severian.application.service import SEARCH_VIEWS, MemoryService
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope
@@ -602,13 +603,15 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 "description": (
                     "Search the Severian memory store within the active scope. view: now (default, "
                     "current facts), history (current facts plus replaced ones, marked previously) or "
-                    "changes (only the facts that replaced an older one)."
+                    "changes (only the facts that replaced an older one). as_of (YYYY-MM-DD or ISO time) "
+                    "answers as the store stood then."
                 ),
                 "parameters": schema(
                     {
                         "query": {"type": "string", "minLength": 1},
                         "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200},
                         "view": {"type": "string", "enum": ["now", "history", "changes"], "default": "now"},
+                        "as_of": {"type": "string", "minLength": 8},
                     },
                     ["query"],
                 ),
@@ -723,7 +726,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             return _encode_tool_result({"error": "memory writes are disabled in this context"})
 
         if tool_name == "severian_search":
-            if set(arguments) - {*_SCOPE_DIMS, "query", "limit", "view"}:
+            if set(arguments) - {*_SCOPE_DIMS, "query", "limit", "view", "as_of"}:
                 return _encode_tool_result({"error": "invalid arguments"})
             query = arguments.get("query")
             if not isinstance(query, str) or not query.strip():
@@ -735,6 +738,13 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             view = arguments.get("view", "now")
             if view not in SEARCH_VIEWS:
                 return _encode_tool_result({"error": "invalid view"})
+            extra: dict[str, Any] = {}
+            if "as_of" in arguments:
+                as_of = parse_time(arguments["as_of"])
+                if as_of is None:
+                    return _encode_tool_result({"error": "invalid as_of"})
+                # A bare date means the end of that day; an explicit time is used as given.
+                extra["as_of"] = as_of.date() if len(str(arguments["as_of"]).strip()) <= 10 else as_of
             hits = self._service.search(
                 scope,
                 query=query,
@@ -742,6 +752,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 derive=False,
                 gateway=self._gateway,
                 view=view,
+                **extra,
             )
             entries = []
             for hit in hits:

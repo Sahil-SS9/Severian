@@ -161,6 +161,11 @@ class Memory(BaseModel):
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
     created_at: datetime = Field(default_factory=now)
+    # Event time (Step 3): the period ``[occurred_at, occurred_until)`` the memory says the thing
+    # happened in (UTC), found by rules from the text. ``created_at`` stays "when it was saved".
+    # Both None when the text names no clear time.
+    occurred_at: datetime | None = None
+    occurred_until: datetime | None = None
     # Usage tracking (Tier 2 salience): number of retrieval-time hits
     # recorded for this memory. Feeds the salience blend in curation and
     # the optional retrieval decay. Deterministic; incremented via

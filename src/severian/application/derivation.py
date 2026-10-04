@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
 from severian.application.extraction import EntityExtractionService
 from severian.application.ports import (
     CanonicalRepository,
@@ -27,8 +28,11 @@ class DerivationService:
         repository: CanonicalRepository,
         *,
         extraction: EntityExtractionService | None = None,
+        event_time: bool | None = None,
     ) -> None:
         self.repository = repository
+        # Step 3: find "when it happened" in each derived memory (SEVERIAN_EVENT_TIME; off by default).
+        self._event_time = event_time_enabled() if event_time is None else event_time
         # Optional deterministic graph extractor (P1c). When provided,
         # every derive pass also upserts entities/relations so the
         # graph store stays populated without manual seeding.
@@ -140,8 +144,15 @@ class DerivationService:
             if identity in seen:
                 continue
             seen.add(identity)
+            span = (
+                extract_event_span(content, message_time(observation.source, observation.created_at))
+                if self._event_time
+                else None
+            )
             validated.append(
                 Memory(
+                    occurred_at=span[0] if span else None,
+                    occurred_until=span[1] if span else None,
                     scope=scope,
                     kind=kind,
                     content=content,

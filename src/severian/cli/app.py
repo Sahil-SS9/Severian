@@ -21,6 +21,7 @@ from typing import Any
 
 import typer
 
+from severian.application.eventtime import parse_time
 from severian.application.service import SEARCH_VIEWS
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.errors import NotFoundError
@@ -193,10 +194,14 @@ def search(
     limit: int = typer.Option(20, "--limit", min=1, max=200),
     derive: bool = typer.Option(False, "--derive", help="Run derivation before searching."),
     view: str = typer.Option("now", "--view", help="now (current facts), history (with replaced ones) or changes."),
+    as_of: str = typer.Option("", "--as-of", help="Answer as the store stood on this date (YYYY-MM-DD) or time."),
 ) -> None:
     """Search the scope and emit JSON hits."""
     if view not in SEARCH_VIEWS:
         raise typer.BadParameter(f"must be one of {', '.join(SEARCH_VIEWS)}", param_hint="--view")
+    as_of_moment = parse_time(as_of) if as_of else None
+    if as_of and as_of_moment is None:
+        raise typer.BadParameter("must be a date (YYYY-MM-DD) or an ISO time", param_hint="--as-of")
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
         try:
@@ -213,6 +218,7 @@ def search(
                 derive=derive,
                 gateway=bundle.gateway,
                 view=view,
+                as_of=(as_of_moment.date() if len(as_of) <= 10 else as_of_moment) if as_of_moment else None,
             )
         except NotFoundError:
             _emit({"hits": []})

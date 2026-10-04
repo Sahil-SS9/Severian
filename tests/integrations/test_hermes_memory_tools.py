@@ -21,6 +21,7 @@ import pytest
 
 from severian.application.worker import DerivationWorker
 from severian.composition import ServiceBundle, build_bundle
+from severian.domain.models import Scope
 from severian.integrations.hermes import SeverianMemoryProvider
 
 SCOPE_ARGS = {
@@ -197,3 +198,23 @@ def test_search_history_view_labels_replaced_facts_previously(bundle):
     }
     assert [hit["previously"] for hit in changes] == [["The meeting is on Tuesday"]]
     assert call(agent, "severian_search", query="meeting", view="soon") == {"error": "invalid view"}
+
+
+def test_search_as_of_answers_as_the_store_stood_then(bundle):
+    """Step 3: ``as_of`` through the plugin; a bare date covers that whole day."""
+    turns = (
+        ("The meeting is on Tuesday", "2026-05-01T09:00:00Z"),
+        ("The meeting is now on Thursday", "2026-06-01T09:00:00Z"),
+    )
+    for text, when in turns:
+        source = {"session_id": "chat-1", "timestamp": when}
+        bundle.service.ingest_observation(Scope(**SCOPE_ARGS), content=text, source=source)
+        drain(bundle)
+    agent = provider(bundle, chat="chat-2")
+
+    then = call(agent, "severian_search", query="meeting", as_of="2026-05-15")["hits"]
+    day_of = call(agent, "severian_search", query="meeting", as_of="2026-06-01")["hits"]
+
+    assert [hit["content"] for hit in then] == ["The meeting is on Tuesday"]
+    assert "The meeting is now on Thursday" in [hit["content"] for hit in day_of]
+    assert call(agent, "severian_search", query="meeting", as_of="soon") == {"error": "invalid as_of"}
