@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,47 @@ def query_coverage(query: str, content: str) -> float:
 
 
 @dataclass(frozen=True)
+class SearchTuning:
+    """Step 2 search knobs. The defaults reproduce the pre-tuning behaviour exactly.
+
+    ``fusion_k`` / ``lexical_weight`` / ``vector_weight``: weighted reciprocal-rank fusion,
+    ``lexical_weight / (k + lexical_rank) + vector_weight / (k + vector_rank)``.
+    ``neighbours`` / ``neighbour_weight``: when a memory matches, also consider the memories
+    from the ``neighbours`` turns either side of it in the same source conversation, scored at
+    ``neighbour_weight`` times the match. 0 turns = off.
+    """
+
+    fusion_k: int = 60
+    lexical_weight: float = 1.0
+    vector_weight: float = 1.0
+    neighbours: int = 0
+    neighbour_weight: float = 0.5
+    neighbour_seeds: int = 5
+
+    def __post_init__(self) -> None:
+        if self.fusion_k < 1:
+            raise ValueError("fusion_k must be at least 1")
+        if self.lexical_weight < 0 or self.vector_weight < 0 or self.neighbour_weight < 0:
+            raise ValueError("search weights must not be negative")
+        if self.neighbours < 0 or self.neighbour_seeds < 1:
+            raise ValueError("neighbours must not be negative and neighbour_seeds must be at least 1")
+
+    @classmethod
+    def from_env(cls) -> SearchTuning:
+        """Read SEVERIAN_FUSION_K|LEXICAL|VECTOR and SEVERIAN_NEIGHBOURS, SEVERIAN_NEIGHBOUR_WEIGHT|SEEDS."""
+        env = os.environ
+        defaults = cls()
+        return cls(
+            fusion_k=int(env.get("SEVERIAN_FUSION_K", defaults.fusion_k)),
+            lexical_weight=float(env.get("SEVERIAN_FUSION_LEXICAL", defaults.lexical_weight)),
+            vector_weight=float(env.get("SEVERIAN_FUSION_VECTOR", defaults.vector_weight)),
+            neighbours=int(env.get("SEVERIAN_NEIGHBOURS", defaults.neighbours)),
+            neighbour_weight=float(env.get("SEVERIAN_NEIGHBOUR_WEIGHT", defaults.neighbour_weight)),
+            neighbour_seeds=int(env.get("SEVERIAN_NEIGHBOUR_SEEDS", defaults.neighbour_seeds)),
+        )
+
+
+@dataclass(frozen=True)
 class RetrievalResult:
     memory: Memory
     source_observation_ids: list[str]
@@ -56,10 +98,17 @@ class RetrievalResult:
 
 
 class RetrievalService:
-    def __init__(self, repository: CanonicalRepository, lexical: LexicalIndex, vector: VectorProjection):
+    def __init__(
+        self,
+        repository: CanonicalRepository,
+        lexical: LexicalIndex,
+        vector: VectorProjection,
+        tuning: SearchTuning | None = None,
+    ):
         self.repository = repository
         self.lexical = lexical
         self.vector = vector
+        self.tuning = tuning if tuning is not None else SearchTuning.from_env()
 
     def search(
         self,
@@ -107,6 +156,7 @@ class RetrievalService:
         # duplicates are the same fact, keep one per content (the
         # lowest memory_id — content-identical, so any pick is
         # semantically equal and the choice does not affect scores).
+        tuning = self.tuning
         ids = set(lexical_by_id) | set(vector_by_id)
         ranked: list[RetrievalResult] = []
         for memory_id in ids:
@@ -119,8 +169,8 @@ class RetrievalService:
                 (position for position, hit in enumerate(vector_hits, start=1) if hit.memory_id == memory_id),
                 None,
             )
-            fused = (1.0 / (60 + lexical_rank) if lexical_rank else 0.0) + (
-                1.0 / (60 + vector_rank) if vector_rank else 0.0
+            fused = (tuning.lexical_weight / (tuning.fusion_k + lexical_rank) if lexical_rank else 0.0) + (
+                tuning.vector_weight / (tuning.fusion_k + vector_rank) if vector_rank else 0.0
             )
             # Relevance floor: a vector-only hit below the floor is noise
             # (hash embeddings always produce SOME positive dot product).
@@ -199,7 +249,66 @@ class RetrievalService:
                 ranked = filtered
             if not ranked:
                 return []
+        if tuning.neighbours:
+            ranked = self._with_neighbours(scope, ranked, limit=limit)
         return ranked[:limit]
+
+    def _with_neighbours(
+        self, scope: Scope, ranked: list[RetrievalResult], *, limit: int
+    ) -> list[RetrievalResult]:
+        """Add the conversation neighbours of the best matches (MemMachine "nucleus + neighbours").
+
+        A neighbour is a memory derived from a turn within ``neighbours`` positions of a matched
+        memory's turn, in the same source session. It is scored below its match so a real match
+        still ranks first, and a neighbour that already matched keeps its own (higher) score.
+        Needs the scope's observation order, so it reads the scope once per search: opt-in only.
+        """
+        tuning = self.tuning
+        if not ranked:
+            return ranked
+        sessions: dict[str, list[tuple[datetime, str]]] = {}
+        position: dict[str, tuple[str, int]] = {}
+        for observation in self.repository.list_observations(scope):
+            session = str(observation.source.get("session_id", "")).strip()
+            if session:
+                sessions.setdefault(session, []).append((observation.created_at, observation.id))
+        for session, turns in sessions.items():
+            turns.sort()
+            for index, (_order, observation_id) in enumerate(turns):
+                position[observation_id] = (session, index)
+        memories_by_observation: dict[str, list[Memory]] = {}
+        for memory in self.repository.list_memories(scope):
+            for observation_id in memory.source_observation_ids:
+                memories_by_observation.setdefault(observation_id, []).append(memory)
+        present = {item.memory.id for item in ranked}
+        added: list[RetrievalResult] = []
+        for seed in ranked[: tuning.neighbour_seeds]:
+            for observation_id in seed.memory.source_observation_ids:
+                place = position.get(observation_id)
+                if place is None:
+                    continue
+                session, index = place
+                turns = sessions[session]
+                low, high = max(0, index - tuning.neighbours), min(len(turns), index + tuning.neighbours + 1)
+                for _order, neighbour_id in turns[low:high]:
+                    for memory in memories_by_observation.get(neighbour_id, ()):
+                        if memory.id in present:
+                            continue
+                        present.add(memory.id)
+                        added.append(
+                            RetrievalResult(
+                                memory=memory,
+                                source_observation_ids=list(memory.source_observation_ids),
+                                lexical_score=0.0,
+                                vector_score=0.0,
+                                fused_score=seed.fused_score * tuning.neighbour_weight,
+                            )
+                        )
+        if not added:
+            return ranked
+        merged = [*ranked, *added]
+        merged.sort(key=lambda item: (-item.fused_score, item.memory.content, item.memory.id))
+        return merged
 
     def search_shared(
         self,
