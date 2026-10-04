@@ -985,6 +985,22 @@ class SQLiteRepository:
         with self.engine.connect() as connection:
             return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
 
+    def list_trigger_memories(self, scope: Scope) -> list[Memory]:
+        """ACTIVE memories that carry a trigger (Step 4), oldest first; reads only those rows."""
+        self._require_scope(scope)
+        query = (
+            select(records.c.payload)
+            .where(
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+                func.json_extract(records.c.payload, "$.trigger").is_not(None),
+            )
+            .order_by(func.json_extract(records.c.payload, "$.created_at"), records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
+
     def list_memory_scopes(self) -> list[Scope]:
         """List every active-memory scope for local operator projection rebuilds."""
         query = (
@@ -1205,6 +1221,11 @@ class SQLiteRepository:
                 "revision_of_id": original.id,
                 "superseded_by_id": None,
                 "created_at": datetime.now(original.created_at.tzinfo),
+                # Metadata derived from the OLD text must not stay attached to the corrected text.
+                "occurred_at": None,
+                "occurred_until": None,
+                "cues": [],
+                "trigger": None,
             }
         )
         changed = original.model_copy(update={"superseded_by_id": revision.id})

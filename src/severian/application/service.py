@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from severian.application.anticipation import MAX_REMINDERS, DueContext, anticipation_enabled, match_due
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.ingestion import IngestionResult, IngestionService
@@ -120,6 +121,15 @@ class HealthReport:
     components: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DueView:
+    """An instruction-for-later whose trigger fits the current situation (Step 4)."""
+
+    memory_id: str
+    content: str
+    source_observation_ids: tuple[str, ...]
+
+
 class MemoryService:
     """The only sanctioned write/read path for adapters."""
 
@@ -135,7 +145,9 @@ class MemoryService:
         lexical: LexicalIndex | None = None,
         truth_state: bool | None = None,
         event_time: bool | None = None,
+        anticipation: bool | None = None,
     ) -> None:
+        self._anticipation = anticipation_enabled() if anticipation is None else anticipation
         self._truth_state = truth_state_enabled() if truth_state is None else truth_state
         self._event_time = event_time_enabled() if event_time is None else event_time
         self._repository = repository
@@ -371,6 +383,30 @@ class MemoryService:
                     pass
         return derived
 
+    def due(
+        self,
+        scope: Scope,
+        *,
+        tool: str = "",
+        path: str = "",
+        repo: str = "",
+        message: str = "",
+        limit: int = MAX_REMINDERS,
+    ) -> list[DueView]:
+        """Instructions-for-later whose trigger matches the current tool, path, repo or message.
+
+        At most two (``MAX_REMINDERS``), oldest first. Empty when anticipation is switched off or
+        nothing fits; reads only the memories that carry a trigger, never the whole store.
+        """
+        if not self._anticipation:
+            return []
+        context = DueContext(tool=tool, path=path, repo=repo, message=message)
+        candidates = self._repository.list_trigger_memories(scope)
+        return [
+            DueView(memory.id, memory.content, tuple(memory.source_observation_ids))
+            for memory in match_due(candidates, context, limit=limit)
+        ]
+
     def search(
         self,
         scope: Scope,
@@ -600,5 +636,6 @@ __all__ = [
     "MemoryService",
     "NotFoundError",
     "ObservationView",
+    "DueView",
     "SearchHitView",
 ]

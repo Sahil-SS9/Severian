@@ -56,6 +56,20 @@ class FTS5Index:
         # Detect by reading the FTS5 config rank/tokenizer row and rebuild
         # the (derived, rebuildable) projection table if it lacks porter.
         self._ensure_porter_tokenizer()
+        # Step 4 cues: when a memory will be needed (likely questions, situations). A separate
+        # one-row-per-memory table, so the memory's own text, its digest and its vector never change.
+        self.connection.execute(
+            """CREATE VIRTUAL TABLE IF NOT EXISTS cue_fts USING fts5(
+                memory_id UNINDEXED,
+                tenant_id UNINDEXED,
+                profile_id UNINDEXED,
+                collection_id UNINDEXED,
+                agent_id UNINDEXED,
+                session_id UNINDEXED,
+                cue,
+                tokenize = 'porter unicode61'
+            )"""
+        )
         self.connection.commit()
 
     def _ensure_porter_tokenizer(self) -> None:
@@ -116,7 +130,18 @@ class FTS5Index:
                 " ".join(memory.source_observation_ids),
             ),
         )
+        self._write_cues(memory)
         self.connection.commit()
+
+    def _write_cues(self, memory: Memory) -> None:
+        """Replace the memory's cue row (none when it has no cues); the caller commits."""
+        self.connection.execute("DELETE FROM cue_fts WHERE memory_id = ?", (memory.id,))
+        if memory.cues:
+            self.connection.execute(
+                """INSERT INTO cue_fts (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, cue)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (memory.id, *memory.scope.model_dump().values(), "\n".join(memory.cues)),
+            )
 
     def upsert_many(self, memories: list[Memory]) -> None:
         """Bulk upsert in ONE transaction (zero-debt 3.3).
@@ -145,6 +170,7 @@ class FTS5Index:
                         " ".join(memory.source_observation_ids),
                     ),
                 )
+                self._write_cues(memory)
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -152,6 +178,7 @@ class FTS5Index:
 
     def delete(self, memory_id: str) -> None:
         self.connection.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
+        self.connection.execute("DELETE FROM cue_fts WHERE memory_id = ?", (memory_id,))
         self.connection.commit()
 
     def count(self, scope: Scope) -> int:
@@ -167,13 +194,17 @@ class FTS5Index:
     def clear(self, scope: Scope | None = None) -> None:
         if scope is None:
             self.connection.execute("DELETE FROM memory_fts")
+            self.connection.execute("DELETE FROM cue_fts")
         else:
-            self.connection.execute(
+            for statement in (
                 """DELETE FROM memory_fts
                    WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
                      AND agent_id = ? AND session_id = ?""",
-                tuple(scope.model_dump().values()),
-            )
+                """DELETE FROM cue_fts
+                   WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                     AND agent_id = ? AND session_id = ?""",
+            ):
+                self.connection.execute(statement, tuple(scope.model_dump().values()))
         self.connection.commit()
 
     @staticmethod
@@ -209,6 +240,22 @@ class FTS5Index:
             (match, *scope.model_dump().values(), limit),
         ).fetchall()
         return [FTSHit(memory_id=row[0], score=float(-row[1]), snippet=row[2]) for row in rows]
+
+    def search_cues(self, scope: Scope, query: str, *, limit: int = 20) -> list[FTSHit]:
+        """Memories whose cues match ``query`` (best first). Empty when no memory has cues."""
+        match = self._match_query(query)
+        if not match:
+            return []
+        rows = self.connection.execute(
+            """SELECT memory_id, bm25(cue_fts) AS rank
+               FROM cue_fts
+               WHERE cue_fts MATCH ?
+                 AND tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?
+               ORDER BY rank, memory_id LIMIT ?""",
+            (match, *scope.model_dump().values(), limit),
+        ).fetchall()
+        return [FTSHit(memory_id=row[0], score=float(-row[1]), snippet="") for row in rows]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)

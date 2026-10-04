@@ -185,6 +185,9 @@ class _FakeRepository:
             if tuple(s) == tuple(scope.model_dump().values()) and m.superseded_by_id is None
         ]
 
+    def list_trigger_memories(self, scope: Scope) -> list[Memory]:
+        return [m for m in self.list_memories(scope) if m.trigger is not None]
+
     def list_memories_history(self, scope: Scope) -> list[Memory]:
         return [m for (rid, *s), m in self._memories.items() if tuple(s) == tuple(scope.model_dump().values())]
 

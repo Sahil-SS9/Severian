@@ -68,11 +68,14 @@ class SearchTuning:
     neighbour_seeds: int = 5
     # Step 3: score multiplier for a memory whose event time falls in the period the question names.
     time_boost: float = 2.0
+    # Step 4: weight of the "when this will be needed" cue channel in fusion. 0 = cues not searched.
+    cue_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if self.fusion_k < 1:
             raise ValueError("fusion_k must be at least 1")
-        if self.lexical_weight < 0 or self.vector_weight < 0 or self.neighbour_weight < 0 or self.time_boost < 1:
+        weights = (self.lexical_weight, self.vector_weight, self.neighbour_weight, self.cue_weight)
+        if min(weights) < 0 or self.time_boost < 1:
             raise ValueError("search weights must not be negative and time_boost must be at least 1")
         if self.neighbours < 0 or self.neighbour_seeds < 1:
             raise ValueError("neighbours must not be negative and neighbour_seeds must be at least 1")
@@ -90,6 +93,7 @@ class SearchTuning:
             neighbour_weight=float(env.get("SEVERIAN_NEIGHBOUR_WEIGHT", defaults.neighbour_weight)),
             neighbour_seeds=int(env.get("SEVERIAN_NEIGHBOUR_SEEDS", defaults.neighbour_seeds)),
             time_boost=float(env.get("SEVERIAN_TIME_BOOST", defaults.time_boost)),
+            cue_weight=float(env.get("SEVERIAN_FUSION_CUE", defaults.cue_weight)),
         )
 
 
@@ -153,6 +157,13 @@ class RetrievalService:
         lexical_hits = self.lexical.search(scope, query, limit=max(limit, 50))
         vector_hits = self.vector.search(scope, query, limit=max(limit, 50))
         lexical_by_id = {hit.memory_id: hit for hit in lexical_hits}
+        # Step 4 cue channel: memories whose "when needed" cues match the question. Off at weight 0.
+        cue_hits = (
+            self.lexical.search_cues(scope, query, limit=max(limit, 50))
+            if self.tuning.cue_weight > 0 and hasattr(self.lexical, "search_cues")
+            else []
+        )
+        cue_rank_by_id = {hit.memory_id: position for position, hit in enumerate(cue_hits, start=1)}
         vector_by_id = {hit.memory_id: hit for hit in vector_hits}
         # Dedupe by content: the correction/derive path can leave TWO
         # memories with IDENTICAL content (the revision memory + the
@@ -165,7 +176,7 @@ class RetrievalService:
         # lowest memory_id — content-identical, so any pick is
         # semantically equal and the choice does not affect scores).
         tuning = self.tuning
-        ids = set(lexical_by_id) | set(vector_by_id)
+        ids = set(lexical_by_id) | set(vector_by_id) | set(cue_rank_by_id)
         ranked: list[RetrievalResult] = []
         for memory_id in ids:
             memory = self.repository.get_memory(scope, memory_id)
@@ -177,8 +188,11 @@ class RetrievalService:
                 (position for position, hit in enumerate(vector_hits, start=1) if hit.memory_id == memory_id),
                 None,
             )
-            fused = (tuning.lexical_weight / (tuning.fusion_k + lexical_rank) if lexical_rank else 0.0) + (
-                tuning.vector_weight / (tuning.fusion_k + vector_rank) if vector_rank else 0.0
+            cue_rank = cue_rank_by_id.get(memory_id)
+            fused = (
+                (tuning.cue_weight / (tuning.fusion_k + cue_rank) if cue_rank else 0.0)
+                + (tuning.lexical_weight / (tuning.fusion_k + lexical_rank) if lexical_rank else 0.0)
+                + (tuning.vector_weight / (tuning.fusion_k + vector_rank) if vector_rank else 0.0)
             )
             # Relevance floor: a vector-only hit below the floor is noise
             # (hash embeddings always produce SOME positive dot product).
@@ -189,6 +203,7 @@ class RetrievalService:
             if (
                 min_vector_score is not None
                 and lexical_rank is None
+                and cue_rank is None
                 and vector_score < min_vector_score
             ):
                 continue

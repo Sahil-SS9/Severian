@@ -149,6 +149,23 @@ class Observation(BaseModel):
         return value
 
 
+class Trigger(BaseModel):
+    """When an instruction-for-later should come back (Step 4): the situations that match it.
+
+    ``tools`` / ``paths`` / ``repos`` match the current tool, file path or repository exactly;
+    ``keywords`` are stemmed words that must mostly appear in the current message.
+    """
+
+    tools: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    repos: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.tools or self.paths or self.repos or self.keywords)
+
+
 class Memory(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope
@@ -166,6 +183,11 @@ class Memory(BaseModel):
     # Both None when the text names no clear time.
     occurred_at: datetime | None = None
     occurred_until: datetime | None = None
+    # Anticipation (Step 4). ``cues``: short phrases saying when this memory will be needed (likely
+    # future questions, situations), indexed for search but never shown as facts. ``trigger``: set on
+    # instructions for later ("next time X, do Y"). Both stay empty unless anticipation is switched on.
+    cues: list[str] = Field(default_factory=list)
+    trigger: Trigger | None = None
     # Usage tracking (Tier 2 salience): number of retrieval-time hits
     # recorded for this memory. Feeds the salience blend in curation and
     # the optional retrieval decay. Deterministic; incremented via

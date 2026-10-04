@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from severian.application.anticipation import anticipation_enabled, extract_trigger
 from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
 from severian.application.extraction import EntityExtractionService
 from severian.application.ports import (
@@ -29,10 +32,16 @@ class DerivationService:
         *,
         extraction: EntityExtractionService | None = None,
         event_time: bool | None = None,
+        anticipation: bool | None = None,
+        cue_generator: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.repository = repository
         # Step 3: find "when it happened" in each derived memory (SEVERIAN_EVENT_TIME; off by default).
         self._event_time = event_time_enabled() if event_time is None else event_time
+        # Step 4: triggers for instructions-for-later (rules) and cues (one background model call per
+        # memory). SEVERIAN_ANTICIPATION, off by default. A cue failure never fails the derive.
+        self._anticipation = anticipation_enabled() if anticipation is None else anticipation
+        self._cue_generator = cue_generator
         # Optional deterministic graph extractor (P1c). When provided,
         # every derive pass also upserts entities/relations so the
         # graph store stays populated without manual seeding.
@@ -153,6 +162,8 @@ class DerivationService:
                 Memory(
                     occurred_at=span[0] if span else None,
                     occurred_until=span[1] if span else None,
+                    cues=self._cues_for(content),
+                    trigger=extract_trigger(content) if self._anticipation else None,
                     scope=scope,
                     kind=kind,
                     content=content,
@@ -169,3 +180,12 @@ class DerivationService:
             memories=validated,
             source_observation_id=observation.id,
         )
+
+    def _cues_for(self, content: str) -> list[str]:
+        """Cues for one memory: ``[]`` when anticipation is off, no generator is set, or it fails."""
+        if not self._anticipation or self._cue_generator is None:
+            return []
+        try:
+            return list(self._cue_generator(content))
+        except Exception:  # cues are an extra; the memory must still be written
+            return []

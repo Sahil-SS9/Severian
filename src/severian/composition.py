@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from severian.application.anticipation import CueGenerator, anticipation_enabled
 from severian.application.derivation import DerivationService
 from severian.application.extraction import EntityExtractionService
 from severian.application.ingestion import IngestionService
@@ -113,13 +114,19 @@ def _compose(
 ) -> ServiceBundle:
     projection = ProjectionCoordinator(repository, lexical, vector)
     extraction = EntityExtractionService(repository)
-    derivation = DerivationService(repository, extraction=extraction)
+    # The service's own derivation (used by search(derive=True), i.e. possibly on the chat path) never
+    # generates cues; only the background worker's derivation does (Step 4, SEVERIAN_ANTICIPATION).
+    derivation = DerivationService(
+        repository,
+        extraction=extraction,
+        cue_generator=CueGenerator.from_env().generate if anticipation_enabled() else None,
+    )
     service = BuildMemoryService(
         repository=repository,
         ingestion=IngestionService(repository),
         retrieval=RetrievalService(repository, lexical, vector),
         projection=projection,
-        derivation=derivation,
+        derivation=DerivationService(repository, extraction=extraction),
         context=ContextAssembler(),
     )
     return ServiceBundle(

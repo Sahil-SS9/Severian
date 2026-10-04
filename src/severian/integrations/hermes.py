@@ -27,6 +27,7 @@ Design rules:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
@@ -35,11 +36,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from severian.application.anticipation import MAX_REMINDERS
 from severian.application.derivation import DerivationGateway
 from severian.application.eventtime import parse_time
 from severian.application.service import SEARCH_VIEWS, MemoryService
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope
+
+logger = logging.getLogger(__name__)
 
 _SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")
 _EXPLICIT_DIMS = _SCOPE_DIMS[:-1]  # all but session_id
@@ -238,6 +242,8 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         # The host's chat/session id. Equal to ``_scope.session_id`` for an
         # explicit scope; provenance only for a Hermes-derived profile scope.
         self._session_id: str | None = None
+        # Step 4: reminders already shown in the current session (memory ids), so none repeats.
+        self._reminded: set[str] = set()
         self._derived_scope = False
         self._writes_enabled = True
         self._platform: str | None = None
@@ -335,6 +341,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         platform = kwargs.get("platform")
         self._scope = new_scope
         self._session_id = session_id
+        self._reminded = set()
         self._derived_scope = derived
         self._writes_enabled = not (isinstance(context, str) and context in _NON_PRIMARY_CONTEXTS)
         self._platform = platform if isinstance(platform, str) and platform.strip() else None
@@ -467,6 +474,33 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         return f"{block} Pass these exact scope arguments to every memory tool: {scope_args}."
 
     def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
+        """Source-cited bounded context, plus at most two due reminders (Step 4, off by default)."""
+        context = self._prefetch_context(query, session_id=session_id, **kwargs)
+        reminders = self._reminders(query, kwargs)
+        return f"{context}\n\n{reminders}" if context and reminders else context or reminders
+
+    def _reminders(self, query: str, kwargs: Mapping[str, Any]) -> str:
+        """Instructions-for-later that fit this turn: at most 2, each shown once per session, logged."""
+        if not isinstance(query, str) or not query.strip() or self._scope is None:
+            return ""
+        due = self._service.due(
+            self._scope,
+            tool=str(kwargs.get("tool", "") or ""),
+            path=str(kwargs.get("path", "") or ""),
+            repo=str(kwargs.get("repo", "") or ""),
+            message=query,
+        )
+        # Once per session: a reminder already shown is not repeated every turn (no nagging).
+        fresh = [item for item in due if item.memory_id not in self._reminded][:MAX_REMINDERS]
+        if not fresh:
+            return ""
+        for item in fresh:
+            self._reminded.add(item.memory_id)
+            logger.info("severian reminder shown memory=%s session=%s", item.memory_id, self._session_id)
+        lines = "\n".join(f"- {item.content[:300]}" for item in fresh)
+        return f"[Reminders: instructions you were given earlier that apply now.]\n{lines}"
+
+    def _prefetch_context(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
         """Search and return source-cited bounded context.
 
         The context is assembled from search hits using the service's
