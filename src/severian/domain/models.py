@@ -15,6 +15,9 @@ def now() -> datetime:
 # marker is itself superseded, so it is never an active head, never pending
 # derivation and never projected, while history keeps it for audit.
 ERASED = ":erased"
+# Predicates that hold one current value per subject: a newer value ends the
+# older one (kept in history with valid_to). Everything else accumulates.
+SINGLE_VALUED_PREDICATES = frozenset({"works_at", "located_in", "based_in"})
 
 
 # Source-identity keys probed (in order) when building the idempotency
@@ -227,6 +230,28 @@ class Relation(BaseModel):
         lineage = [source for source in self.source_observation_ids if source != observation_id]
         retracted_at = self.retracted_at if lineage else (self.retracted_at or at)
         return self.model_copy(update={"source_observation_ids": lineage, "retracted_at": retracted_at})
+
+    def replaced_by(self, newer: Relation, *, at: datetime) -> Relation | None:
+        """This relation ended as of ``at`` because ``newer`` gives a new value; None when unaffected.
+
+        Only single-valued predicates (one current value per subject) are
+        replaced: same subject and predicate, different object, still open.
+        """
+        if (
+            self.predicate not in SINGLE_VALUED_PREDICATES
+            or self.id == newer.id
+            or self.subject_id != newer.subject_id
+            or self.predicate != newer.predicate
+            or self.object_id == newer.object_id
+            or self.valid_to is not None
+        ):
+            return None
+        valid_to = at if self.valid_from is None or at >= self.valid_from else self.valid_from
+        return self.model_copy(update={"valid_to": valid_to})
+
+    def reopened(self) -> Relation | None:
+        """This relation made current again when restated after being replaced; None when already open."""
+        return None if self.valid_to is None else self.model_copy(update={"valid_to": None})
 
     @model_validator(mode="after")
     def valid_interval(self) -> Relation:

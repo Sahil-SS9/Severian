@@ -21,6 +21,7 @@ from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
+from severian.application.statements import drop_replaced
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope
 
@@ -392,16 +393,25 @@ class MemoryService:
                 ]
                 if pending_events:
                     self._projection.apply(pending_events)
-        results = self._retrieval.search(
+        # Improvement 2: a newer statement of the same fact replaces the older
+        # one in active results. Over-fetch so a replaced memory never costs
+        # the caller a result slot.
+        pool = self._retrieval.search(
             scope,
             query,
-            limit=limit,
+            limit=min(limit * 3, limit + 50),
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,
             min_coverage=min_coverage,
             salience_weight=salience_weight,
             salience_halflife_h=salience_halflife_h,
         )
+        results = drop_replaced(
+            pool,
+            content=lambda item: item.memory.content,
+            created_at=lambda item: item.memory.created_at,
+            key=lambda item: item.memory.id,
+        )[:limit]
         # Tier 2 usage tracking: record a hit for each returned memory so
         # curation salience reflects real retrieval usage. Opt-in (a
         # benchmark read must not mutate state by default).

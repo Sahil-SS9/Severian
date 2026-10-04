@@ -397,3 +397,45 @@ def test_blank_scope_dimension_rejected(backend: Any, dimension: str) -> None:
     scope = _scope().model_copy(update={dimension: "  "})
     with pytest.raises(ValueError):
         backend.get_observation(scope, "whatever")
+
+
+# -- improvement 2: single-valued relations (both backends) ---------------
+
+
+def _publish_fact(backend, scope: Scope, subject: str, predicate: str, obj: str) -> None:
+    observation = backend.add_observation(
+        Observation(scope=scope, content=f"{subject} {predicate} {obj}", source={"session_id": "s1"})
+    )
+    backend.publish_derivation(
+        scope,
+        entities=[("person", subject), ("organisation", obj)],
+        relations=[(subject, predicate, obj)],
+        memories=[],
+        source_observation_id=observation.id,
+    )
+
+
+def _open_objects(backend, scope: Scope, predicate: str) -> set[str]:
+    names = {entity.id: entity.name for entity in backend.list_entities(scope)}
+    return {
+        names[r.object_id] for r in backend.list_relations(scope)
+        if r.predicate == predicate and r.valid_to is None and r.retracted_at is None
+    }
+
+
+def test_single_valued_relation_keeps_only_the_newest_value_open(backend) -> None:
+    scope = _scope()
+    _publish_fact(backend, scope, "Alice", "works_at", "Acme")
+    _publish_fact(backend, scope, "Alice", "works_at", "Globex")
+    assert _open_objects(backend, scope, "works_at") == {"Globex"}
+    assert len([r for r in backend.list_relations(scope) if r.predicate == "works_at"]) == 2
+
+    _publish_fact(backend, scope, "Alice", "works_at", "Acme")
+    assert _open_objects(backend, scope, "works_at") == {"Acme"}
+
+
+def test_multi_valued_relation_keeps_every_value_open(backend) -> None:
+    scope = _scope()
+    _publish_fact(backend, scope, "Alice", "works_with", "Bob")
+    _publish_fact(backend, scope, "Alice", "works_with", "Carol")
+    assert _open_objects(backend, scope, "works_with") == {"Bob", "Carol"}

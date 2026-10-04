@@ -55,6 +55,7 @@ from sqlalchemy.exc import IntegrityError
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import (
     ERASED,
+    SINGLE_VALUED_PREDICATES,
     AuditEvent,
     Collection,
     Entity,
@@ -995,13 +996,17 @@ class PostgreSQLBackend:
                     )
                 ).mappings().one_or_none()
                 if existing is not None:
-                    supported = Relation.model_validate(existing["payload"]).supported_by(source_observation_id)
-                    if supported is not None:
+                    current = Relation.model_validate(existing["payload"])
+                    supported = current.supported_by(source_observation_id) or current
+                    reopened = supported.reopened() if predicate in SINGLE_VALUED_PREDICATES else None
+                    updated = reopened or (supported if supported is not current else None)
+                    if updated is not None:
                         connection.execute(
                             update(records)
                             .where(records.c.id == existing["id"])
-                            .values(payload=supported.model_dump(mode="json"))
+                            .values(payload=updated.model_dump(mode="json"))
                         )
+                    self._end_replaced_relations(connection, scope, updated or current)
                     continue
                 connection.execute(
                     records.insert().values(
@@ -1014,6 +1019,7 @@ class PostgreSQLBackend:
                         records.insert().values(**self._record_values("outbox", event, status="pending"))
                     )
                     connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                self._end_replaced_relations(connection, scope, relation)
             # -- memories (same as add_memories_batch) --
             existing_rows = connection.execute(
                 select(records.c.payload).where(
@@ -1211,6 +1217,36 @@ class PostgreSQLBackend:
                     update(records).where(records.c.id == row["id"]).values(payload=changed.model_dump(mode="json"))
                 )
         return retracted
+
+    def _end_replaced_relations(self, connection: Connection, scope: Scope, newer: Relation) -> None:
+        """End older open values of a single-valued predicate once ``newer`` states a new one."""
+        if newer.predicate not in SINGLE_VALUED_PREDICATES or newer.valid_to is not None:
+            return
+        sql = sa_text(
+            """
+            SELECT r.id, r.payload FROM records r
+            WHERE r.record_type = 'relation'
+              AND r.tenant_id = :tenant_id
+              AND r.profile_id = :profile_id
+              AND r.collection_id = :collection_id
+              AND r.agent_id = :agent_id
+              AND r.session_id = :session_id
+              AND r.payload->>'subject_id' = :subject_id
+              AND r.payload->>'predicate' = :predicate
+              AND r.id != :newer_id
+            """
+        )
+        stamp = now()
+        rows = connection.execute(
+            sql,
+            {**scope.model_dump(), "subject_id": newer.subject_id, "predicate": newer.predicate, "newer_id": newer.id},
+        ).mappings().all()
+        for row in rows:
+            ended = Relation.model_validate(row["payload"]).replaced_by(newer, at=stamp)
+            if ended is not None:
+                connection.execute(
+                    update(records).where(records.c.id == row["id"]).values(payload=ended.model_dump(mode="json"))
+                )
 
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
         """Mark active memories derived from an observation as superseded (P0-5)."""
