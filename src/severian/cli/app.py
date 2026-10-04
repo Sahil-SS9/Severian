@@ -655,6 +655,46 @@ def episode(
         bundle.close()
 
 
+@cli.command("audit")
+def audit(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Fix only what is safe: re-queue stuck jobs, write missing lexical/vector/cue rows. Deletes nothing.",
+    ),
+) -> None:
+    """Check the store and its indexes. Read-only unless --repair is given.
+
+    Reports index counts against the store, missing or orphaned index rows, memories and relations
+    that lost their source, stuck or dead-lettered jobs, and broken replacement chains. The report
+    is read through read-only connections, so a plain run changes nothing. Exit code 1 when
+    anything is left to fix (after the repair, if one was run).
+    """
+    from severian.infrastructure.audit import audit_store, repair_store
+
+    try:
+        before = audit_store(database, fts, vectors)
+    except FileNotFoundError as error:
+        raise typer.BadParameter(f"store file not found: {error}") from error
+    payload: dict[str, Any] = {"format": "severian-audit-v1", "mode": "repair" if repair else "read-only"}
+    final = before
+    if repair:
+        bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+        try:
+            payload["repair"] = repair_store(bundle, before)
+        finally:
+            bundle.close()
+        final = audit_store(database, fts, vectors)
+        payload["before"] = before.to_dict()["findings_by_kind"]
+    payload.update(final.to_dict())
+    _emit(payload)
+    if not final.ok:
+        raise typer.Exit(code=1)
+
+
 @cli.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
