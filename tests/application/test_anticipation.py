@@ -55,6 +55,36 @@ def test_instruction_with_nothing_to_hang_it_on_gets_no_trigger():
     assert extract_trigger("always") is None
 
 
+# Review finding 04/10: keywords were taken from the whole sentence (condition AND action), so
+# "Next time I mention the garden, remind me to check the tomato plants" needed 4 of
+# garden/check/tomato/plant/blight and a later "the garden" message never fired it.
+@pytest.mark.parametrize(
+    ("text", "keywords"),
+    [
+        ("Next time I mention the garden, remind me to check the tomato plants for blight.", ["garden"]),
+        (
+            "Next time I mention the car insurance renewal, remind me to get a broker quote.",
+            ["car", "insurance", "renewal"],
+        ),
+        ("Whenever we talk about the quarterly report, copy finance on the final draft", ["quarterly", "report"]),
+        # keywords are stored stemmed (as messages are when matched): Leeds -> leed
+        ("Remind me to bring the spare access badge when I go to the Leeds office", ["leed", "office"]),
+    ],
+)
+def test_keywords_come_from_the_condition_not_the_action(text, keywords):
+    trigger = extract_trigger(text)
+    assert trigger is not None and trigger.keywords == keywords
+
+
+def test_condition_keywords_fire_on_the_topic_and_not_on_the_action_words():
+    garden = memory(
+        "Next time I mention the garden, remind me to check the tomato plants for blight.",
+        extract_trigger("Next time I mention the garden, remind me to check the tomato plants for blight."),
+    )
+    assert match_due([garden], DueContext(message="I'm about to start on the garden now.")) == [garden]
+    assert match_due([garden], DueContext(message="give me a tomato soup recipe and check it")) == []
+
+
 # -- due matching ---------------------------------------------------------------------------
 
 
@@ -152,6 +182,27 @@ def test_generator_failures_return_empty_and_are_counted():
     assert CueGenerator(opener=answer("no list here")).generate("x") == []
     assert CueGenerator(opener=answer("[1, 2, {}]")).generate("x") == []
     assert generator.failures == 1 and len(generator.timings) == 1
+
+
+# Review finding 04/10: the default model name "local" is rejected by Turbofit (HTTP 400), and
+# failures were silent, so anticipation stored zero cues with no sign anything was wrong.
+def test_default_cue_model_is_one_turbofit_serves():
+    assert CueGenerator().model == "active:aux"
+    assert CueGenerator.from_env({}).model == "active:aux"
+    assert CueGenerator.from_env({"SEVERIAN_CUE_MODEL": "other"}).model == "other"
+
+
+def test_cue_failures_are_logged_once_not_silently_swallowed(caplog):
+    def broken(request, timeout):
+        raise OSError("HTTP Error 400: Unknown or unavailable Turbofit model: local")
+
+    generator = CueGenerator(opener=broken)
+    with caplog.at_level(logging.WARNING, logger="severian.application.anticipation"):
+        for _ in range(3):
+            assert generator.generate("x") == []
+    warnings = [r for r in caplog.records if "cue generation failed" in r.getMessage()]
+    assert len(warnings) == 1 and "Turbofit model" in warnings[0].getMessage()
+    assert generator.failures == 3
 
 
 def test_clean_cues_trims_dedupes_and_caps():

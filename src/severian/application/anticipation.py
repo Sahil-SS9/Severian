@@ -18,6 +18,7 @@ Everything here is rules plus one optional HTTP call; no new dependency, no mode
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -28,6 +29,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from severian.domain.models import Memory, Trigger
+
+_log = logging.getLogger(__name__)
+DEFAULT_CUE_MODEL = "active:aux"  # a Turbofit alias; "local" is rejected with HTTP 400
 
 __all__ = [
     "CueGenerator",
@@ -96,7 +100,7 @@ class CueGenerator:
         self,
         url: str = "http://127.0.0.1:8091/v1/chat/completions",
         *,
-        model: str = "local",
+        model: str = DEFAULT_CUE_MODEL,
         timeout: float = 20.0,
         opener: Callable[..., Any] | None = None,
     ) -> None:
@@ -112,7 +116,7 @@ class CueGenerator:
         values = os.environ if env is None else env
         return cls(
             values.get("SEVERIAN_CUE_URL", "http://127.0.0.1:8091/v1/chat/completions"),
-            model=values.get("SEVERIAN_CUE_MODEL", "local"),
+            model=values.get("SEVERIAN_CUE_MODEL", DEFAULT_CUE_MODEL),
             timeout=float(values.get("SEVERIAN_CUE_TIMEOUT", "20")),
         )
 
@@ -120,8 +124,10 @@ class CueGenerator:
         started = time.perf_counter()
         try:
             return self._generate(content)
-        except Exception:  # cues are optional; never let a model fault escape
+        except Exception as exc:  # cues are optional; never let a model fault escape
             self.failures += 1
+            if self.failures == 1:  # say so once, so a misconfigured model is visible without log spam
+                _log.warning("cue generation failed (model %r at %s): %s", self.model, self.url, exc)
             return []
         finally:
             self.timings.append(time.perf_counter() - started)
@@ -151,6 +157,17 @@ class CueGenerator:
 
 
 # -- triggers -------------------------------------------------------------------------------
+
+# Phrases that state the action first ("remind me to X when Y"); the condition follows later.
+_ACTION_FIRST = frozenset({"remind me", "remember to", "don't forget to", "dont forget to", "make sure to",
+                           "make sure you"})  # fmt: skip
+_CONDITION_START = re.compile(r"\b(?:when(?:ever)?|next time|every time|each time|before|if)\b", re.IGNORECASE)
+_CONDITION_END = re.compile(r"[,;:.]|\b(?:remind me|remember to|don'?t forget|make sure|please|then)\b", re.IGNORECASE)
+# Talk/activity verbs say THAT the topic comes up, not WHAT it is; never trigger on them.
+_CONDITION_FILLER = frozenset({
+    "mention", "mentioned", "talk", "talked", "discuss", "discussed", "ask", "asked", "bring", "brought", "raise",
+    "raised", "about", "go", "get", "start", "work", "deal", "touch", "look", "come", "im", "ve", "ll", "re",
+})  # fmt: skip
 
 # "next time", "whenever", "from now on" ... : the phrases that make a statement an instruction for later.
 _INSTRUCTION = re.compile(
@@ -262,6 +279,24 @@ def _words(text: str) -> list[str]:
     ]
 
 
+def _condition_words(content: str, match: re.Match[str]) -> list[str]:
+    """Keywords for WHEN the instruction applies, not for what to do then.
+
+    "Next time I mention the garden, remind me to check the tomatoes" -> ["garden"]: the
+    condition runs from the "next time/whenever" phrase to the first comma or action phrase.
+    "Remind me to X when Y" -> words of Y. Talk verbs ("mention", "talk about") are dropped.
+    With no recognisable condition, the whole sentence is used (previous behaviour).
+    """
+    phrase = match.group(0).casefold()
+    if phrase in _ACTION_FIRST:
+        later = _CONDITION_START.search(content, match.end())
+        condition = content[later.end() :] if later else ""
+    else:
+        condition = _CONDITION_END.split(content[match.end() :], maxsplit=1)[0]
+    words = [word for word in _words(condition) if word not in _CONDITION_FILLER]
+    return words or _words(content)
+
+
 def extract_trigger(content: str) -> Trigger | None:
     """Rules-only: a trigger for an instruction-for-later, else ``None`` (plain facts stay untriggered)."""
     match = _INSTRUCTION.search(content)
@@ -277,10 +312,8 @@ def extract_trigger(content: str) -> Trigger | None:
         if name.casefold() not in _NOT_TOOLS and name not in tools:
             tools.append(name)
     repos = [name for name in _REPO.findall(content) if name.casefold() not in _NOT_TOOLS]
-    # Keywords: what the instruction is about, from the clause that follows the "when/next time" phrase.
-    clause = content[match.end() :] if match.group(0).casefold() not in {"remind me", "remember to"} else content
     keywords: list[str] = []
-    for word in _words(clause):
+    for word in _condition_words(content, match):
         if word not in keywords:
             keywords.append(word)
     trigger = Trigger(tools=tools[:4], paths=paths[:4], repos=repos[:2], keywords=keywords[:6])

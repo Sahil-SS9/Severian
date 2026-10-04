@@ -185,6 +185,14 @@ class _FakeRepository:
             if tuple(s) == tuple(scope.model_dump().values()) and m.superseded_by_id is None
         ]
 
+    def list_session_observations(self, scope: Scope, session_ids: list[str]) -> list[Observation]:
+        wanted = {str(value) for value in session_ids}
+        return [o for o in self.list_observations(scope) if str((o.source or {}).get("session_id")) in wanted]
+
+    def list_memories_for_observations(self, scope: Scope, observation_ids: list[str]) -> list[Memory]:
+        wanted = set(observation_ids)
+        return [m for m in self.list_memories(scope) if wanted.intersection(m.source_observation_ids)]
+
     def list_trigger_memories(self, scope: Scope) -> list[Memory]:
         return [m for m in self.list_memories(scope) if m.trigger is not None]
 

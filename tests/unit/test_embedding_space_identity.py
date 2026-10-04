@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,8 @@ from severian.infrastructure.embedding_registry import (  # noqa: E402
 )
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex  # noqa: E402
 
-PG_DSN = "postgresql://severian:severian@127.0.0.1:54329/severian"
+# Same source as every other live-PG test; the literal is the CI service default.
+PG_DSN = os.environ.get("SEVERIAN_PG_DSN") or "postgresql://severian:severian@127.0.0.1:54329/severian"
 
 
 class _FakeNeuralEmbedding:

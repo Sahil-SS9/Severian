@@ -251,11 +251,7 @@ class RetrievalService:
         # genuine evidence and must survive even at low fused score
         # (LOCOMO q7: weak-but-genuine lexical match).
         if min_fused_score is not None:
-            ranked = [
-                item
-                for item in ranked
-                if item.lexical_score > 0.0 or item.fused_score >= min_fused_score
-            ]
+            ranked = [item for item in ranked if item.lexical_score > 0.0 or item.fused_score >= min_fused_score]
         # Query-coverage abstention: when enabled, EVERY returned hit must
         # cover a minimum fraction of the query's meaningful (stemmed,
         # non-stopword) tokens. A lexical decoy can share 1 generic token
@@ -312,14 +308,29 @@ class RetrievalService:
         A neighbour is a memory derived from a turn within ``neighbours`` positions of a matched
         memory's turn, in the same source session. It is scored below its match so a real match
         still ranks first, and a neighbour that already matched keeps its own (higher) score.
-        Needs the scope's observation order, so it reads the scope once per search: opt-in only.
+        Reads only what it needs: the matched conversations' turns, then the memories of the
+        neighbouring turns (two bounded queries; it used to read the whole scope per search).
         """
         tuning = self.tuning
         if not ranked:
             return ranked
+        seed_observation_ids = {
+            oid for seed in ranked[: tuning.neighbour_seeds] for oid in seed.memory.source_observation_ids
+        }
+        seed_sessions: set[str] = set()
+        for observation_id in sorted(seed_observation_ids):
+            try:
+                observation = self.repository.get_observation(scope, observation_id)
+            except LookupError:
+                continue
+            session = str(observation.source.get("session_id", "")).strip()
+            if session:
+                seed_sessions.add(session)
+        if not seed_sessions:
+            return ranked
         sessions: dict[str, list[tuple[datetime, str]]] = {}
         position: dict[str, tuple[str, int]] = {}
-        for observation in self.repository.list_observations(scope):
+        for observation in self.repository.list_session_observations(scope, sorted(seed_sessions)):
             session = str(observation.source.get("session_id", "")).strip()
             if session:
                 sessions.setdefault(session, []).append((observation.created_at, observation.id))
@@ -327,8 +338,16 @@ class RetrievalService:
             turns.sort()
             for index, (_order, observation_id) in enumerate(turns):
                 position[observation_id] = (session, index)
+        window_ids: set[str] = set()
+        for observation_id in seed_observation_ids:
+            place = position.get(observation_id)
+            if place is not None:
+                session, index = place
+                turns = sessions[session]
+                low, high = max(0, index - tuning.neighbours), min(len(turns), index + tuning.neighbours + 1)
+                window_ids.update(neighbour_id for _order, neighbour_id in turns[low:high])
         memories_by_observation: dict[str, list[Memory]] = {}
-        for memory in self.repository.list_memories(scope):
+        for memory in self.repository.list_memories_for_observations(scope, sorted(window_ids)):
             for observation_id in memory.source_observation_ids:
                 memories_by_observation.setdefault(observation_id, []).append(memory)
         present = {item.memory.id for item in ranked}

@@ -1110,6 +1110,48 @@ class PostgreSQLBackend:
         with self.engine.connect() as connection:
             return int(connection.execute(query).scalar_one())
 
+    def list_session_observations(self, scope: Scope, session_ids: list[str]) -> list[Observation]:
+        """Observations in scope whose ``source.session_id`` is one of ``session_ids`` (neighbour lookup)."""
+        self._require_scope(scope)
+        wanted = sorted({str(value) for value in session_ids})
+        if not wanted:
+            return []
+        query = (
+            select(records.c.payload)
+            .where(
+                records.c.record_type == "observation",
+                *self._scope_predicates(scope),
+                records.c.payload["source"]["session_id"].astext.in_(wanted),
+            )
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Observation.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def list_memories_for_observations(self, scope: Scope, observation_ids: list[str]) -> list[Memory]:
+        """ACTIVE memories in scope derived from any of ``observation_ids`` (neighbour lookup)."""
+        self._require_scope(scope)
+        wanted = sorted(set(observation_ids))
+        if not wanted:
+            return []
+        source = (
+            func.jsonb_array_elements_text(records.c.payload["source_observation_ids"])
+            .table_valued("value")
+            .alias("src")
+        )
+        query = (
+            select(records.c.payload)
+            .where(
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                records.c.payload["superseded_by_id"].astext.is_(None),
+                select(source.c.value).where(source.c.value.in_(wanted)).exists(),
+            )
+            .order_by(records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Memory.model_validate(value) for value in connection.execute(query).scalars()]
+
     def list_memories(self, scope: Scope) -> list[Memory]:
         """List ACTIVE memories only — superseded revisions are excluded (P0-5)."""
         self._require_scope(scope)
