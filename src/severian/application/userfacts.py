@@ -21,13 +21,16 @@ gone keto" -> only "no longer pescatarian") and most facts inside long LongMemEv
 from __future__ import annotations
 
 import ast
+import http.client
 import json
 import logging
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -41,6 +44,9 @@ DEFAULT_FACTS_URL = "http://127.0.0.1:8091/v1/chat/completions"
 MAX_FACTS_PER_MESSAGE = 8
 MAX_FACT_CHARS = 300
 MAX_MESSAGE_CHARS = 2000  # long pastes rarely hold personal facts; cap the prompt
+RETRY_PAUSE_S = 5.0  # a server or network fault gets this long before the one retry
+MAX_KEPT_REPLIES = 50  # bad replies kept per extractor, so failures can be read later
+MAX_KEPT_REPLY_CHARS = 4000
 _TRUE = {"1", "true", "yes", "on"}
 
 
@@ -164,12 +170,43 @@ def _first_json(text: str) -> object:
     return None
 
 
+@dataclass(frozen=True)
+class Extraction:
+    """Facts per message number (1-based) and, for messages given up on, why."""
+
+    facts: dict[int, list[str]] = field(default_factory=dict)
+    failed: dict[int, str] = field(default_factory=dict)
+
+
+_DESCRIBED_REPLY_CHARS = 300
+
+
+class FactCallError(Exception):
+    """One model call that gave nothing usable.
+
+    ``reply`` keeps what came back (the model's text, or the server's error body; may be empty).
+    ``transient`` marks a server or network fault: a pause might help, a smaller batch would not.
+    ``cut_off`` marks a reply that hit the token limit: more room might help.
+    """
+
+    def __init__(self, reason: str, *, reply: str = "", transient: bool = False, cut_off: bool = False) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.reply = reply
+        self.transient = transient
+        self.cut_off = cut_off
+
+    def describe(self) -> str:
+        """The reason and the start of the reply: what a given-up turn's job keeps as its error."""
+        return f"{self.reason} (reply: {self.reply[:_DESCRIBED_REPLY_CHARS]!r})" if self.reply else self.reason
+
+
 class FactExtractor:
     """Extracts user facts from a batch of messages with an OpenAI-compatible local chat endpoint.
 
-    ``extract`` returns ``{}`` on any failure (down, slow, unusable reply) and counts it: facts are
-    an extra, so a broken model must never break saving. ``calls``, ``timings`` and the token
-    counters are the cost record the benchmark reports.
+    ``extract`` never raises: facts are an extra, so a broken model must never break saving.
+    ``calls``, ``timings``, the token counters and the failure counters are the cost record the
+    benchmark reports; ``bad_replies`` keeps the first replies that could not be used.
     """
 
     def __init__(
@@ -179,16 +216,25 @@ class FactExtractor:
         model: str = DEFAULT_FACTS_MODEL,
         timeout: float = 60.0,
         opener: Callable[..., Any] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.url = url
         self.model = model
         self.timeout = timeout
         self._open = opener or urllib.request.urlopen
+        self._sleep = sleep
         self.calls = 0
-        self.failures = 0
+        self.failures = 0  # failed calls
         self.timings: list[float] = []
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.batches = 0  # extract() calls with something to send
+        self.first_failures = 0  # batches whose first call failed
+        self.retries = 0
+        self.splits = 0
+        self.failed_batches = 0  # batches with at least one message given up
+        self.given_up = 0  # messages given up
+        self.bad_replies: list[dict[str, Any]] = []
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> FactExtractor:
@@ -199,44 +245,120 @@ class FactExtractor:
             timeout=float(values.get("SEVERIAN_FACTS_TIMEOUT", "60")),
         )
 
-    def extract(self, messages: list[str]) -> dict[int, list[str]]:
-        """Facts per message number (1-based, in the order given)."""
+    def extract(self, messages: list[str]) -> Extraction:
+        """Facts per message number (1-based, in the order given), and the messages given up on.
+
+        A failed call keeps its reply and the batch is retried once: after a pause when the server
+        or network failed, with twice the room when the reply was cut off. If the retry fails too,
+        a reply problem splits the batch in half and each half is tried once, splitting again while
+        it fails, so one unreadable message costs only its own facts. A server or network fault is
+        never split (a smaller batch would not help): the batch is given up.
+        """
         if not messages:
-            return {}
+            return Extraction()
+        self.batches += 1
+        facts: dict[int, list[str]] = {}
+        failed: dict[int, str] = {}
+        self._attempt(messages, 0, facts, failed, top=True)
+        if failed:
+            self.failed_batches += 1
+            self.given_up += len(failed)
+        return Extraction(facts=dict(sorted(facts.items())), failed=dict(sorted(failed.items())))
+
+    def _attempt(
+        self, messages: list[str], offset: int, facts: dict[int, list[str]], failed: dict[int, str], *, top: bool
+    ) -> None:
+        try:
+            found = self._call(messages)
+        except FactCallError as first:
+            if top:
+                self.first_failures += 1
+            if not (top or first.transient):  # inside a split: only a server fault earns a retry
+                self._split_or_give_up(messages, offset, facts, failed, first)
+                return
+            self.retries += 1
+            if first.transient:
+                self._sleep(RETRY_PAUSE_S)
+            try:
+                found = self._call(messages, room=2 if first.cut_off else 1)
+            except FactCallError as second:
+                self._split_or_give_up(messages, offset, facts, failed, second)
+                return
+        for number, items in found.items():
+            facts[offset + number] = items
+
+    def _split_or_give_up(
+        self,
+        messages: list[str],
+        offset: int,
+        facts: dict[int, list[str]],
+        failed: dict[int, str],
+        error: FactCallError,
+    ) -> None:
+        if error.transient or len(messages) == 1:
+            failed.update({offset + number: error.describe() for number in range(1, len(messages) + 1)})
+            return
+        self.splits += 1
+        half = (len(messages) + 1) // 2
+        self._attempt(messages[:half], offset, facts, failed, top=False)
+        self._attempt(messages[half:], offset + half, facts, failed, top=False)
+
+    def _call(self, messages: list[str], *, room: int = 1) -> dict[int, list[str]]:
+        """One model call; any problem becomes a FactCallError, counted and kept."""
         self.calls += 1
         started = time.perf_counter()
         try:
-            return self._extract(messages)
+            return self._request(messages, room=room)
         except Exception as exc:  # facts are optional; never let a model fault escape
+            error = exc if isinstance(exc, FactCallError) else FactCallError(f"{type(exc).__name__}: {exc}")
             self.failures += 1
             if self.failures == 1:  # say so once, so a misconfigured model is visible without log spam
-                _log.warning("fact extraction failed (model %r at %s): %s", self.model, self.url, exc)
-            return {}
+                _log.warning("fact extraction failed (model %r at %s): %s", self.model, self.url, error.describe())
+            if len(self.bad_replies) < MAX_KEPT_REPLIES:
+                self.bad_replies.append(
+                    {"reason": error.reason, "reply": error.reply[:MAX_KEPT_REPLY_CHARS], "messages": len(messages)}
+                )
+            raise error from exc
         finally:
             self.timings.append(time.perf_counter() - started)
 
-    def _extract(self, messages: list[str]) -> dict[int, list[str]]:
+    def _request(self, messages: list[str], *, room: int) -> dict[int, list[str]]:
         numbered = "\n".join(f"[{number}] {text[:MAX_MESSAGE_CHARS]}" for number, text in enumerate(messages, 1))
         body = json.dumps(
             {
                 "model": self.model,
                 "temperature": 0,
-                "max_tokens": min(2048, 256 + 192 * len(messages)),
+                "max_tokens": min(4096, room * min(2048, 256 + 192 * len(messages))),
                 "messages": [{"role": "system", "content": _PROMPT}, {"role": "user", "content": numbered}],
             }
         ).encode()
         request = urllib.request.Request(  # noqa: S310 - operator-configured local URL
             self.url, data=body, headers={"Content-Type": "application/json"}, method="POST"
         )
-        with self._open(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read())
+        try:
+            with self._open(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:  # the server answered with an error status
+            raise FactCallError(str(exc), reply=_error_body(exc), transient=exc.code >= 500 or exc.code == 429) from exc
+        except (OSError, http.client.HTTPException) as exc:  # refused, reset or timed out
+            raise FactCallError(str(exc) or type(exc).__name__, transient=True) from exc
         usage = payload.get("usage") or {}
         self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
         self.completion_tokens += int(usage.get("completion_tokens") or 0)
         choice = payload["choices"][0]
-        if choice.get("finish_reason") == "length":  # cut off: usually a repetition loop
-            raise ValueError("reply cut off at max_tokens")
-        found = _first_json(str(choice["message"]["content"]))
+        content = str(choice["message"].get("content") or "")
+        # An empty reply keeps the whole message (e.g. a reasoning field), so the failure can be read.
+        reply = content or json.dumps(choice["message"])
+        if choice.get("finish_reason") == "length":  # cut off: a long answer or a repetition loop
+            raise FactCallError("reply cut off at max_tokens", reply=reply, cut_off=True)
+        found = _first_json(content)
         if found is None:
-            raise ValueError("no JSON object or list in the reply")
+            raise FactCallError("no JSON object or list in the reply", reply=reply)
         return clean_facts(found, count=len(messages))
+
+
+def _error_body(error: urllib.error.HTTPError) -> str:
+    try:
+        return error.read().decode("utf-8", "replace")[:MAX_KEPT_REPLY_CHARS]
+    except Exception:  # the body is a nicety; the status line already says what happened
+        return ""

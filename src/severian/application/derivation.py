@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from severian.application.anticipation import anticipation_enabled, extract_trigger
@@ -13,7 +14,7 @@ from severian.application.ports import (
 from severian.application.ports import (
     DerivationGateway as DerivationGateway,
 )
-from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, time_label, user_text
+from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, Extraction, time_label, user_text
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Observation, Scope
 
@@ -31,7 +32,15 @@ class FactSource(Protocol):
 
     model: str
 
-    def extract(self, messages: list[str]) -> dict[int, list[str]]: ...
+    def extract(self, messages: list[str]) -> Extraction: ...
+
+
+@dataclass(frozen=True)
+class UserFacts:
+    """What one fact batch gave: the facts published, and the turns given up on (observation id -> why)."""
+
+    published: list[Memory] = field(default_factory=list)
+    failed: dict[str, str] = field(default_factory=dict)
 
 
 class CloudPolicyError(PermissionError):
@@ -212,16 +221,16 @@ class DerivationService:
         except Exception:  # cues are an extra; the memory must still be written
             return []
 
-    def derive_user_facts(self, scope: Scope, observation_ids: Sequence[str]) -> list[Memory]:
-        """Facts the user stated in these turns, from ONE model call for the batch (Round 2 idea 1).
+    def derive_user_facts(self, scope: Scope, observation_ids: Sequence[str]) -> UserFacts:
+        """Facts the user stated in these turns, from ONE batch to the model (Round 2 idea 1).
 
         Turns that are gone, superseded or hold nothing from the user are skipped. Each fact is a
         ``user_fact`` memory with the same source turn and time label as the turn's own memory, so
-        the raw turn stays linked. A model failure yields no facts: the raw turns are already saved
-        and searchable, and the extractor counts the failure.
+        the raw turn stays linked. Turns the model could not serve come back in ``failed`` with the
+        reason; their raw turns are already saved and searchable.
         """
         if self._fact_extractor is None:
-            return []
+            return UserFacts()
         turns: list[tuple[str, Observation, str]] = []
         for observation_id in observation_ids:
             try:
@@ -234,17 +243,18 @@ class DerivationService:
             if said:
                 turns.append((said, observation, time_label(observation.content)))
         if not turns:
-            return []
+            return UserFacts()
         try:
             found = self._fact_extractor.extract([said for said, _, _ in turns])
-        except Exception:  # the production extractor never raises; facts stay optional either way
+        except Exception as exc:  # the production extractor never raises; facts stay optional either way
             logger.warning("fact extraction raised; no facts for %d turns", len(turns), exc_info=True)
-            return []
+            reason = f"fact extraction raised {type(exc).__name__}: {exc}"
+            return UserFacts(failed={observation.id: reason for _, observation, _ in turns})
         model_id = str(getattr(self._fact_extractor, "model", "unknown"))
         published: list[Memory] = []
         for number, (_said, observation, label) in enumerate(turns, 1):
             memories = []
-            for fact in found.get(number, []):
+            for fact in found.facts.get(number, []):
                 content = f"{label} {fact}" if label else fact
                 span = (
                     extract_event_span(content, message_time(observation.source, observation.created_at))
@@ -268,4 +278,5 @@ class DerivationService:
                 published += self.repository.publish_derivation(
                     scope, entities=[], relations=[], memories=memories, source_observation_id=observation.id
                 )
-        return published
+        failed = {turns[number - 1][1].id: why for number, why in found.failed.items() if 1 <= number <= len(turns)}
+        return UserFacts(published=published, failed=failed)

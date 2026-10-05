@@ -60,10 +60,13 @@ class WorkerSummary:
     # dead-letter derivations that already succeeded); this counter surfaces
     # them so callers and cron summaries can alarm on a stuck projection.
     projection_failed: int = 0
+    # Round 2 idea 1: fact jobs the model could not serve (after its retry and split) are completed
+    # as failed with the reason; counted apart from ``failed`` (storage faults) so callers can tell.
+    gave_up: int = 0
 
     @property
     def total(self) -> int:
-        return self.processed + self.failed
+        return self.processed + self.failed + self.gave_up
 
 
 class DerivationWorker:
@@ -237,13 +240,15 @@ class DerivationWorker:
         Claims ``extract_facts`` jobs oldest first, ``batch_size`` at a time, so consecutive
         messages reach the model together; a batch is split by scope so no call mixes two users.
         Facts are projected before their jobs complete (same rule as ``drain``), so a completed
-        job means its facts are searchable. A model failure completes the jobs without facts:
-        the raw turns were saved and made searchable by the normal pass. ``max_batches`` bounds
-        the pass; ``None`` empties the queue.
+        job means its facts are searchable. Turns the model could not serve (after the extractor's
+        retry and split) complete as failed with the reason and the start of the bad reply as the
+        job's error (``gave_up``); they are not retried in a loop, and their raw turns were saved
+        and made searchable by the normal pass. ``max_batches`` bounds the pass; ``None`` empties
+        the queue.
         """
         if self._derivation is None:
             raise RuntimeError("fact extraction needs a derivation service")
-        processed = failed = batches = projection_failed = 0
+        processed = failed = gave_up = batches = projection_failed = 0
         touched_all: dict[str, Scope] = {}
         while max_batches is None or batches < max_batches:
             claimed: list[Job] = []
@@ -259,11 +264,12 @@ class DerivationWorker:
             for job in claimed:
                 groups.setdefault(job.scope.model_dump_json(), []).append(job)
             done: list[Job] = []
+            unserved: list[tuple[Job, str]] = []
             touched: dict[str, Scope] = {}
             for key, jobs in groups.items():
                 ids = [str(job.payload.get("observation_id", "")) for job in jobs]
                 try:
-                    self._derivation.derive_user_facts(jobs[0].scope, ids)
+                    result = self._derivation.derive_user_facts(jobs[0].scope, ids)
                 except Exception as exc:  # a storage fault: fail these jobs, keep the pass going
                     for job in jobs:
                         try:
@@ -272,25 +278,34 @@ class DerivationWorker:
                             logger.warning("failed to mark job %s as failed: %s", job.id, exc, exc_info=True)
                     failed += len(jobs)
                     continue
-                done += jobs
+                for job in jobs:
+                    reason = result.failed.get(str(job.payload.get("observation_id", "")))
+                    if reason is None:
+                        done.append(job)
+                    else:
+                        unserved.append((job, reason))
                 touched[key] = jobs[0].scope
             applied = self._project_outbox(touched, worker_id)
             if applied is None:
                 projection_failed = 1
             for job in done:
                 self._repository.complete_job(job.id, "done", worker_id=worker_id)
+            for job, reason in unserved:
+                self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=reason)
             if applied:
                 try:
                     self._repository.ack_outbox_many([event.id for event in applied])
                 except Exception:
                     logger.warning("failed to ack outbox batch", exc_info=True)
             processed += len(done)
+            gave_up += len(unserved)
             touched_all.update(touched)
         return WorkerSummary(
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched_all.values()),
             projection_failed=projection_failed,
+            gave_up=gave_up,
         )
 
     def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> list[Event] | None:

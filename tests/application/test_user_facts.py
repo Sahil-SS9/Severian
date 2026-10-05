@@ -13,24 +13,33 @@ self-contained facts, pronouns replaced (hindsight_api/engine/retain/fact_extrac
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import re
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
+from sqlalchemy import select
 
 from severian.application.eventtime import extract_event_span, message_time
 from severian.application.userfacts import (
     FACTS_JOB,
     MAX_FACT_CHARS,
     MAX_FACTS_PER_MESSAGE,
+    MAX_KEPT_REPLIES,
+    MAX_KEPT_REPLY_CHARS,
+    RETRY_PAUSE_S,
+    Extraction,
     FactExtractor,
     clean_facts,
     user_text,
 )
 from severian.application.worker import DerivationWorker, WorkerSummary
 from severian.composition import ServiceBundle, build_bundle
-from severian.domain.models import Memory, Scope
+from severian.domain.models import Job, Memory, Scope
+from severian.infrastructure.sqlite import records
 
 SCOPE = Scope(tenant_id="kensei", profile_id="sahil", collection_id="profile", agent_id="kensei", session_id="shared")
 LABEL = "[2023/05/20 (Sat) 10:00]"
@@ -95,6 +104,10 @@ def model(reply: str, seen: list | None = None, usage: dict | None = None):
     return opener
 
 
+def no_pause(_seconds: float) -> None:
+    return None
+
+
 @pytest.mark.parametrize(
     "reply",
     [
@@ -107,19 +120,20 @@ def model(reply: str, seen: list | None = None, usage: dict | None = None):
 )
 def test_extractor_parses_common_reply_shapes(reply):
     extractor = FactExtractor(opener=model(reply))
-    assert extractor.extract(["I moved to York", "thanks"]) == {1: ["The user moved to York."]}
+    assert extractor.extract(["I moved to York", "thanks"]) == Extraction(facts={1: ["The user moved to York."]})
     assert extractor.failures == 0 and extractor.calls == 1
 
 
 def test_extractor_numbers_messages_in_order_and_records_cost():
     seen: list = []
     extractor = FactExtractor(opener=model("{}", seen, usage={"prompt_tokens": 120, "completion_tokens": 7}))
-    assert extractor.extract(["first thing", "second thing"]) == {}
+    assert extractor.extract(["first thing", "second thing"]) == Extraction()
     sent = seen[0]
     assert sent["model"] == "active:aux" and sent["temperature"] == 0
     text = sent["messages"][-1]["content"]
     assert text.index("[1] first thing") < text.index("[2] second thing")
     assert (extractor.prompt_tokens, extractor.completion_tokens, len(extractor.timings)) == (120, 7, 1)
+    assert (extractor.batches, extractor.first_failures, extractor.failed_batches) == (1, 0, 0)
 
 
 def test_extractor_cuts_long_messages_before_sending():
@@ -128,26 +142,127 @@ def test_extractor_cuts_long_messages_before_sending():
     assert len(seen[0]["messages"][-1]["content"]) < 2_500
 
 
-def test_extractor_failures_return_nothing_are_counted_and_logged_once(caplog):
+def echo_model(seen: list | None = None, *, unreadable: str = "BAD"):
+    """States one fact per message, but answers in prose whenever the batch holds ``unreadable``."""
+
+    def opener(request, timeout):
+        sent = json.loads(request.data)
+        if seen is not None:
+            seen.append(sent)
+        said = re.findall(r"^\[(\d+)\] (.*)$", sent["messages"][-1]["content"], flags=re.MULTILINE)
+        if any(unreadable in text for _number, text in said):
+            content = "Sorry, I can't help with that."
+        else:
+            content = json.dumps({number: [f"The user said {text}."] for number, text in said})
+        return _Reply({"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
+
+    return opener
+
+
+def batch_sizes(seen: list) -> list[int]:
+    return [len(re.findall(r"^\[\d+\] ", sent["messages"][-1]["content"], flags=re.MULTILINE)) for sent in seen]
+
+
+def test_a_bad_reply_is_kept_and_the_batch_retried_once():
+    replies = iter(["Sorry, I can't help with that.", '{"1": ["The user moved to York."]}'])
+
+    def opener(request, timeout):
+        return _Reply({"choices": [{"message": {"content": next(replies)}, "finish_reason": "stop"}]})
+
+    extractor = FactExtractor(opener=opener, sleep=no_pause)
+    assert extractor.extract(["I moved to York"]) == Extraction(facts={1: ["The user moved to York."]})
+    assert (extractor.calls, extractor.failures, extractor.first_failures, extractor.retries) == (2, 1, 1, 1)
+    assert (extractor.failed_batches, extractor.given_up) == (0, 0)
+    assert extractor.bad_replies == [
+        {"reason": "no JSON object or list in the reply", "reply": "Sorry, I can't help with that.", "messages": 1}
+    ]
+
+
+def test_a_batch_that_fails_twice_is_split_until_the_unreadable_message_is_alone():
+    seen: list = []
+    extractor = FactExtractor(opener=echo_model(seen), sleep=no_pause)
+    got = extractor.extract(["one", "two", "BAD three", "four"])
+    assert got.facts == {1: ["The user said one."], 2: ["The user said two."], 4: ["The user said four."]}
+    assert list(got.failed) == [3]
+    assert got.failed[3].startswith("no JSON object or list in the reply") and "Sorry, I can't" in got.failed[3]
+    # all four: first try + one retry; then halves, and a half that fails is split again (no more retries)
+    assert batch_sizes(seen) == [4, 4, 2, 2, 1, 1]
+    assert (extractor.batches, extractor.first_failures, extractor.retries, extractor.splits) == (1, 1, 1, 2)
+    assert (extractor.calls, extractor.failures, extractor.failed_batches, extractor.given_up) == (6, 4, 1, 1)
+    assert len(extractor.bad_replies) == 4
+
+
+def unavailable(calls: list, body: bytes = b"loading model"):
+    def opener(request, timeout):
+        calls.append(json.loads(request.data))
+        raise HTTPError("http://127.0.0.1:8091", 503, "Service Unavailable", hdrs=None, fp=io.BytesIO(body))  # type: ignore[arg-type]
+
+    return opener
+
+
+def test_a_server_fault_is_retried_once_after_a_pause_and_never_split():
+    calls: list = []
+    pauses: list[float] = []
+    extractor = FactExtractor(opener=unavailable(calls), sleep=pauses.append)
+    got = extractor.extract(["a", "b", "c", "d"])
+    assert got.facts == {} and sorted(got.failed) == [1, 2, 3, 4]
+    assert "HTTP Error 503" in got.failed[1] and "loading model" in got.failed[1]
+    assert len(calls) == 2 and pauses == [RETRY_PAUSE_S] and extractor.splits == 0
+    assert (extractor.failed_batches, extractor.given_up) == (1, 4)
+
+    first: list = []
+    down_once = unavailable(first, b"")
+
+    def flaky(request, timeout):
+        if not first:
+            return down_once(request, timeout)
+        tea = '{"1": ["The user likes tea."]}'
+        return _Reply({"choices": [{"message": {"content": tea}, "finish_reason": "stop"}]})
+
+    recovered = FactExtractor(opener=flaky, sleep=no_pause)
+    assert recovered.extract(["I like tea"]) == Extraction(facts={1: ["The user likes tea."]})
+
+
+def test_a_reply_cut_off_at_the_token_limit_is_retried_once_with_more_room():
+    seen: list = []
+    replies = iter([('{"1": ["The user', "length"), ('{"1": ["The user moved to York."]}', "stop")])
+
+    def opener(request, timeout):
+        seen.append(json.loads(request.data))
+        content, finish = next(replies)
+        return _Reply({"choices": [{"message": {"content": content}, "finish_reason": finish}]})
+
+    extractor = FactExtractor(opener=opener, sleep=no_pause)
+    assert extractor.extract(["I moved to York"]) == Extraction(facts={1: ["The user moved to York."]})
+    assert seen[1]["max_tokens"] == 2 * seen[0]["max_tokens"]
+
+
+def test_a_message_that_keeps_failing_is_given_up_and_logged_once(caplog):
     def broken(request, timeout):
         raise OSError("connection refused")
 
-    extractor = FactExtractor(opener=broken)
+    extractor = FactExtractor(opener=broken, sleep=no_pause)
     with caplog.at_level(logging.WARNING, logger="severian.application.userfacts"):
         for _ in range(3):
-            assert extractor.extract(["I moved to York"]) == {}
-    assert extractor.failures == 3 and extractor.calls == 3
+            got = extractor.extract(["I moved to York"])
+            assert got.facts == {} and "connection refused" in got.failed[1]
+    assert (extractor.calls, extractor.failures, extractor.given_up, extractor.failed_batches) == (6, 6, 3, 3)
     assert len([r for r in caplog.records if "fact extraction failed" in r.getMessage()]) == 1
-    unparseable = FactExtractor(opener=model("Sorry, I can't help with that."))
-    assert unparseable.extract(["x"]) == {} and unparseable.failures == 1
 
-
-def test_a_reply_cut_off_at_the_token_limit_counts_as_a_failure():
     def cut_off(request, timeout):
         return _Reply({"choices": [{"message": {"content": '{"1": ["The user'}, "finish_reason": "length"}]})
 
-    extractor = FactExtractor(opener=cut_off)
-    assert extractor.extract(["I moved to York"]) == {} and extractor.failures == 1
+    stuck = FactExtractor(opener=cut_off, sleep=no_pause)
+    assert stuck.extract(["I moved to York"]).failed[1].startswith("reply cut off at max_tokens")
+    assert stuck.calls == 2
+
+
+def test_kept_replies_are_bounded():
+    extractor = FactExtractor(opener=model("x" * (MAX_KEPT_REPLY_CHARS + 500)), sleep=no_pause)
+    for _ in range(MAX_KEPT_REPLIES):
+        extractor.extract(["I moved to York"])
+    assert extractor.failures == 2 * MAX_KEPT_REPLIES and len(extractor.bad_replies) == MAX_KEPT_REPLIES
+    assert all(len(kept["reply"]) == MAX_KEPT_REPLY_CHARS for kept in extractor.bad_replies)
 
 
 def test_extractor_settings_come_from_the_environment():
@@ -160,7 +275,7 @@ def test_extractor_settings_come_from_the_environment():
 
 def test_nothing_to_send_means_no_call():
     extractor = FactExtractor(opener=model("{}"))
-    assert extractor.extract([]) == {} and extractor.calls == 0
+    assert extractor.extract([]) == Extraction() and extractor.calls == 0 and extractor.batches == 0
 
 
 # -- through the real stores ----------------------------------------------------------------
@@ -169,13 +284,17 @@ def test_nothing_to_send_means_no_call():
 class FakeExtractor:
     model = "fake-model"
 
-    def __init__(self, facts_for=lambda text: []) -> None:
+    def __init__(self, facts_for=lambda text: [], *, unreadable: str | None = None) -> None:
         self.calls: list[list[str]] = []
         self._facts_for = facts_for
+        self._unreadable = unreadable
 
-    def extract(self, messages: list[str]) -> dict[int, list[str]]:
+    def extract(self, messages: list[str]) -> Extraction:
         self.calls.append(list(messages))
-        return {i: found for i, text in enumerate(messages, 1) if (found := self._facts_for(text))}
+        failed = {i: "unreadable reply" for i, text in enumerate(messages, 1)
+                  if self._unreadable is not None and self._unreadable in text}
+        found = {i: facts for i, text in enumerate(messages, 1) if i not in failed and (facts := self._facts_for(text))}
+        return Extraction(facts=found, failed=failed)
 
 
 def make_bundle(tmp_path: Path, monkeypatch, *, on: bool, extractor=None) -> ServiceBundle:
@@ -226,6 +345,12 @@ def extract(bundle: ServiceBundle, **kwargs) -> WorkerSummary:
 
 def facts(bundle: ServiceBundle, scope: Scope = SCOPE) -> list[Memory]:
     return [m for m in bundle.repository.list_memories(scope) if m.kind == "user_fact"]
+
+
+def fact_jobs(bundle: ServiceBundle) -> list[Job]:
+    with bundle.repository.engine.connect() as connection:  # type: ignore[attr-defined]
+        rows = connection.execute(select(records.c.payload).where(records.c.record_type == "job")).scalars()
+        return [job for job in map(Job.model_validate, rows) if job.kind == FACTS_JOB]
 
 
 def found(bundle: ServiceBundle, query: str) -> list[str]:
@@ -324,9 +449,26 @@ def test_a_failing_model_loses_only_the_facts(tmp_path, monkeypatch):
     bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=Broken())
     say(bundle, ("I moved to York", "ok"))
     drain(bundle)
-    summary = extract(bundle)  # asserts failed == 0: the job completes, it is not retried forever
-    assert summary.processed == 1 and facts(bundle) == []
+    summary = extract(bundle)  # asserts failed == 0: storage is fine, only the facts are missing
+    assert (summary.processed, summary.gave_up, summary.total) == (0, 1, 1) and facts(bundle) == []
+    [job] = fact_jobs(bundle)
+    assert job.status == "failed" and "model down" in (job.last_error or "")  # kept, and never retried in a loop
+    assert extract(bundle).total == 0
     assert any("I moved to York" in hit for hit in found(bundle, "York"))
+    bundle.close()
+
+
+def test_turns_the_model_cannot_read_fail_with_the_reason_and_the_rest_keep_their_facts(tmp_path, monkeypatch):
+    fake = FakeExtractor(lambda text: [f"The user said {text}."], unreadable="BAD")
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I moved to York", "ok"), ("BAD news about the boiler", "ok"))
+    drain(bundle)
+    summary = extract(bundle)
+    assert (summary.processed, summary.gave_up, summary.failed) == (1, 1, 0)
+    assert [f.content for f in facts(bundle)] == [f"{LABEL} The user said I moved to York."]
+    by_status = {job.status: job for job in fact_jobs(bundle)}
+    assert sorted(by_status) == ["done", "failed"] and by_status["failed"].last_error == "unreadable reply"
+    assert any("boiler" in hit for hit in found(bundle, "boiler"))  # the turn itself stays searchable
     bundle.close()
 
 
