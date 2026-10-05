@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Sequence
+from typing import Protocol
 
 from severian.application.anticipation import anticipation_enabled, extract_trigger
 from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
@@ -11,14 +13,25 @@ from severian.application.ports import (
 from severian.application.ports import (
     DerivationGateway as DerivationGateway,
 )
+from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, time_label, user_text
 from severian.domain.errors import NotFoundError
-from severian.domain.models import Memory, Scope
+from severian.domain.models import Memory, Observation, Scope
 
 # ``DerivationGateway`` lives in application.ports (single source of
 # truth); re-export here so existing imports keep working while
 # consumers migrate to the canonical home.
 
 __all__ = ["CloudPolicyError", "DerivationGateway", "DerivationService"]
+
+logger = logging.getLogger(__name__)
+
+
+class FactSource(Protocol):
+    """Round 2 idea 1: turns user messages into facts (``userfacts.FactExtractor`` in production)."""
+
+    model: str
+
+    def extract(self, messages: list[str]) -> dict[int, list[str]]: ...
 
 
 class CloudPolicyError(PermissionError):
@@ -34,6 +47,7 @@ class DerivationService:
         event_time: bool | None = None,
         anticipation: bool | None = None,
         cue_generator: Callable[[str], list[str]] | None = None,
+        fact_extractor: FactSource | None = None,
     ) -> None:
         self.repository = repository
         # Step 3: find "when it happened" in each derived memory (SEVERIAN_EVENT_TIME; off by default).
@@ -42,10 +56,18 @@ class DerivationService:
         # memory). SEVERIAN_ANTICIPATION, off by default. A cue failure never fails the derive.
         self._anticipation = anticipation_enabled() if anticipation is None else anticipation
         self._cue_generator = cue_generator
+        # Round 2 idea 1 (SEVERIAN_USER_FACTS): the background fact pass's model. Only the worker's
+        # derivation gets one; derive_user_facts does nothing without it.
+        self._fact_extractor = fact_extractor
         # Optional deterministic graph extractor (P1c). When provided,
         # every derive pass also upserts entities/relations so the
         # graph store stays populated without manual seeding.
         self._extraction = extraction
+
+    @property
+    def fact_extractor(self) -> FactSource | None:
+        """The background fact pass's model (Round 2 idea 1); its call and token counters are the cost record."""
+        return self._fact_extractor
 
     def _effective_policy(self, scope: Scope, caller_policy: dict[str, object]) -> dict[str, object]:
         """Merge canonical collection policy with caller hints (deny-dominant).
@@ -189,3 +211,61 @@ class DerivationService:
             return list(self._cue_generator(content))
         except Exception:  # cues are an extra; the memory must still be written
             return []
+
+    def derive_user_facts(self, scope: Scope, observation_ids: Sequence[str]) -> list[Memory]:
+        """Facts the user stated in these turns, from ONE model call for the batch (Round 2 idea 1).
+
+        Turns that are gone, superseded or hold nothing from the user are skipped. Each fact is a
+        ``user_fact`` memory with the same source turn and time label as the turn's own memory, so
+        the raw turn stays linked. A model failure yields no facts: the raw turns are already saved
+        and searchable, and the extractor counts the failure.
+        """
+        if self._fact_extractor is None:
+            return []
+        turns: list[tuple[str, Observation, str]] = []
+        for observation_id in observation_ids:
+            try:
+                observation = self.repository.get_observation(scope, observation_id)
+            except NotFoundError:
+                continue
+            said = None if observation.superseded_by_id is not None else user_text(
+                observation.content, observation.source
+            )
+            if said:
+                turns.append((said, observation, time_label(observation.content)))
+        if not turns:
+            return []
+        try:
+            found = self._fact_extractor.extract([said for said, _, _ in turns])
+        except Exception:  # the production extractor never raises; facts stay optional either way
+            logger.warning("fact extraction raised; no facts for %d turns", len(turns), exc_info=True)
+            return []
+        model_id = str(getattr(self._fact_extractor, "model", "unknown"))
+        published: list[Memory] = []
+        for number, (_said, observation, label) in enumerate(turns, 1):
+            memories = []
+            for fact in found.get(number, []):
+                content = f"{label} {fact}" if label else fact
+                span = (
+                    extract_event_span(content, message_time(observation.source, observation.created_at))
+                    if self._event_time
+                    else None
+                )
+                memories.append(
+                    Memory(
+                        occurred_at=span[0] if span else None,
+                        occurred_until=span[1] if span else None,
+                        scope=scope,
+                        kind=FACT_KIND,
+                        content=content,
+                        source_observation_ids=[observation.id],
+                        model_id=model_id,
+                        prompt_version=PROMPT_VERSION,
+                        confidence=0.5,
+                    )
+                )
+            if memories:
+                published += self.repository.publish_derivation(
+                    scope, entities=[], relations=[], memories=memories, source_observation_id=observation.id
+                )
+        return published

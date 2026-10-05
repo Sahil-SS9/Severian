@@ -31,6 +31,7 @@ from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
+from severian.application.userfacts import FactExtractor, user_facts_enabled
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.vector import LocalVectorIndex
 
@@ -120,6 +121,8 @@ def _compose(
         repository,
         extraction=extraction,
         cue_generator=CueGenerator.from_env().generate if anticipation_enabled() else None,
+        # Round 2 idea 1: only the worker's background fact pass calls this model.
+        fact_extractor=FactExtractor.from_env() if user_facts_enabled() else None,
     )
     service = BuildMemoryService(
         repository=repository,

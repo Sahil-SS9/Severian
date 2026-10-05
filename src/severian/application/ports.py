@@ -34,6 +34,7 @@ catch one type regardless of backend.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -248,7 +249,14 @@ class JobQueuePort(Protocol):
     """
 
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job: ...
-    def claim_job(self, worker_id: str) -> Job: ...
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 300,
+        *,
+        kind: str | None = None,
+        exclude_kinds: Sequence[str] = (),
+    ) -> Job: ...
     def complete_job(
         self,
         job_id: str,

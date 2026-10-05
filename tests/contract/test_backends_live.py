@@ -276,6 +276,26 @@ def test_job_idempotency(backend: Any) -> None:
     assert first.id == second.id
 
 
+def test_job_claim_can_skip_kinds(backend: Any) -> None:
+    scope = _unique_scope()
+    derive = backend.enqueue_job(scope, "derive", {"observation_id": "d1"})
+    backend.enqueue_job(scope, "extract_facts", {"observation_id": "o1"})
+    assert backend.claim_job("worker-1", exclude_kinds=("extract_facts",)).id == derive.id
+    with pytest.raises(NotFoundError):
+        backend.claim_job("worker-1", exclude_kinds=("extract_facts",))
+
+
+def test_job_claim_by_kind_takes_only_that_kind_oldest_first(backend: Any) -> None:
+    scope = _unique_scope()
+    backend.enqueue_job(scope, "derive", {"observation_id": "d1"})
+    queued = [backend.enqueue_job(scope, "extract_facts", {"observation_id": f"o{i}"}) for i in range(6)]
+    # oldest first, whatever order the random ids sort in (the default claim orders by id)
+    assert [backend.claim_job("worker-1", kind="extract_facts").id for _ in queued] == [j.id for j in queued]
+    with pytest.raises(NotFoundError):
+        backend.claim_job("worker-1", kind="extract_facts")
+    assert backend.claim_job("worker-1").kind == "derive"
+
+
 # -- outbox and audit ------------------------------------------------------
 
 

@@ -12,6 +12,7 @@ backed by on-disk SQLite is the production wiring.
 """
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -26,8 +27,11 @@ from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
+from severian.application.userfacts import FACTS_JOB, user_facts_enabled
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -146,10 +150,13 @@ class MemoryService:
         truth_state: bool | None = None,
         event_time: bool | None = None,
         anticipation: bool | None = None,
+        user_facts: bool | None = None,
     ) -> None:
         self._anticipation = anticipation_enabled() if anticipation is None else anticipation
         self._truth_state = truth_state_enabled() if truth_state is None else truth_state
         self._event_time = event_time_enabled() if event_time is None else event_time
+        # Round 2 idea 1 (SEVERIAN_USER_FACTS): every saved turn also queues a background fact job.
+        self._user_facts = user_facts_enabled() if user_facts is None else user_facts
         self._repository = repository
         self._ingestion = ingestion
         self._retrieval = retrieval
@@ -168,7 +175,22 @@ class MemoryService:
         source: Mapping[str, Any] | None = None,
     ) -> ObservationView:
         result = self._ingestion.ingest(scope, content, dict(source or {}))
+        self._queue_facts(scope, result.observation.id)
         return ObservationView.from_result(result)
+
+    def _queue_facts(self, scope: Scope, observation_id: str) -> None:
+        """Queue the background fact job for a saved turn (SEVERIAN_USER_FACTS; no-op when off).
+
+        After the turn's own write, so saving and the raw turn's search are unchanged. Queueing is
+        idempotent (same kind + payload). If it fails, the turn is still saved; only its facts are
+        lost, so this logs instead of failing the save.
+        """
+        if not self._user_facts:
+            return
+        try:
+            self._repository.enqueue_job(scope, FACTS_JOB, {"observation_id": observation_id})
+        except Exception:
+            logger.warning("could not queue fact extraction for observation %s", observation_id, exc_info=True)
 
     def correct_memory(
         self,
@@ -223,6 +245,7 @@ class MemoryService:
         fact replaces the old one on the next drain instead of vanishing.
         """
         revision = self._repository.revise_observation(scope, observation_id, content, derive=True)
+        self._queue_facts(scope, revision.id)
         superseded = self._repository.supersede_memories_for_source(scope, observation_id)
         self._repository.retract_relations_for_source(scope, observation_id)
         if superseded:

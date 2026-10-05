@@ -41,6 +41,7 @@ from severian.application.dreaming import (
 from severian.application.episodes import EpisodeService
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
+from severian.application.userfacts import BACKGROUND_JOB_KINDS, FACTS_JOB
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Event, Job, Scope
 
@@ -127,7 +128,8 @@ class DerivationWorker:
         pending_done: list[Job] = []
         while max_jobs is None or (processed + failed) < max_jobs:
             try:
-                job = self._repository.claim_job(worker_id)
+                # Background kinds (Round 2 idea 1 facts) have their own pass: saving never waits on them.
+                job = self._repository.claim_job(worker_id, exclude_kinds=BACKGROUND_JOB_KINDS)
             except NotFoundError:
                 break  # queue empty — normal end of pass
             scope_key = job.scope.model_dump_json()
@@ -220,6 +222,74 @@ class DerivationWorker:
             processed=processed,
             failed=failed,
             touched_scopes=tuple(touched.values()),
+            projection_failed=projection_failed,
+        )
+
+    def extract_facts(
+        self,
+        *,
+        worker_id: str = "facts",
+        batch_size: int = 8,
+        max_batches: int | None = None,
+    ) -> WorkerSummary:
+        """Background pass for Round 2 idea 1 (SEVERIAN_USER_FACTS): queued turns -> user facts.
+
+        Claims ``extract_facts`` jobs oldest first, ``batch_size`` at a time, so consecutive
+        messages reach the model together; a batch is split by scope so no call mixes two users.
+        Facts are projected before their jobs complete (same rule as ``drain``), so a completed
+        job means its facts are searchable. A model failure completes the jobs without facts:
+        the raw turns were saved and made searchable by the normal pass. ``max_batches`` bounds
+        the pass; ``None`` empties the queue.
+        """
+        if self._derivation is None:
+            raise RuntimeError("fact extraction needs a derivation service")
+        processed = failed = batches = projection_failed = 0
+        touched_all: dict[str, Scope] = {}
+        while max_batches is None or batches < max_batches:
+            claimed: list[Job] = []
+            while len(claimed) < batch_size:
+                try:
+                    claimed.append(self._repository.claim_job(worker_id, kind=FACTS_JOB))
+                except NotFoundError:
+                    break
+            if not claimed:
+                break
+            batches += 1
+            groups: dict[str, list[Job]] = {}
+            for job in claimed:
+                groups.setdefault(job.scope.model_dump_json(), []).append(job)
+            done: list[Job] = []
+            touched: dict[str, Scope] = {}
+            for key, jobs in groups.items():
+                ids = [str(job.payload.get("observation_id", "")) for job in jobs]
+                try:
+                    self._derivation.derive_user_facts(jobs[0].scope, ids)
+                except Exception as exc:  # a storage fault: fail these jobs, keep the pass going
+                    for job in jobs:
+                        try:
+                            self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=str(exc))
+                        except Exception:
+                            logger.warning("failed to mark job %s as failed: %s", job.id, exc, exc_info=True)
+                    failed += len(jobs)
+                    continue
+                done += jobs
+                touched[key] = jobs[0].scope
+            applied = self._project_outbox(touched, worker_id)
+            if applied is None:
+                projection_failed = 1
+            for job in done:
+                self._repository.complete_job(job.id, "done", worker_id=worker_id)
+            if applied:
+                try:
+                    self._repository.ack_outbox_many([event.id for event in applied])
+                except Exception:
+                    logger.warning("failed to ack outbox batch", exc_info=True)
+            processed += len(done)
+            touched_all.update(touched)
+        return WorkerSummary(
+            processed=processed,
+            failed=failed,
+            touched_scopes=tuple(touched_all.values()),
             projection_failed=projection_failed,
         )
 

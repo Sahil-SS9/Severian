@@ -238,7 +238,14 @@ class _FakeRepository:
     def enqueue_job(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Job:
         return Job(scope=scope, kind=kind, payload=payload)
 
-    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 300,
+        *,
+        kind: str | None = None,
+        exclude_kinds: tuple[str, ...] = (),
+    ) -> Job:
         raise NotFoundError("no pending job")
 
     def complete_job(

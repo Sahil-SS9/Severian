@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -1481,17 +1482,37 @@ class SQLiteRepository:
                 raise ConflictError("job identity conflict") from None
             return Job.model_validate(existing)
 
-    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 300,
+        *,
+        kind: str | None = None,
+        exclude_kinds: Sequence[str] = (),
+    ) -> Job:
         """Atomically claim one pending job with a lease.
 
         P0-4: the claim is leased — the job records ``worker_id`` and
         ``lease_until`` so a crashed worker's job is reaped later. Only
         ``pending`` jobs are claimable; retryable failed jobs are
         re-queued to ``pending`` by ``reap_expired_jobs``.
+
+        ``kind`` claims only that kind, oldest first (a background pass batches
+        consecutive work); ``exclude_kinds`` leaves those kinds to their own pass.
+        Without ``kind`` the order is unchanged.
         """
         now_value = datetime.now(UTC)
         now_iso = _iso(now_value)
         lease_iso = _iso(now_value + timedelta(seconds=lease_seconds))
+        job_kind = func.json_extract(records.c.payload, "$.kind")
+        kind_filters = [job_kind == kind] if kind is not None else []
+        if exclude_kinds:
+            kind_filters.append(job_kind.not_in(list(exclude_kinds)))
+        order = (
+            (func.json_extract(records.c.payload, "$.created_at"), records.c.id)
+            if kind is not None
+            else (records.c.id,)
+        )
         pending_id = (
             select(records.c.id)
             .where(
@@ -1501,8 +1522,9 @@ class SQLiteRepository:
                     records.c.retry_after.is_(None),
                     records.c.retry_after <= now_iso,
                 ),
+                *kind_filters,
             )
-            .order_by(records.c.id)
+            .order_by(*order)
             .limit(1)
             .scalar_subquery()
         )

@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -1586,11 +1586,27 @@ class PostgreSQLBackend:
             query=query,
         )
 
-    def claim_job(self, worker_id: str, lease_seconds: int = 300) -> Job:
-        """Atomically claim one pending job with a lease (P0-4)."""
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 300,
+        *,
+        kind: str | None = None,
+        exclude_kinds: Sequence[str] = (),
+    ) -> Job:
+        """Atomically claim one pending job with a lease (P0-4).
+
+        ``kind`` claims only that kind, oldest first; ``exclude_kinds`` leaves those
+        kinds to their own pass. Without ``kind`` the order is unchanged.
+        """
         now_value = datetime.now(UTC)
         now_iso = _iso(now_value)
         lease_iso = _iso(now_value + timedelta(seconds=lease_seconds))
+        job_kind = records.c.payload["kind"].astext
+        kind_filters = [job_kind == kind] if kind is not None else []
+        if exclude_kinds:
+            kind_filters.append(job_kind.not_in(list(exclude_kinds)))
+        order = (records.c.payload["created_at"].astext, records.c.id) if kind is not None else (records.c.id,)
         pending_id = (
             select(records.c.id)
             .where(
@@ -1600,8 +1616,9 @@ class PostgreSQLBackend:
                     records.c.retry_after.is_(None),
                     records.c.retry_after <= now_iso,
                 ),
+                *kind_filters,
             )
-            .order_by(records.c.id)
+            .order_by(*order)
             .limit(1)
             .scalar_subquery()
         )
