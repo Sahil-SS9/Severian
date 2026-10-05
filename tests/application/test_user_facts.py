@@ -26,6 +26,7 @@ from sqlalchemy import select
 from severian.application.eventtime import extract_event_span, message_time
 from severian.application.userfacts import (
     FACTS_JOB,
+    JSON_ONLY,
     MAX_FACT_CHARS,
     MAX_FACTS_PER_MESSAGE,
     MAX_KEPT_REPLIES,
@@ -176,6 +177,22 @@ def test_a_bad_reply_is_kept_and_the_batch_retried_once():
     assert extractor.bad_replies == [
         {"reason": "no JSON object or list in the reply", "reply": "Sorry, I can't help with that.", "messages": 1}
     ]
+
+
+def test_the_retry_after_an_unreadable_reply_asks_for_json_only():
+    """At temperature 0 an identical retry repeats the bad reply (seen on the real model, 05/10)."""
+    seen: list = []
+
+    def opener(request, timeout):
+        sent = json.loads(request.data)
+        seen.append(sent)
+        asked = sent["messages"][-1]["content"]
+        content = '{"1": ["The user moved to York."]}' if JSON_ONLY in asked else "[1] The user moved to York."
+        return _Reply({"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
+
+    extractor = FactExtractor(opener=opener, sleep=no_pause)
+    assert extractor.extract(["I moved to York"]) == Extraction(facts={1: ["The user moved to York."]})
+    assert JSON_ONLY not in seen[0]["messages"][-1]["content"] and extractor.splits == 0
 
 
 def test_a_batch_that_fails_twice_is_split_until_the_unreadable_message_is_alone():

@@ -45,6 +45,9 @@ MAX_FACTS_PER_MESSAGE = 8
 MAX_FACT_CHARS = 300
 MAX_MESSAGE_CHARS = 2000  # long pastes rarely hold personal facts; cap the prompt
 RETRY_PAUSE_S = 5.0  # a server or network fault gets this long before the one retry
+# Added to the retry after an unreadable reply: at temperature 0 an identical request repeats the
+# same bad reply (real model, 05/10), so the retry must differ to be worth its call.
+JSON_ONLY = "Reply with only the JSON object described above: no list, no other text."
 MAX_KEPT_REPLIES = 50  # bad replies kept per extractor, so failures can be read later
 MAX_KEPT_REPLY_CHARS = 4000
 _TRUE = {"1", "true", "yes", "on"}
@@ -280,7 +283,9 @@ class FactExtractor:
             if first.transient:
                 self._sleep(RETRY_PAUSE_S)
             try:
-                found = self._call(messages, room=2 if first.cut_off else 1)
+                found = self._call(
+                    messages, room=2 if first.cut_off else 1, nudge=not (first.transient or first.cut_off)
+                )
             except FactCallError as second:
                 self._split_or_give_up(messages, offset, facts, failed, second)
                 return
@@ -303,12 +308,12 @@ class FactExtractor:
         self._attempt(messages[:half], offset, facts, failed, top=False)
         self._attempt(messages[half:], offset + half, facts, failed, top=False)
 
-    def _call(self, messages: list[str], *, room: int = 1) -> dict[int, list[str]]:
+    def _call(self, messages: list[str], *, room: int = 1, nudge: bool = False) -> dict[int, list[str]]:
         """One model call; any problem becomes a FactCallError, counted and kept."""
         self.calls += 1
         started = time.perf_counter()
         try:
-            return self._request(messages, room=room)
+            return self._request(messages, room=room, nudge=nudge)
         except Exception as exc:  # facts are optional; never let a model fault escape
             error = exc if isinstance(exc, FactCallError) else FactCallError(f"{type(exc).__name__}: {exc}")
             self.failures += 1
@@ -322,8 +327,10 @@ class FactExtractor:
         finally:
             self.timings.append(time.perf_counter() - started)
 
-    def _request(self, messages: list[str], *, room: int) -> dict[int, list[str]]:
+    def _request(self, messages: list[str], *, room: int, nudge: bool = False) -> dict[int, list[str]]:
         numbered = "\n".join(f"[{number}] {text[:MAX_MESSAGE_CHARS]}" for number, text in enumerate(messages, 1))
+        if nudge:
+            numbered += f"\n\n{JSON_ONLY}"
         body = json.dumps(
             {
                 "model": self.model,
