@@ -184,6 +184,40 @@ def test_generator_failures_return_empty_and_are_counted():
     assert generator.failures == 1 and len(generator.timings) == 1
 
 
+# Full-test finding 05/10: 114 cue replies were dropped as unparseable ("Extra data",
+# "Expecting ','"): reasoning blocks, code fences, two arrays, single-quoted lists.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '<think>\nmaybe ["no", "this"]\n</think>\n\n["car insurance", "renewal date"]',
+        '```json\n["car insurance", "renewal date"]\n```\nThese cues cover it. [1]',
+        '["car insurance", "renewal date"]\n["something else"]',
+        "['car insurance', 'renewal date']",
+    ],
+)
+def test_cue_replies_in_common_model_shapes_are_parsed(reply):
+    def opener(request, timeout):
+        return _Reply({"choices": [{"message": {"content": reply}}]})
+
+    generator = CueGenerator(opener=opener)
+    assert generator.generate("x") == ["car insurance", "renewal date"]
+    assert generator.failures == 0
+
+
+class _Reply:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 # Review finding 04/10: the default model name "local" is rejected by Turbofit (HTTP 400), and
 # failures were silent, so anticipation stored zero cues with no sign anything was wrong.
 def test_default_cue_model_is_one_turbofit_serves():

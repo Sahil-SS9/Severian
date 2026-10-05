@@ -17,6 +17,7 @@ Everything here is rules plus one optional HTTP call; no new dependency, no mode
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -83,8 +84,9 @@ def clean_cues(raw: object) -> list[str]:
 _CUE_PROMPT = (
     "You index a personal memory. Given one remembered statement, write up to 3 short cues: the "
     "questions someone might ask later, or the situations they will be in, when this statement "
-    "will be needed. Use different words from the statement where you can. Answer with a JSON "
-    'list of strings only, for example ["what does Alice drink", "tea or coffee for Alice"].'
+    "will be needed. Use different words from the statement where you can, and never add names "
+    "or facts the statement does not contain. Answer with a JSON list of strings only, for "
+    'example ["what does the user drink in the morning", "tea or coffee preference"].'
 )
 
 
@@ -149,11 +151,31 @@ class CueGenerator:
         )
         with self._open(request, timeout=self.timeout) as response:
             payload = json.loads(response.read())
-        text = str(payload["choices"][0]["message"]["content"])
-        start, end = text.find("["), text.rfind("]")
-        if start < 0 or end <= start:
-            return []
-        return clean_cues(json.loads(text[start : end + 1]))
+        return clean_cues(_first_list(str(payload["choices"][0]["message"]["content"])))
+
+
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _first_list(text: str) -> list[Any]:
+    """First list in a model reply, tolerating reasoning blocks, code fences, trailing prose,
+    a second list, and Python-style single quotes. No list at all -> []."""
+    text = _THINK.sub("", text)
+    decoder = json.JSONDecoder()
+    index = text.find("[")
+    while index >= 0:
+        try:
+            value, _end = decoder.raw_decode(text, index)
+        except ValueError:
+            try:
+                close = text.index("]", index)
+                value = ast.literal_eval(text[index : close + 1])
+            except (ValueError, SyntaxError):
+                value = None
+        if isinstance(value, list):
+            return value
+        index = text.find("[", index + 1)
+    return []
 
 
 # -- triggers -------------------------------------------------------------------------------
