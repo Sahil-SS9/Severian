@@ -256,7 +256,7 @@ def test_saving_stays_fast_and_facts_arrive_in_the_background(tmp_path, monkeypa
     assert fact.content == f"{LABEL} The user lives in York."  # same time label as its turn
     raw = next(m for m in bundle.repository.list_memories(SCOPE) if m.kind != "user_fact")
     assert fact.source_observation_ids == raw.source_observation_ids  # the raw turn stays linked
-    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v1", [], None)
+    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v2", [], None)
     assert fact.content in found(bundle, "where does the user live")
     assert extract(bundle).processed == 0  # each turn is done once
     bundle.close()

@@ -13,6 +13,9 @@ Borrowed:
 - Hindsight, hindsight_api/engine/retain/fact_extraction.py: self-contained facts that keep the time
   of the message they came from (here: the turn's leading time label, and Step 3 event time when
   that switch is on). Relative dates are kept as said; resolving them is a separate idea (5).
+Own addition (v2): every fact in a message, and a change stated as the new situation in its own fact.
+On one dev conversation plus a LongMemEval sample, v1 dropped the new state ("no longer pescatarian;
+gone keto" -> only "no longer pescatarian") and most facts inside long LongMemEval requests.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ _log = logging.getLogger(__name__)
 FACTS_JOB = "extract_facts"  # stored in job rows: renaming it strands queued work
 BACKGROUND_JOB_KINDS = (FACTS_JOB,)  # never taken by the normal derive pass
 FACT_KIND = "user_fact"
-PROMPT_VERSION = "user-facts-v1"
+PROMPT_VERSION = "user-facts-v2"
 DEFAULT_FACTS_MODEL = "active:aux"  # a Turbofit alias, like the cue model
 DEFAULT_FACTS_URL = "http://127.0.0.1:8091/v1/chat/completions"
 MAX_FACTS_PER_MESSAGE = 8
@@ -78,14 +81,18 @@ def user_text(content: str, source: Mapping[str, Any]) -> str | None:
 # -- the model call -------------------------------------------------------------------------
 
 _PROMPT = (
-    "You will be given numbered messages that a user sent to an AI assistant. Extract the personal "
-    "information, life events, experiences, plans and preferences of the user. Use only what the user "
-    "said. Write each fact as one short standalone sentence about \"the user\": replace pronouns and "
-    "vague references with what they refer to, and keep names, numbers, places, dates and time "
-    "expressions exactly as the user gave them. Skip questions, requests and general knowledge that say "
-    "nothing about the user. Answer with a JSON object that maps message numbers to lists of facts, for "
-    "example {\"1\": [\"The user adopted a dog named Max.\"], \"3\": [\"The user prefers aisle seats.\"]}. "
-    "Leave out messages with no facts. If there are none at all, answer {}."
+    "You will be given numbered messages that a user sent to an AI assistant. Extract every fact the user "
+    "states about themselves, their life and the people and things in it: personal information, life events, "
+    "experiences, plans, preferences, possessions, relationships, routines, and anything they ask to be "
+    "remembered or reminded about. Use only what the user said. Write each fact as one short standalone "
+    "sentence, calling the user \"the user\": replace pronouns and vague references with what they refer to, "
+    "and keep names, numbers, places, dates and time expressions exactly as the user gave them. A message can "
+    "hold several facts: write each one. When the user says something changed, state the new situation as its "
+    "own fact (for example, \"I swapped my bike for a car\" gives \"The user no longer has a bike.\" and \"The "
+    "user now has a car.\"). Skip questions, requests and general knowledge that say nothing about the user. "
+    "Answer with a JSON object that maps message numbers to lists of facts, for example {\"1\": [\"The user "
+    "adopted a dog named Max.\"], \"3\": [\"The user prefers aisle seats.\"]}. Leave out messages with no facts. "
+    "If there are none at all, answer {}."
 )
 
 
