@@ -63,8 +63,11 @@ class ScopedCanonicalPort(Protocol):
 
     def add_observation(self, observation: Observation) -> Observation: ...
     def add_observation_and_enqueue(
-        self, observation: Observation, job_kind: str = "derive"
-    ) -> tuple[Observation, Job]: ...
+        self, observation: Observation, job_kind: str = "derive", *, also_queue: Sequence[str] = ()
+    ) -> tuple[Observation, Job]:
+        """Insert an observation and queue its ``job_kind`` job, plus one job per ``also_queue`` kind,
+        in ONE transaction (P0-4). A re-ingest returns the stored pair and queues missing extra jobs."""
+        ...
     def add_observations_and_enqueue_batch(
         self, observations: list[Observation], job_kind: str = "derive"
     ) -> list[tuple[Observation, Job]]:
@@ -107,6 +110,7 @@ class ScopedCanonicalPort(Protocol):
         *,
         derive: bool = False,
         tombstone: bool = False,
+        also_queue: Sequence[str] = (),
     ) -> Observation:
         """Supersede an observation with a revision, in one transaction.
 
@@ -115,7 +119,8 @@ class ScopedCanonicalPort(Protocol):
         ``tombstone=True`` creates an erasure marker that is itself
         superseded (``superseded_by_id=":erased"``): never active, never
         pending derivation, kept in history for audit. The two are
-        mutually exclusive.
+        mutually exclusive. ``also_queue`` adds one job per kind for the
+        revision in the same transaction (never with ``tombstone``).
         """
         ...
 
@@ -265,6 +270,12 @@ class JobQueuePort(Protocol):
         worker_id: str | None = None,
         error: str | None = None,
     ) -> Job: ...
+    def list_profile_scopes(self, tenant_id: str, profile_id: str) -> list[Scope]:
+        """Every scope holding turns, memories or jobs for one profile (for per-profile operations)."""
+        ...
+    def cancel_pending_jobs(self, scope: Scope, kind: str) -> int:
+        """Cancel ``scope``'s pending ``kind`` jobs; ``ConflictError`` while one is running."""
+        ...
     def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int: ...
     def list_dead_letter_jobs(self) -> list[Job]: ...
     def requeue_job(self, job_id: str) -> Job: ...

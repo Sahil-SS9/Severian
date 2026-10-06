@@ -359,7 +359,7 @@ class SQLiteRepository:
         return candidate, observation_identity, job, job_identity, digest
 
     def add_observation_and_enqueue(
-        self, observation: Observation, job_kind: str = "derive"
+        self, observation: Observation, job_kind: str = "derive", *, also_queue: Sequence[str] = ()
     ) -> tuple[Observation, Job]:
         """Atomically insert an observation and enqueue its derive job.
 
@@ -385,6 +385,8 @@ class SQLiteRepository:
             # observation and its existing derive job (enqueueing it
             # again if a previous atomic write somehow lost it).
             stored = Observation.model_validate(existing_obs)
+            for kind in also_queue:  # the turn is already committed; queueing is idempotent per kind
+                self.enqueue_job(stored.scope, kind, {"observation_id": stored.id})
             job_payload = {"observation_id": stored.id}
             job_identity = self._identity(job_kind, job_payload)
             job_query = select(records.c.payload).where(
@@ -427,6 +429,15 @@ class SQLiteRepository:
                     **self._record_values("job", job, identity_key=job_identity, status="pending")
                 )
             )
+            for kind in also_queue:  # same transaction: no saved turn without its extra jobs
+                extra = Job(scope=candidate.scope, kind=kind, payload={"observation_id": candidate.id})
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values(
+                            "job", extra, identity_key=self._identity(kind, extra.payload), status="pending"
+                        )
+                    )
+                )
         return candidate, job
 
     def add_observations_and_enqueue_batch(
@@ -589,9 +600,12 @@ class SQLiteRepository:
         *,
         derive: bool = False,
         tombstone: bool = False,
+        also_queue: Sequence[str] = (),
     ) -> Observation:
         if derive and tombstone:
             raise ValueError("an erasure tombstone is never derived")
+        if also_queue and tombstone:
+            raise ValueError("an erasure tombstone queues no jobs")
         original = self.get_observation(scope, observation_id)
         if original.superseded_by_id is not None:
             raise ConflictError("observation is already superseded")
@@ -638,6 +652,15 @@ class SQLiteRepository:
                     records.insert().values(
                         **self._record_values(
                             "job", job, identity_key=self._identity("derive", job_payload), status="pending"
+                        )
+                    )
+                )
+            for kind in also_queue:  # same transaction as the revision
+                extra = Job(scope=scope, kind=kind, payload={"observation_id": revision.id})
+                connection.execute(
+                    records.insert().values(
+                        **self._record_values(
+                            "job", extra, identity_key=self._identity(kind, extra.payload), status="pending"
                         )
                     )
                 )
@@ -1481,6 +1504,54 @@ class SQLiteRepository:
             if existing is None:
                 raise ConflictError("job identity conflict") from None
             return Job.model_validate(existing)
+
+    def list_profile_scopes(self, tenant_id: str, profile_id: str) -> list[Scope]:
+        """Every scope (collection, agent, session) holding turns, memories or jobs for one profile."""
+        columns = (records.c.collection_id, records.c.agent_id, records.c.session_id)
+        query = (
+            select(*columns)
+            .where(
+                records.c.tenant_id == tenant_id,
+                records.c.profile_id == profile_id,
+                records.c.record_type.in_(("observation", "memory", "job")),
+            )
+            .distinct()
+            .order_by(*columns)
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return [
+            Scope(tenant_id=tenant_id, profile_id=profile_id, collection_id=c, agent_id=a, session_id=s)
+            for c, a, s in rows
+        ]
+
+    def cancel_pending_jobs(self, scope: Scope, kind: str) -> int:
+        """Cancel ``scope``'s pending jobs of ``kind`` (status ``cancelled``: never claimed again).
+
+        Refuses with ``ConflictError`` while one of them is running, because its worker could still
+        publish results after the cancel; stop the worker (or let it finish) and retry.
+        """
+        self._require_scope(scope)
+        query = select(records.c.id, records.c.status, records.c.payload).where(
+            records.c.record_type == "job",
+            *self._scope_predicates(scope),
+            func.json_extract(records.c.payload, "$.kind") == kind,
+            records.c.status.in_(("pending", "running")),
+        )
+        with self.engine.begin() as connection:
+            rows = connection.execute(query).mappings().all()
+            if any(row["status"] == "running" for row in rows):
+                raise ConflictError(f"a {kind} job is running in this scope; stop the worker first")
+            for row in rows:
+                job = Job.model_validate(row["payload"]).model_copy(
+                    update={"status": "cancelled", "last_error": "cancelled by rollback"}
+                )
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == row["id"], records.c.status == "pending")
+                    .values(status="cancelled", payload=job.model_dump(mode="json"))
+                )
+        return len(rows)
 
     def claim_job(
         self,

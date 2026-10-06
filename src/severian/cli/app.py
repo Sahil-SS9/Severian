@@ -256,12 +256,15 @@ def work(
     worker_id: str = typer.Option("worker", "--worker-id", help="Unique worker name for job claiming."),
     max_jobs: int = typer.Option(0, "--max-jobs", min=0, help="Process at most N jobs (0 = drain all pending)."),
 ) -> None:
-    """Process pending derive jobs, then exit.
+    """Process pending derive jobs, then (SEVERIAN_USER_FACTS on) pending fact jobs, then exit.
 
     Drains the durable derive job queue: claims pending jobs, derives
     observations into memories via the canonical derivation service,
     marks jobs done (or failed), and rebuilds projections for the
-    touched scopes. Emits a JSON summary.
+    touched scopes. With the switch on it then runs the background fact
+    pass over queued ``extract_facts`` jobs (the same ``--max-jobs`` cap
+    applies to it separately). With the switch off, fact jobs are left
+    queued and the fact model is never called. Emits a JSON summary.
     """
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
@@ -281,12 +284,25 @@ def work(
             gateway=bundle.gateway,
             max_jobs=None if max_jobs == 0 else max_jobs,
         )
+        facts_processed = facts_failed = facts_projection_failed = 0
+        if bundle.derivation.fact_extractor is not None:  # wired only while SEVERIAN_USER_FACTS is on
+            batch = 8 if max_jobs == 0 else min(8, max_jobs)
+            facts = worker.extract_facts(
+                worker_id=f"{worker_id}-facts",
+                batch_size=batch,
+                max_batches=None if max_jobs == 0 else max_jobs // batch,
+            )
+            facts_processed, facts_failed = facts.processed, facts.failed
+            facts_projection_failed = facts.projection_failed
         _emit(
             {
                 "processed": summary.processed,
                 "failed": summary.failed,
                 "projection_failed": summary.projection_failed,
                 "touched_scopes": [scope.model_dump() for scope in summary.touched_scopes],
+                "facts_processed": facts_processed,
+                "facts_failed": facts_failed,
+                "facts_projection_failed": facts_projection_failed,
             }
         )
     finally:
@@ -613,6 +629,40 @@ def rollback(
         )
     except Exception as exc:
         raise typer.BadParameter(f"cannot rollback: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+@cli.command("facts-rollback")
+def facts_rollback(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Erase every fact SEVERIAN_USER_FACTS made for one profile; raw turns and other memories stay.
+
+    Run with the switch OFF and the worker stopped. Pending fact jobs are cancelled so nothing
+    re-creates the facts. Erased facts leave reads and search but stay in history for audit.
+    Safe to repeat.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        done = bundle.service.rollback_user_facts(tenant, profile)
+        _emit(
+            {
+                "status": "rolled_back",
+                "tenant": tenant,
+                "profile": profile,
+                "scopes": done.scopes,
+                "facts_erased": done.erased,
+                "fact_jobs_cancelled": done.cancelled_jobs,
+            }
+        )
+    except Exception as exc:
+        raise typer.BadParameter(f"cannot roll back user facts: {exc}") from exc
     finally:
         bundle.close()
 

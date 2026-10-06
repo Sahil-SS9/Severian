@@ -21,7 +21,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
+from typer.testing import CliRunner
 
 from severian.application.eventtime import extract_event_span, message_time
 from severian.application.userfacts import (
@@ -38,6 +39,7 @@ from severian.application.userfacts import (
     user_text,
 )
 from severian.application.worker import DerivationWorker, WorkerSummary
+from severian.cli.app import cli
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.models import Job, Memory, Scope
 from severian.infrastructure.sqlite import records
@@ -562,3 +564,167 @@ def test_facts_not_grounded_in_their_own_message_are_never_stored(tmp_path, monk
     extract(bundle)
     assert [m.content.split("] ", 1)[-1] for m in facts(bundle)] == ["The user lives in Cardiff."]
     bundle.close()
+
+
+# == go-live fixes ===============================================================================
+# 1. ``severian work`` also runs the fact pass, so queued fact jobs do not pile up in production.
+# 2. The fact job is queued in the same transaction as the saved turn (a failed queue fails the save).
+# 3. Per-profile rollback erases only the facts the switch made; raw turns, normal memories and other
+#    profiles are untouched, and pending fact jobs are cancelled so nothing re-creates them.
+
+OTHER_SESSION = SCOPE.model_copy(update={"session_id": "other"})
+OTHER_PROFILE = SCOPE.model_copy(update={"profile_id": "someone-else"})
+TURNS = {
+    "I moved to Leeds last month.": ["The user moved to Leeds."],
+    "My dog is called Biscuit.": ["The user's dog is called Biscuit."],
+}
+
+
+def _facts_for(text: str) -> list[str]:
+    return next((f for said, f in TURNS.items() if said in text), [])
+
+
+# -- 2. same transaction ------------------------------------------------------------------------
+
+
+def test_switched_on_save_queues_the_fact_job_with_the_turn(tmp_path, monkeypatch):
+    bundle = make_bundle(tmp_path, monkeypatch, on=True)
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    assert len(fact_jobs(bundle)) == 1
+    bundle.close()
+
+
+def test_a_save_whose_fact_job_cannot_be_queued_fails_whole(tmp_path, monkeypatch):
+    """No silent 'turn saved, facts never extracted' state: the save and its fact job succeed or fail together."""
+    bundle = make_bundle(tmp_path, monkeypatch, on=True)
+
+    def fail(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+        if statement.lower().lstrip().startswith("insert") and FACTS_JOB in str(parameters):
+            raise RuntimeError("disk full")
+
+    event.listen(bundle.repository.engine, "before_cursor_execute", fail)
+    with pytest.raises(Exception, match="disk full"):
+        say(bundle, ("I moved to Leeds last month.", "Nice."))
+    event.remove(bundle.repository.engine, "before_cursor_execute", fail)
+    assert bundle.repository.list_observations(SCOPE) == []
+    assert fact_jobs(bundle) == []
+    bundle.close()
+
+
+def test_switched_off_save_queues_no_fact_job(tmp_path, monkeypatch):
+    bundle = make_bundle(tmp_path, monkeypatch, on=False)
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    assert fact_jobs(bundle) == []
+    bundle.close()
+
+
+# -- 1. severian work runs the fact pass --------------------------------------------------------
+
+
+def _flags(folder) -> list[str]:
+    return ["--database", str(folder / "s.db"), "--fts", str(folder / "s.fts"), "--vectors", str(folder / "s.vec")]
+
+
+def test_severian_work_processes_queued_fact_jobs(tmp_path, monkeypatch):
+    bundle = make_bundle(tmp_path, monkeypatch, on=True)
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    bundle.close()
+    fake = FakeExtractor(_facts_for)
+    monkeypatch.setattr("severian.composition.FactExtractor.from_env", classmethod(lambda cls: fake))
+    result = CliRunner().invoke(cli, ["work", *_flags(tmp_path)])
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["facts_processed"] == 1 and summary["facts_failed"] == 0
+    assert fake.calls == [[next(iter(TURNS))]]
+    again = make_bundle(tmp_path, monkeypatch, on=True)
+    assert [m.content.split("] ", 1)[-1] for m in facts(again)] == ["The user moved to Leeds."]
+    assert fact_jobs(again)[0].status == "done"
+    again.close()
+
+
+def test_severian_work_leaves_fact_jobs_alone_when_the_switch_is_off(tmp_path, monkeypatch):
+    """Switched off mid-flight: jobs stay queued (rollback cancels them); the model is never called."""
+    bundle = make_bundle(tmp_path, monkeypatch, on=True)
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    bundle.close()
+    monkeypatch.delenv("SEVERIAN_USER_FACTS")
+    result = CliRunner().invoke(cli, ["work", *_flags(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["facts_processed"] == 0
+    again = make_bundle(tmp_path, monkeypatch, on=False)
+    assert [job.status for job in fact_jobs(again)] == ["pending"]
+    again.close()
+
+
+# -- 3. per-profile rollback --------------------------------------------------------------------
+
+
+def _populated(tmp_path, monkeypatch):
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=FakeExtractor(_facts_for))
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    say(bundle, ("My dog is called Biscuit.", "Cute."), scope=OTHER_SESSION)
+    say(bundle, ("I moved to Leeds last month.", "Nice."), scope=OTHER_PROFILE)
+    drain(bundle)
+    extract(bundle)
+    return bundle
+
+
+def _snapshot(bundle, scope: Scope) -> tuple[list[str], list[str]]:
+    observations = sorted(o.raw_content for o in bundle.repository.list_observations(scope))
+    others = sorted(m.content for m in bundle.repository.list_memories(scope) if m.kind != "user_fact")
+    return observations, others
+
+
+def test_rollback_erases_only_this_profiles_switch_facts(tmp_path, monkeypatch):
+    bundle = _populated(tmp_path, monkeypatch)
+    assert len(facts(bundle)) == len(facts(bundle, OTHER_SESSION)) == len(facts(bundle, OTHER_PROFILE)) == 1
+    before = {scope: _snapshot(bundle, scope) for scope in (SCOPE, OTHER_SESSION, OTHER_PROFILE)}
+    monkeypatch.delenv("SEVERIAN_USER_FACTS")
+    report = bundle.service.rollback_user_facts(SCOPE.tenant_id, SCOPE.profile_id)
+    assert report.erased == 2 and report.scopes == 2 and report.cancelled_jobs == 0
+    assert facts(bundle) == facts(bundle, OTHER_SESSION) == []  # every session of the profile
+    assert len(facts(bundle, OTHER_PROFILE)) == 1  # other profile untouched
+    assert {scope: _snapshot(bundle, scope) for scope in before} == before  # raw turns + normal memories intact
+    assert not any("The user moved to Leeds." in hit for hit in found(bundle, "where does the user live Leeds"))
+    assert any("I moved to Leeds" in hit for hit in found(bundle, "Leeds"))  # the raw turn is still searchable
+    bundle.close()
+
+
+def test_rollback_cancels_pending_fact_jobs_so_nothing_recreates_the_facts(tmp_path, monkeypatch):
+    fake = FakeExtractor(_facts_for)
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I moved to Leeds last month.", "Nice."))
+    monkeypatch.delenv("SEVERIAN_USER_FACTS")
+    report = bundle.service.rollback_user_facts(SCOPE.tenant_id, SCOPE.profile_id)
+    assert report.cancelled_jobs == 1 and report.erased == 0
+    assert extract(bundle).processed == 0 and fake.calls == [] and facts(bundle) == []
+    bundle.close()
+
+
+def test_rollback_is_refused_while_the_switch_is_on(tmp_path, monkeypatch):
+    bundle = _populated(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="SEVERIAN_USER_FACTS"):
+        bundle.service.rollback_user_facts(SCOPE.tenant_id, SCOPE.profile_id)
+    assert len(facts(bundle)) == 1
+    bundle.close()
+
+
+def test_rollback_twice_is_a_no_op(tmp_path, monkeypatch):
+    bundle = _populated(tmp_path, monkeypatch)
+    monkeypatch.delenv("SEVERIAN_USER_FACTS")
+    bundle.service.rollback_user_facts(SCOPE.tenant_id, SCOPE.profile_id)
+    again = bundle.service.rollback_user_facts(SCOPE.tenant_id, SCOPE.profile_id)
+    assert (again.erased, again.cancelled_jobs) == (0, 0)
+    bundle.close()
+
+
+def test_facts_rollback_command(tmp_path, monkeypatch):
+    _populated(tmp_path, monkeypatch).close()
+    monkeypatch.delenv("SEVERIAN_USER_FACTS")
+    args = ["facts-rollback", *_flags(tmp_path), "--tenant", SCOPE.tenant_id, "--profile", SCOPE.profile_id]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "status": "rolled_back", "tenant": SCOPE.tenant_id, "profile": SCOPE.profile_id,
+        "scopes": 2, "facts_erased": 2, "fact_jobs_cancelled": 0,
+    }  # fmt: skip

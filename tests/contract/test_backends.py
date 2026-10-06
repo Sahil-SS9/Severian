@@ -12,7 +12,7 @@ These tests assert that:
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -139,6 +139,7 @@ class _FakeRepository:
         *,
         derive: bool = False,
         tombstone: bool = False,
+        also_queue: Sequence[str] = (),
     ) -> Observation:
         if derive and tombstone:
             raise ValueError("an erasure tombstone is never derived")
@@ -258,6 +259,12 @@ class _FakeRepository:
     ) -> Job:
         raise NotFoundError("job not claimed")
 
+    def list_profile_scopes(self, tenant_id: str, profile_id: str) -> list[Scope]:
+        return []
+
+    def cancel_pending_jobs(self, scope: Scope, kind: str) -> int:
+        return 0
+
     def reap_expired_jobs(self, *, now: datetime | None = None, max_attempts: int = 3) -> int:
         return 0
 
@@ -275,7 +282,7 @@ class _FakeRepository:
             self.ack_outbox(event_id)
 
     def add_observation_and_enqueue(
-        self, observation: Observation, job_kind: str = "derive"
+        self, observation: Observation, job_kind: str = "derive", *, also_queue: Sequence[str] = ()
     ) -> tuple[Observation, Job]:
         return (
             observation,

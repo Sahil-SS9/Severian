@@ -27,11 +27,20 @@ from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
-from severian.application.userfacts import FACTS_JOB, user_facts_enabled
+from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FactsRollback:
+    """What ``rollback_user_facts`` did: scopes that had facts, facts erased, fact jobs cancelled."""
+
+    scopes: int
+    erased: int
+    cancelled_jobs: int
 
 
 @dataclass(frozen=True)
@@ -174,23 +183,16 @@ class MemoryService:
         content: str,
         source: Mapping[str, Any] | None = None,
     ) -> ObservationView:
-        result = self._ingestion.ingest(scope, content, dict(source or {}))
-        self._queue_facts(scope, result.observation.id)
+        result = self._ingestion.ingest(scope, content, dict(source or {}), also_queue=self._fact_jobs())
         return ObservationView.from_result(result)
 
-    def _queue_facts(self, scope: Scope, observation_id: str) -> None:
-        """Queue the background fact job for a saved turn (SEVERIAN_USER_FACTS; no-op when off).
+    def _fact_jobs(self) -> tuple[str, ...]:
+        """Extra job kinds for a saved turn: the background fact job while SEVERIAN_USER_FACTS is on.
 
-        After the turn's own write, so saving and the raw turn's search are unchanged. Queueing is
-        idempotent (same kind + payload). If it fails, the turn is still saved; only its facts are
-        lost, so this logs instead of failing the save.
+        Queued in the same transaction as the turn (and as a correction's revision), so a turn can
+        never be saved without its fact job; if that write fails, the save fails as a whole.
         """
-        if not self._user_facts:
-            return
-        try:
-            self._repository.enqueue_job(scope, FACTS_JOB, {"observation_id": observation_id})
-        except Exception:
-            logger.warning("could not queue fact extraction for observation %s", observation_id, exc_info=True)
+        return (FACTS_JOB,) if self._user_facts else ()
 
     def correct_memory(
         self,
@@ -244,8 +246,9 @@ class MemoryService:
         queued in the same transaction as the revision, so the corrected
         fact replaces the old one on the next drain instead of vanishing.
         """
-        revision = self._repository.revise_observation(scope, observation_id, content, derive=True)
-        self._queue_facts(scope, revision.id)
+        revision = self._repository.revise_observation(
+            scope, observation_id, content, derive=True, also_queue=self._fact_jobs()
+        )
         superseded = self._repository.supersede_memories_for_source(scope, observation_id)
         self._repository.retract_relations_for_source(scope, observation_id)
         if superseded:
@@ -299,6 +302,30 @@ class MemoryService:
         except Exception:
             self._projection.rebuild(scope)
         return erased
+
+    def rollback_user_facts(self, tenant_id: str, profile_id: str) -> FactsRollback:
+        """Undo SEVERIAN_USER_FACTS for one profile: erase every fact it made, keep everything else.
+
+        Only ``user_fact`` memories exist because of the switch, so only they are erased, in every
+        scope (collection, agent, session) of the profile, through the normal erasure path
+        (tombstoned: gone from reads and search, kept in history for audit). Raw turns, memories
+        from the normal derive pass and other profiles are untouched. Pending fact jobs are
+        cancelled first so a later worker run cannot re-create the facts. Refuses while the switch
+        is on in this process's environment (writers would queue fresh jobs) or while a fact job
+        is running. Safe to repeat.
+        """
+        if user_facts_enabled():
+            raise RuntimeError("turn SEVERIAN_USER_FACTS off (and restart writers) before rolling back")
+        scopes = self._repository.list_profile_scopes(tenant_id, profile_id)
+        cancelled = sum(self._repository.cancel_pending_jobs(scope, FACTS_JOB) for scope in scopes)
+        erased = touched = 0
+        for scope in scopes:
+            made = [m for m in self._repository.list_memories(scope) if m.kind == FACT_KIND]
+            for memory in made:
+                self.erase_memory(scope, memory.id, reason="user facts rolled back")
+            erased += len(made)
+            touched += bool(made)
+        return FactsRollback(scopes=touched, erased=erased, cancelled_jobs=cancelled)
 
     def erase_observation(
         self,

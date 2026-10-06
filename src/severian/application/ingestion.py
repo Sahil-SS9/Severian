@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,6 +61,8 @@ class IngestionService:
         content: str,
         source: dict[str, Any],
         attachments: list[Attachment] | None = None,
+        *,
+        also_queue: Sequence[str] = (),
     ) -> IngestionResult:
         # Preserve the RAW evidence exactly as received; normalisation is
         # a derived field stored alongside it. Both survive in the
@@ -83,7 +86,8 @@ class IngestionService:
                 raw_hash=raw_hash_of(raw),
                 source=dict(source),
                 attachments=list(attachments or []),
-            )
+            ),
+            also_queue=also_queue,
         )
         return IngestionResult(observation=observation, job=job)
 
