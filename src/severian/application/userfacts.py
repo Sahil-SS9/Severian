@@ -38,7 +38,7 @@ _log = logging.getLogger(__name__)
 FACTS_JOB = "extract_facts"  # stored in job rows: renaming it strands queued work
 BACKGROUND_JOB_KINDS = (FACTS_JOB,)  # never taken by the normal derive pass
 FACT_KIND = "user_fact"
-PROMPT_VERSION = "user-facts-v4"
+PROMPT_VERSION = "user-facts-v5"
 DEFAULT_FACTS_MODEL = "active:aux"  # a Turbofit alias, like the cue model
 DEFAULT_FACTS_URL = "http://127.0.0.1:8091/v1/chat/completions"
 MAX_FACTS_PER_MESSAGE = 8
@@ -94,25 +94,29 @@ _PROMPT = (
     "states about themselves, their life and the people and things in it: personal information, life "
     "events, experiences, plans, preferences, possessions, relationships, routines, and anything they ask "
     "to be remembered or reminded about. Use only what the user said. Write each fact as one short "
-    'standalone sentence, calling the user "the user": replace pronouns and vague references with what '
+    "standalone sentence, calling the user \"the user\": replace pronouns and vague references with what "
     "they refer to, and keep names, numbers, places, dates and time expressions exactly as the user gave "
     "them. A message can hold several facts: write each one. When the user says something changed, state "
-    'the new situation as its own fact (for example, "I swapped my bike for a car" gives "The user no '
-    'longer has a bike." and "The user now has a car."). Say only what the user said happened: an '
-    'appointment, plan or booking is not the thing done ("I have a passport renewal appointment" is not '
-    '"The user renewed their passport."), and relative dates stay as said ("last Tuesday" stays "last '
+    "the new situation as its own fact (for example, \"I swapped my bike for a car\" gives \"The user no "
+    "longer has a bike.\" and \"The user now has a car.\"). Say only what the user said happened: an "
+    "appointment, plan or booking is not the thing done (\"I have a passport renewal appointment\" is not "
+    "\"The user renewed their passport.\"), and relative dates stay as said (\"last Tuesday\" stays \"last "
     "Tuesday\"). A fact about another person goes under that person's name, saying how they relate to the "
-    'user ("The user\'s manager Kiran is allergic to sesame."), never as a fact about the user. Nothing '
+    "user (\"The user's manager Kiran is allergic to sesame.\"), never as a fact about the user. Nothing "
     "from a story, novel, script, role-play, game, hypothetical, example, or text the user is writing, "
-    "translating or quoting is a fact about the user or their life: skip it. Skip questions, requests and "
-    "general knowledge that say nothing about the user. A request is not a fact about the user's life: "
-    '"write me a poem about X" or "give me a plan for Y" does not mean the user wrote, did or has X or Y, '
-    'though a personal detail stated inside the request still counts. "Remind me to do X next time I '
-    'mention Y" gives only the reminder ("The user wants to be reminded to do X next time they mention '
-    'Y."), never a claim that the user does Y. Answer with a JSON object that maps message numbers to '
-    'lists of facts, for example {"1": ["The user adopted a dog named Max."], "3": ["The user prefers '
-    'aisle seats."]}. Leave out messages with no facts. If there are none at all, answer exactly {} and '
-    'nothing else: never write "no facts" in words.'
+    "translating or quoting is a fact about the user or their life: skip it. A question or request to the "
+    "assistant is never itself a fact: do not write \"The user is asking about X\", \"The user wants to know "
+    "X\" or \"The user is interested in X\" because they asked about X; keep only personal details stated "
+    "inside it (\"tips for my Trek Emonda?\" gives \"The user has a Trek Emonda.\"). Skip general knowledge "
+    "that says nothing about the user. A vague or empty reply such as \"nothing much\", \"ok\", \"thanks\" or "
+    "\"continue\" gives no facts. A request is not a fact about the user's life: \"write me a poem about X\" "
+    "or \"give me a plan for Y\" does not mean the user wrote, did or has X or Y, though a personal detail "
+    "stated inside the request still counts. \"Remind me to do X next time I mention Y\" gives only the "
+    "reminder (\"The user wants to be reminded to do X next time they mention Y.\"), never a claim that the "
+    "user does Y. Answer with a JSON object that maps message numbers to lists of facts, for example "
+    "{\"1\": [\"The user adopted a dog named Max.\"], \"3\": [\"The user prefers aisle seats.\"]}. Leave out "
+    "messages with no facts. If there are none at all, answer exactly {} and nothing else: never write "
+    "\"no facts\" in words."
 )
 
 

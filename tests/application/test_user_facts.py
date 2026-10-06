@@ -399,7 +399,7 @@ def test_saving_stays_fast_and_facts_arrive_in_the_background(tmp_path, monkeypa
     assert fact.content == f"{LABEL} The user lives in York."  # same time label as its turn
     raw = next(m for m in bundle.repository.list_memories(SCOPE) if m.kind != "user_fact")
     assert fact.source_observation_ids == raw.source_observation_ids  # the raw turn stays linked
-    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v4", [], None)
+    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v5", [], None)
     assert fact.content in found(bundle, "where does the user live")
     assert extract(bundle).processed == 0  # each turn is done once
     bundle.close()
@@ -437,11 +437,14 @@ def test_by_default_each_turn_goes_to_the_model_on_its_own(tmp_path, monkeypatch
         "write me a poem",  # a request is not something the user did
         "gives only the reminder",  # "remind me ... next time I mention Y" is not "the user does Y"
         "answer exactly {}",  # never "no facts" in words
+        "is never itself a fact",  # questions to the assistant are not facts
+        "The user is interested in X",  # the commonest question-as-fact phrasing
+        "nothing much",  # vague replies give {}
     ],
 )
 def test_the_prompt_states_the_attribution_rules(rule):
     assert rule in userfacts._PROMPT
-    assert userfacts.PROMPT_VERSION == "user-facts-v4"
+    assert userfacts.PROMPT_VERSION == "user-facts-v5"
 
 
 def test_consecutive_turns_go_to_the_model_together_in_order(tmp_path, monkeypatch):
