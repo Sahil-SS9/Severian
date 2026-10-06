@@ -546,3 +546,19 @@ def test_facts_get_event_time_when_that_switch_is_on(tmp_path, monkeypatch):
 
 def test_the_extraction_job_kind_is_stable():
     assert FACTS_JOB == "extract_facts"  # stored in job rows; renaming it strands queued work
+
+
+def test_facts_not_grounded_in_their_own_message_are_never_stored(tmp_path, monkeypatch):
+    """Misattached names/places (a neighbouring message's Glasgow) and facts from pasted text are dropped."""
+    transcript = "Transcript 4: Dolly\nQ. Hello?\nA. I'm from New Delhi.\nQ. Clothes?\nA. Baggy jeans."
+    replies = {
+        "I'm living in Cardiff now.": ["The user lives in Cardiff.", "The user no longer lives in Glasgow."],
+        transcript: ["The user likes baggy jeans."],
+    }
+    fake = FakeExtractor(lambda text: replies.get(text, []))
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I'm living in Cardiff now.", "ok"), (transcript, "Thanks for sharing."))
+    drain(bundle)
+    extract(bundle)
+    assert [m.content.split("] ", 1)[-1] for m in facts(bundle)] == ["The user lives in Cardiff."]
+    bundle.close()

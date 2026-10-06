@@ -8,6 +8,7 @@ from typing import Protocol
 from severian.application.anticipation import anticipation_enabled, extract_trigger
 from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
 from severian.application.extraction import EntityExtractionService
+from severian.application.factanchors import grounded
 from severian.application.ports import (
     CanonicalRepository,
 )
@@ -252,9 +253,11 @@ class DerivationService:
             return UserFacts(failed={observation.id: reason for _, observation, _ in turns})
         model_id = str(getattr(self._fact_extractor, "model", "unknown"))
         published: list[Memory] = []
-        for number, (_said, observation, label) in enumerate(turns, 1):
+        for number, (said, observation, label) in enumerate(turns, 1):
             memories = []
             for fact in found.facts.get(number, []):
+                if not grounded(fact, said):  # misattached specifics or pasted text: never stored
+                    continue
                 content = f"{label} {fact}" if label else fact
                 span = (
                     extract_event_span(content, message_time(observation.source, observation.created_at))
