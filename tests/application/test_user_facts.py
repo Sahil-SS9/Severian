@@ -728,3 +728,67 @@ def test_facts_rollback_command(tmp_path, monkeypatch):
         "status": "rolled_back", "tenant": SCOPE.tenant_id, "profile": SCOPE.profile_id,
         "scopes": 2, "facts_erased": 2, "fact_jobs_cancelled": 0,
     }  # fmt: skip
+
+
+# == improvement 1: each fact with its short source message; facts about one person together ======
+
+LONG = "So, long story, but " + "we spent ages comparing flats near the canal, " * 3 + "and I moved to Leeds."
+PEOPLE = {
+    "My sister Nadia lives in Aberdeen.": ["The user's sister Nadia lives in Aberdeen."],
+    "I moved to Leeds last month.": ["The user moved to Leeds."],
+    "My friend Tom is mad about chess.": ["The user's friend Tom is mad about chess."],
+    "Nadia works night shifts as a nurse in Aberdeen.": ["The user's sister Nadia works as a nurse in Aberdeen."],
+    LONG: ["The user moved to Leeds after comparing flats."],
+}
+
+
+def _people_bundle(tmp_path, monkeypatch):
+    found_in = lambda text: next((f for said, f in PEOPLE.items() if said in text), [])  # noqa: E731
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=FakeExtractor(found_in))
+    say(bundle, *[(said, "Noted.") for said in PEOPLE])
+    drain(bundle)
+    extract(bundle)
+    return bundle
+
+
+def test_fact_hits_carry_their_short_source_message_and_other_hits_do_not(tmp_path, monkeypatch):
+    bundle = _people_bundle(tmp_path, monkeypatch)
+    hits = bundle.service.search(SCOPE, query="Nadia Aberdeen nurse sister Leeds flats", limit=20)
+    fact_hits = [h for h in hits if "The user" in h.content]
+    assert fact_hits and all(h.source_message for h in fact_hits)
+    by_fact = {h.content.split("] ", 1)[-1]: h.source_message for h in fact_hits}
+    nadia = by_fact["The user's sister Nadia lives in Aberdeen."]
+    assert nadia == "My sister Nadia lives in Aberdeen."  # the user's words only, not the reply
+    long_one = by_fact.get("The user moved to Leeds after comparing flats.")
+    assert long_one is not None and len(long_one) <= 160 and long_one.endswith("…") and long_one.startswith("So, long")
+    assert all(h.source_message is None and h.about is None for h in hits if "The user" not in h.content)
+    assert {h.about for h in fact_hits} <= {"Nadia", "Tom", "user"}
+    bundle.close()
+
+
+def test_facts_about_the_same_person_come_back_together(tmp_path, monkeypatch):
+    bundle = _people_bundle(tmp_path, monkeypatch)
+    hits = bundle.service.search(SCOPE, query="Nadia Aberdeen nurse sister Tom chess Leeds", limit=20)
+    nadia = [i for i, h in enumerate(hits) if h.about == "Nadia"]
+    assert len(nadia) == 2 and nadia[1] == nadia[0] + 1
+    bundle.close()
+
+
+def test_assembled_context_shows_what_the_user_said_under_each_fact(tmp_path, monkeypatch):
+    bundle = _people_bundle(tmp_path, monkeypatch)
+    hits = bundle.service.search(SCOPE, query="Tom chess friend", limit=10)
+    context = bundle.service.assemble_context(SCOPE, hits)
+    assert 'said: "My friend Tom is mad about chess."' in context
+    assert context.count("said: ") == sum(1 for h in hits if h.source_message)
+    bundle.close()
+
+
+def test_search_command_returns_source_message_and_about(tmp_path, monkeypatch):
+    _people_bundle(tmp_path, monkeypatch).close()
+    scope_flags = ["--tenant", SCOPE.tenant_id, "--profile", SCOPE.profile_id, "--collection", SCOPE.collection_id,
+                   "--agent", SCOPE.agent_id, "--session", SCOPE.session_id]
+    result = CliRunner().invoke(cli, ["search", *_flags(tmp_path), *scope_flags, "--query", "Tom chess"])
+    assert result.exit_code == 0, result.output
+    hits = json.loads(result.output)["hits"]
+    tom = [h for h in hits if h.get("about") == "Tom"]
+    assert tom and tom[0]["source_message"] == "My friend Tom is mad about chess."

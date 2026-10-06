@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
@@ -448,13 +449,16 @@ class ContextAssembler:
             raise ValueError("max_chars must be at least 32")
         self.max_chars = max_chars
 
-    def assemble(self, results: list[RetrievalResult]) -> str:
+    def assemble(self, results: list[RetrievalResult], *, said: Mapping[str, str] | None = None) -> str:
+        """Cited context blocks. ``said`` maps a memory id to the user's own words it came from
+        (user facts); that block then shows them on a ``said:`` line so the reader can check it."""
         blocks: list[str] = []
         used = 0
         for result in results:
             citation = ", ".join(result.source_observation_ids)
             prefix = f"[{result.memory.id}] "
-            suffix = f"\nsource: {citation}"
+            quote = (said or {}).get(result.memory.id)
+            suffix = (f'\nsaid: "{quote}"' if quote else "") + f"\nsource: {citation}"
             available = self.max_chars - used - len(prefix) - len(suffix) - 2
             if available <= 0:
                 break

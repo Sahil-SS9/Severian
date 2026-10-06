@@ -15,19 +15,20 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from severian.application.anticipation import MAX_REMINDERS, DueContext, anticipation_enabled, match_due
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
+from severian.application.factview import about, group_by_person, short_message
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
-from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
+from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled, user_text
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
 
@@ -85,6 +86,10 @@ class SearchHitView:
     # Event time (Step 3): the period the memory says the thing happened in, when known.
     occurred_at: datetime | None = None
     occurred_until: datetime | None = None
+    # User facts only (improvement 1): the user's own words the fact came from (at most 160 chars)
+    # and who the fact is about (a named person, or "user"). ``None`` for every other hit.
+    source_message: str | None = None
+    about: str | None = None
 
     @classmethod
     def from_result(
@@ -564,7 +569,33 @@ class MemoryService:
         if track_usage:
             for item in results:
                 self._repository.record_memory_usage(scope, item.memory.id)
-        return [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
+        hits = [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
+        return self._show_facts(scope, hits)
+
+    def _show_facts(self, scope: Scope, hits: list[SearchHitView]) -> list[SearchHitView]:
+        """Give each user fact its short source message and person, then group facts by person.
+
+        The source message is the user's part of the fact's source turn (not the assistant's reply).
+        Only ``user_fact`` hits change; the returned set is the same, only the order of facts about
+        named people changes (see ``group_by_person``).
+        """
+        shown: list[SearchHitView] = []
+        for hit in hits:
+            memory = self._repository.get_memory(scope, hit.memory_id)
+            if memory.kind != FACT_KIND:
+                shown.append(hit)
+                continue
+            said = None
+            for observation_id in memory.source_observation_ids[:1]:
+                try:
+                    observation = self._repository.get_observation(scope, observation_id)
+                except NotFoundError:
+                    break
+                said = user_text(observation.content, observation.source)
+            shown.append(
+                replace(hit, source_message=short_message(said) if said else None, about=about(hit.content))
+            )
+        return group_by_person(shown, who=lambda hit: hit.about)
 
     @staticmethod
     def _truth_view(
@@ -611,6 +642,7 @@ class MemoryService:
         # shape and could drift from the real model. The repository is the
         # single source of truth for content.
         results: list[RetrievalResult] = []
+        said = {hit.memory_id: hit.source_message for hit in hits if hit.source_message}
         for hit in hits:
             memory = self._repository.get_memory(scope, hit.memory_id)
             results.append(
@@ -622,7 +654,7 @@ class MemoryService:
                     fused_score=hit.fused_score,
                 )
             )
-        return assembler.assemble(results)
+        return assembler.assemble(results, said=said)
 
     def health(self) -> HealthReport:
         components: dict[str, str] = {}

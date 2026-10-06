@@ -234,6 +234,7 @@ def search(
                         "vector_score": hit.vector_score,
                         "fused_score": hit.fused_score,
                         "scope": hit.scope.model_dump(),
+                        **({"source_message": hit.source_message, "about": hit.about} if hit.about else {}),
                         **({"truth_state": hit.truth_state, "previous": list(hit.previous)} if view != "now" else {}),
                     }
                     for hit in hits
