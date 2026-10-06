@@ -309,7 +309,15 @@ class RetrievalService:
     def _with_links(
         self, scope: Scope, ranked: list[RetrievalResult], *, as_of: datetime | None = None
     ) -> list[RetrievalResult]:
-        """Add memories naming someone the best matches name (HippoRAG-style seed -> entity -> passage hop).
+        """Add memories naming someone the best matches name: one hop of match -> name -> memory.
+
+        Borrowed from HippoRAG (Gutiérrez et al., NeurIPS 2024, arXiv:2405.14831, §2.2-2.3): retrieval
+        spreads from seed concepts through a graph of names to the passages that contain them,
+        giving multi-step recall in one search. HippoRAG 2 (Gutiérrez et al., ICML 2025,
+        arXiv:2502.14802, §3.5, §6.2) also seeds from the best-matching passages, scaled by a weight
+        factor; we use only those passage seeds (no names taken from the question). Not borrowed:
+        Personalized PageRank (we take one hop at a fixed weight) and node specificity, HippoRAG's
+        IDF-like down-weighting of common names (§2.3).
 
         One keyword search per distinct name; a linked memory scores ``link_weight`` times its
         match, so real matches stay first, and a memory that already matched keeps its own score.

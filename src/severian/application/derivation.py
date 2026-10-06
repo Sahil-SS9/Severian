@@ -14,7 +14,14 @@ from severian.application.ports import (
 from severian.application.ports import (
     DerivationGateway as DerivationGateway,
 )
-from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, Extraction, time_label, user_text
+from severian.application.userfacts import (
+    CONTEXT_TURNS,
+    FACT_KIND,
+    PROMPT_VERSION,
+    Extraction,
+    time_label,
+    user_text,
+)
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Observation, Scope
 
@@ -32,7 +39,7 @@ class FactSource(Protocol):
 
     model: str
 
-    def extract(self, messages: list[str]) -> Extraction: ...
+    def extract(self, messages: list[str], context: list[str] | None = None) -> Extraction: ...
 
 
 @dataclass(frozen=True)
@@ -221,6 +228,21 @@ class DerivationService:
         except Exception:  # cues are an extra; the memory must still be written
             return []
 
+    def _said_before(self, scope: Scope, observation: Observation) -> list[str]:
+        """The user's last ``CONTEXT_TURNS`` messages before this turn in the same conversation, oldest
+        first: read-only context so \"she\" or \"it\" resolve. Empty without a conversation id."""
+        session = str(observation.source.get("session_id", "")).strip()
+        if not session:
+            return []
+        earlier = sorted(
+            (other.created_at, other.id, other)
+            for other in self.repository.list_session_observations(scope, [session])
+            if (other.created_at, other.id) < (observation.created_at, observation.id)
+            and other.superseded_by_id is None
+        )
+        said = [text for _, _, other in earlier if (text := user_text(other.content, other.source))]
+        return said[-CONTEXT_TURNS:]
+
     def derive_user_facts(self, scope: Scope, observation_ids: Sequence[str]) -> UserFacts:
         """Facts the user stated in these turns, from ONE batch to the model (Round 2 idea 1).
 
@@ -245,7 +267,9 @@ class DerivationService:
         if not turns:
             return UserFacts()
         try:
-            found = self._fact_extractor.extract([said for said, _, _ in turns])
+            found = self._fact_extractor.extract(
+                [said for said, _, _ in turns], context=self._said_before(scope, turns[0][1])
+            )
         except Exception as exc:  # the production extractor never raises; facts stay optional either way
             logger.warning("fact extraction raised; no facts for %d turns", len(turns), exc_info=True)
             reason = f"fact extraction raised {type(exc).__name__}: {exc}"

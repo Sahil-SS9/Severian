@@ -232,13 +232,14 @@ class DerivationWorker:
         self,
         *,
         worker_id: str = "facts",
-        batch_size: int = 8,
+        batch_size: int = 1,
         max_batches: int | None = None,
     ) -> WorkerSummary:
         """Background pass for Round 2 idea 1 (SEVERIAN_USER_FACTS): queued turns -> user facts.
 
-        Claims ``extract_facts`` jobs oldest first, ``batch_size`` at a time, so consecutive
-        messages reach the model together; a batch is split by scope so no call mixes two users.
+        Claims ``extract_facts`` jobs oldest first, ``batch_size`` at a time; the default sends each
+        turn to the model on its own, because a shared batch let facts land on a neighbouring turn
+        (wrong message, wrong date). A batch is split by scope so no call mixes two users.
         Facts are projected before their jobs complete (same rule as ``drain``), so a completed
         job means its facts are searchable. Turns the model could not serve (after the extractor's
         retry and split) complete as failed with the reason and the start of the bad reply as the

@@ -38,12 +38,18 @@ _log = logging.getLogger(__name__)
 FACTS_JOB = "extract_facts"  # stored in job rows: renaming it strands queued work
 BACKGROUND_JOB_KINDS = (FACTS_JOB,)  # never taken by the normal derive pass
 FACT_KIND = "user_fact"
-PROMPT_VERSION = "user-facts-v2"
+PROMPT_VERSION = "user-facts-v3"
 DEFAULT_FACTS_MODEL = "active:aux"  # a Turbofit alias, like the cue model
 DEFAULT_FACTS_URL = "http://127.0.0.1:8091/v1/chat/completions"
 MAX_FACTS_PER_MESSAGE = 8
 MAX_FACT_CHARS = 300
 MAX_MESSAGE_CHARS = 2000  # long pastes rarely hold personal facts; cap the prompt
+CONTEXT_TURNS = 2  # earlier user messages sent as read-only context
+MAX_CONTEXT_CHARS = 500  # an earlier message only needs to show who "she" or "it" is
+CONTEXT_HEADER = (
+    "Earlier messages, only to work out who or what the messages below refer to (take no facts from these):"
+)
+MESSAGES_HEADER = "Messages:"
 RETRY_PAUSE_S = 5.0  # a server or network fault gets this long before the one retry
 # Added to the retry after an unreadable reply: at temperature 0 an identical request repeats the
 # same bad reply (real model, 05/10), so the retry must differ to be worth its call.
@@ -91,17 +97,25 @@ def user_text(content: str, source: Mapping[str, Any]) -> str | None:
 
 _PROMPT = (
     "You will be given numbered messages that a user sent to an AI assistant. Extract every fact the user "
-    "states about themselves, their life and the people and things in it: personal information, life events, "
-    "experiences, plans, preferences, possessions, relationships, routines, and anything they ask to be "
-    "remembered or reminded about. Use only what the user said. Write each fact as one short standalone "
-    "sentence, calling the user \"the user\": replace pronouns and vague references with what they refer to, "
-    "and keep names, numbers, places, dates and time expressions exactly as the user gave them. A message can "
-    "hold several facts: write each one. When the user says something changed, state the new situation as its "
-    "own fact (for example, \"I swapped my bike for a car\" gives \"The user no longer has a bike.\" and \"The "
-    "user now has a car.\"). Skip questions, requests and general knowledge that say nothing about the user. "
-    "Answer with a JSON object that maps message numbers to lists of facts, for example {\"1\": [\"The user "
-    "adopted a dog named Max.\"], \"3\": [\"The user prefers aisle seats.\"]}. Leave out messages with no facts. "
-    "If there are none at all, answer {}."
+    "states about themselves, their life and the people and things in it: personal information, life "
+    "events, experiences, plans, preferences, possessions, relationships, routines, and anything they ask "
+    "to be remembered or reminded about. Use only what the user said. Write each fact as one short "
+    "standalone sentence, calling the user \"the user\": replace pronouns and vague references with what "
+    "they refer to, and keep names, numbers, places, dates and time expressions exactly as the user gave "
+    "them. A message can hold several facts: write each one. When the user says something changed, state "
+    "the new situation as its own fact (for example, \"I swapped my bike for a car\" gives \"The user no "
+    "longer has a bike.\" and \"The user now has a car.\"). Say only what the user said happened: an "
+    "appointment, plan or booking is not the thing done (\"I have a passport renewal appointment\" is not "
+    "\"The user renewed their passport.\"), and relative dates stay as said (\"last Tuesday\" stays \"last "
+    "Tuesday\"). A fact about another person goes under that person's name, saying how they relate to the "
+    "user (\"The user's manager Kiran is allergic to sesame.\"), never as a fact about the user. Nothing "
+    "from a story, novel, script, role-play, game, hypothetical, example, or text the user is writing, "
+    "translating or quoting is a fact about the user or their life: skip it. Skip questions, requests and "
+    "general knowledge that say nothing about the user. Messages may come after a few earlier messages, "
+    "given only so you can tell who or what a word like she, he, it or they means: take facts only from "
+    "the numbered messages, never from the earlier ones. Answer with a JSON object that maps message "
+    "numbers to lists of facts, for example {\"1\": [\"The user adopted a dog named Max.\"], \"3\": [\"The user "
+    "prefers aisle seats.\"]}. Leave out messages with no facts. If there are none at all, answer {}."
 )
 
 
@@ -248,8 +262,11 @@ class FactExtractor:
             timeout=float(values.get("SEVERIAN_FACTS_TIMEOUT", "60")),
         )
 
-    def extract(self, messages: list[str]) -> Extraction:
+    def extract(self, messages: list[str], context: list[str] | None = None) -> Extraction:
         """Facts per message number (1-based, in the order given), and the messages given up on.
+
+        ``context`` holds earlier user messages, sent first and marked read-only so pronouns in
+        ``messages`` resolve; they are never numbered, so no fact can be filed under them.
 
         A failed call keeps its reply and the batch is retried once: after a pause when the server
         or network failed, with twice the room when the reply was cut off. If the retry fails too,
@@ -262,32 +279,43 @@ class FactExtractor:
         self.batches += 1
         facts: dict[int, list[str]] = {}
         failed: dict[int, str] = {}
-        self._attempt(messages, 0, facts, failed, top=True)
+        before = tuple(text[:MAX_CONTEXT_CHARS] for text in (context or []) if text.strip())
+        self._attempt(messages, 0, facts, failed, top=True, context=before)
         if failed:
             self.failed_batches += 1
             self.given_up += len(failed)
         return Extraction(facts=dict(sorted(facts.items())), failed=dict(sorted(failed.items())))
 
     def _attempt(
-        self, messages: list[str], offset: int, facts: dict[int, list[str]], failed: dict[int, str], *, top: bool
+        self,
+        messages: list[str],
+        offset: int,
+        facts: dict[int, list[str]],
+        failed: dict[int, str],
+        *,
+        top: bool,
+        context: tuple[str, ...] = (),
     ) -> None:
         try:
-            found = self._call(messages)
+            found = self._call(messages, context=context)
         except FactCallError as first:
             if top:
                 self.first_failures += 1
             if not (top or first.transient):  # inside a split: only a server fault earns a retry
-                self._split_or_give_up(messages, offset, facts, failed, first)
+                self._split_or_give_up(messages, offset, facts, failed, first, context=context)
                 return
             self.retries += 1
             if first.transient:
                 self._sleep(RETRY_PAUSE_S)
             try:
                 found = self._call(
-                    messages, room=2 if first.cut_off else 1, nudge=not (first.transient or first.cut_off)
+                    messages,
+                    room=2 if first.cut_off else 1,
+                    nudge=not (first.transient or first.cut_off),
+                    context=context,
                 )
             except FactCallError as second:
-                self._split_or_give_up(messages, offset, facts, failed, second)
+                self._split_or_give_up(messages, offset, facts, failed, second, context=context)
                 return
         for number, items in found.items():
             facts[offset + number] = items
@@ -299,21 +327,25 @@ class FactExtractor:
         facts: dict[int, list[str]],
         failed: dict[int, str],
         error: FactCallError,
+        *,
+        context: tuple[str, ...] = (),
     ) -> None:
         if error.transient or len(messages) == 1:
             failed.update({offset + number: error.describe() for number in range(1, len(messages) + 1)})
             return
         self.splits += 1
         half = (len(messages) + 1) // 2
-        self._attempt(messages[:half], offset, facts, failed, top=False)
-        self._attempt(messages[half:], offset + half, facts, failed, top=False)
+        self._attempt(messages[:half], offset, facts, failed, top=False, context=context)
+        self._attempt(messages[half:], offset + half, facts, failed, top=False, context=context)
 
-    def _call(self, messages: list[str], *, room: int = 1, nudge: bool = False) -> dict[int, list[str]]:
+    def _call(
+        self, messages: list[str], *, room: int = 1, nudge: bool = False, context: tuple[str, ...] = ()
+    ) -> dict[int, list[str]]:
         """One model call; any problem becomes a FactCallError, counted and kept."""
         self.calls += 1
         started = time.perf_counter()
         try:
-            return self._request(messages, room=room, nudge=nudge)
+            return self._request(messages, room=room, nudge=nudge, context=context)
         except Exception as exc:  # facts are optional; never let a model fault escape
             error = exc if isinstance(exc, FactCallError) else FactCallError(f"{type(exc).__name__}: {exc}")
             self.failures += 1
@@ -327,8 +359,13 @@ class FactExtractor:
         finally:
             self.timings.append(time.perf_counter() - started)
 
-    def _request(self, messages: list[str], *, room: int, nudge: bool = False) -> dict[int, list[str]]:
+    def _request(
+        self, messages: list[str], *, room: int, nudge: bool = False, context: tuple[str, ...] = ()
+    ) -> dict[int, list[str]]:
         numbered = "\n".join(f"[{number}] {text[:MAX_MESSAGE_CHARS]}" for number, text in enumerate(messages, 1))
+        if context:
+            earlier = "\n".join(f"- {text}" for text in context)
+            numbered = f"{CONTEXT_HEADER}\n{earlier}\n\n{MESSAGES_HEADER}\n{numbered}"
         if nudge:
             numbered += f"\n\n{JSON_ONLY}"
         body = json.dumps(

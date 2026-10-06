@@ -23,6 +23,7 @@ from urllib.error import HTTPError
 import pytest
 from sqlalchemy import select
 
+from severian.application import userfacts
 from severian.application.eventtime import extract_event_span, message_time
 from severian.application.userfacts import (
     FACTS_JOB,
@@ -123,6 +124,25 @@ def test_extractor_parses_common_reply_shapes(reply):
     extractor = FactExtractor(opener=model(reply))
     assert extractor.extract(["I moved to York", "thanks"]) == Extraction(facts={1: ["The user moved to York."]})
     assert extractor.failures == 0 and extractor.calls == 1
+
+
+def test_earlier_messages_go_first_marked_as_context_only():
+    seen: list = []
+    extractor = FactExtractor(opener=model('{"1": ["The user\'s sister Mia is a nurse."]}', seen))
+    found = extractor.extract(["She is a nurse."], context=["My sister Mia visited.", "We went to the coast."])
+    assert found == Extraction(facts={1: ["The user's sister Mia is a nurse."]})
+    sent = seen[0]["messages"][1]["content"]
+    order = [sent.index(text) for text in ("My sister Mia visited.", "We went to the coast.", "[1] She is a nurse.")]
+    assert order == sorted(order)
+    assert "[2]" not in sent  # context is never numbered, so no fact can be filed under it
+    assert "take no facts" in sent
+
+
+def test_no_context_sends_exactly_what_it_did_before():
+    seen: list = []
+    FactExtractor(opener=model("{}", seen)).extract(["first thing"])
+    FactExtractor(opener=model("{}", seen)).extract(["first thing"], context=[])
+    assert seen[0] == seen[1] and seen[0]["messages"][1]["content"] == "[1] first thing"
 
 
 def test_extractor_numbers_messages_in_order_and_records_cost():
@@ -303,11 +323,13 @@ class FakeExtractor:
 
     def __init__(self, facts_for=lambda text: [], *, unreadable: str | None = None) -> None:
         self.calls: list[list[str]] = []
+        self.contexts: list[list[str]] = []
         self._facts_for = facts_for
         self._unreadable = unreadable
 
-    def extract(self, messages: list[str]) -> Extraction:
+    def extract(self, messages: list[str], context: list[str] | None = None) -> Extraction:
         self.calls.append(list(messages))
+        self.contexts.append(list(context or []))
         failed = {i: "unreadable reply" for i, text in enumerate(messages, 1)
                   if self._unreadable is not None and self._unreadable in text}
         found = {i: facts for i, text in enumerate(messages, 1) if i not in failed and (facts := self._facts_for(text))}
@@ -398,7 +420,7 @@ def test_saving_stays_fast_and_facts_arrive_in_the_background(tmp_path, monkeypa
     assert fact.content == f"{LABEL} The user lives in York."  # same time label as its turn
     raw = next(m for m in bundle.repository.list_memories(SCOPE) if m.kind != "user_fact")
     assert fact.source_observation_ids == raw.source_observation_ids  # the raw turn stays linked
-    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v2", [], None)
+    assert (fact.model_id, fact.prompt_version, fact.cues, fact.trigger) == ("fake-model", "user-facts-v3", [], None)
     assert fact.content in found(bundle, "where does the user live")
     assert extract(bundle).processed == 0  # each turn is done once
     bundle.close()
@@ -412,6 +434,49 @@ def test_the_normal_pass_never_takes_extraction_jobs(tmp_path, monkeypatch):
         drain(bundle)
     assert fake.calls == [] and extract(bundle).processed == 2
     bundle.close()
+
+
+def test_by_default_each_turn_goes_to_the_model_on_its_own(tmp_path, monkeypatch):
+    """A fact can only come from the turn it is filed under (a shared batch attached facts to neighbours)."""
+    fake = FakeExtractor()
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, *[(f"message number {i}", "ok") for i in range(1, 4)])
+    drain(bundle)
+    assert extract(bundle).processed == 3
+    assert [[int(text.split()[-1]) for text in call] for call in fake.calls] == [[1], [2], [3]]
+    bundle.close()
+
+
+def test_each_turn_gets_the_two_user_messages_before_it_as_context(tmp_path, monkeypatch):
+    fake = FakeExtractor()
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("My sister Mia visited", "ok"), ("We went to the coast", "ok"), ("She is a nurse", "ok"),
+        ("I like tea", "ok"))
+    drain(bundle)
+    assert extract(bundle).processed == 4
+    assert fake.calls == [["My sister Mia visited"], ["We went to the coast"], ["She is a nurse"], ["I like tea"]]
+    assert fake.contexts == [
+        [],
+        ["My sister Mia visited"],
+        ["My sister Mia visited", "We went to the coast"],
+        ["We went to the coast", "She is a nurse"],
+    ]
+    bundle.close()
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "under that person's name",  # facts about others are not facts about the user
+        "story",  # fiction the user writes is not about the user
+        "hypothetical",
+        "appointment",  # an appointment is not the thing done
+        "last Tuesday",  # relative dates kept as said
+    ],
+)
+def test_the_prompt_states_the_attribution_rules(rule):
+    assert rule in userfacts._PROMPT
+    assert userfacts.PROMPT_VERSION == "user-facts-v3"
 
 
 def test_consecutive_turns_go_to_the_model_together_in_order(tmp_path, monkeypatch):
@@ -459,7 +524,7 @@ def test_turns_with_nothing_from_the_user_are_not_sent(tmp_path, monkeypatch):
 
 def test_a_failing_model_loses_only_the_facts(tmp_path, monkeypatch):
     class Broken(FakeExtractor):
-        def extract(self, messages):
+        def extract(self, messages, context=None):
             self.calls.append(list(messages))
             raise RuntimeError("model down")
 
