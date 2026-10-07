@@ -29,6 +29,7 @@ from severian.application.derivation import DerivationService
 from severian.application.extraction import EntityExtractionService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
+from severian.application.rerank import CrossEncoderReranker, rerank_model
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
 from severian.application.userfacts import FactExtractor, user_facts_enabled
@@ -132,6 +133,9 @@ def _compose(
         derivation=DerivationService(repository, extraction=extraction),
         context=ContextAssembler(),
     )
+    model = rerank_model()
+    if model is not None:
+        service._reranker = CrossEncoderReranker(model)
     return ServiceBundle(
         service=service,
         repository=repository,
