@@ -24,6 +24,7 @@ from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
+from severian.application.prefcard import build_card, preference_card_enabled
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
@@ -167,6 +168,9 @@ class MemoryService:
         # Round 2 idea 1 (SEVERIAN_USER_FACTS): every saved turn also queues a background fact job.
         self._user_facts = user_facts_enabled() if user_facts is None else user_facts
         self._repository = repository
+        # Round 2 improvement 3 (SEVERIAN_PREFERENCE_CARD): cached card per scope, rebuilt only when the
+        # scope's memory count changes (a cheap COUNT), so it works across processes without a new table.
+        self._cards: dict[tuple[str, ...], tuple[int, str | None]] = {}
         self._ingestion = ingestion
         self._retrieval = retrieval
         self._projection = projection
@@ -456,6 +460,22 @@ class MemoryService:
             DueView(memory.id, memory.content, tuple(memory.source_observation_ids))
             for memory in match_due(candidates, context, limit=limit)
         ]
+
+    def preference_card(self, scope: Scope) -> str | None:
+        """The user's stated preferences for ``scope`` (outside the search results); None when off or empty."""
+        if not preference_card_enabled():
+            return None
+        key = (scope.tenant_id, scope.profile_id, scope.collection_id, scope.agent_id or "", scope.session_id or "")
+        count = self._repository.count_memories(scope)
+        cached = self._cards.get(key)
+        if cached is not None and cached[0] == count:
+            return cached[1]
+        facts = sorted(
+            (m for m in self._repository.list_memories(scope) if m.kind == FACT_KIND), key=lambda m: m.created_at
+        )
+        card = build_card(m.content for m in facts)
+        self._cards[key] = (count, card)
+        return card
 
     def search(
         self,
