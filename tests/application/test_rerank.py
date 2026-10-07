@@ -108,7 +108,7 @@ def test_without_a_reranker_search_is_unchanged(tmp_path, monkeypatch):
 
 def test_the_bundle_builds_a_reranker_only_when_the_switch_names_a_model(tmp_path, monkeypatch):
     made = []
-    monkeypatch.setattr("severian.composition.CrossEncoderReranker", lambda model: made.append(model) or Scorer())
+    monkeypatch.setattr("severian.composition.load_reranker", lambda model, device: made.append(model) or Scorer())
     monkeypatch.setenv("SEVERIAN_RERANK", "some/model")
     bundle = build(tmp_path)
     try:
@@ -126,3 +126,81 @@ def test_rerank_never_returns_more_than_asked(tmp_path, limit):
         assert len(bundle.service.search(SCOPE, query="gym", limit=limit)) <= limit
     finally:
         bundle.close()
+
+
+# -- loading: a setting for the device, once per process, never a crash -----------------------------------
+
+
+def test_the_device_is_a_setting(monkeypatch):
+    from severian.application import rerank
+
+    monkeypatch.delenv("SEVERIAN_RERANK_DEVICE", raising=False)
+    assert rerank.rerank_device() is None
+    monkeypatch.setenv("SEVERIAN_RERANK_DEVICE", "cuda:1")
+    assert rerank.rerank_device() == "cuda:1"
+
+
+def test_the_model_loads_once_per_process(monkeypatch):
+    from severian.application import rerank
+
+    loads = []
+    monkeypatch.setattr(rerank, "_load", lambda model, device: loads.append((model, device)) or object())
+    rerank.load_reranker.cache_clear()
+    try:
+        assert rerank.load_reranker("m", "cuda:1") is rerank.load_reranker("m", "cuda:1")
+        assert loads == [("m", "cuda:1")]
+    finally:
+        rerank.load_reranker.cache_clear()
+
+
+def test_a_device_that_fails_falls_back_to_the_cpu_with_a_warning(monkeypatch, caplog):
+    from severian.application import rerank
+
+    def load(model, device):
+        if device != "cpu":
+            raise RuntimeError("CUDA out of memory")
+        return "cpu-model"
+
+    monkeypatch.setattr(rerank, "_load", load)
+    rerank.load_reranker.cache_clear()
+    try:
+        assert rerank.load_reranker("m", "cuda:1") == "cpu-model"
+        assert "falling back to the CPU" in caplog.text
+    finally:
+        rerank.load_reranker.cache_clear()
+
+
+def test_when_nothing_loads_there_is_no_rerank_and_a_warning(monkeypatch, caplog):
+    from severian.application import rerank
+
+    def load(model, device):
+        raise RuntimeError("no model")
+
+    monkeypatch.setattr(rerank, "_load", load)
+    rerank.load_reranker.cache_clear()
+    try:
+        assert rerank.load_reranker("m", "cuda:1") is None
+        assert "searching without rerank" in caplog.text
+    finally:
+        rerank.load_reranker.cache_clear()
+
+
+def test_a_load_failure_never_breaks_building_severian(tmp_path, monkeypatch):
+    from severian.application import rerank
+
+    def load(model, device):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(rerank, "_load", load)
+    monkeypatch.setenv("SEVERIAN_RERANK", "some/model")
+    rerank.load_reranker.cache_clear()
+    try:
+        bundle = build(tmp_path)
+        try:
+            fill(bundle)
+            assert bundle.service._reranker is None
+            assert bundle.service.search(SCOPE, query="gym", limit=2)
+        finally:
+            bundle.close()
+    finally:
+        rerank.load_reranker.cache_clear()

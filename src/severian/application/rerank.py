@@ -8,6 +8,7 @@ reorder, never lose or add results. sentence-transformers is optional and import
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -45,13 +46,37 @@ def reranked(query: str, items: Sequence[T], scorer: Reranker, *, text: Callable
 
 
 class CrossEncoderReranker:
-    """A sentence-transformers cross-encoder, loaded once, on the GPU when one is free."""
+    """A loaded sentence-transformers cross-encoder."""
 
-    def __init__(self, model: str) -> None:
-        from sentence_transformers import CrossEncoder  # optional dependency
-
-        device = os.environ.get("SEVERIAN_RERANK_DEVICE") or None
-        self._model: Any = CrossEncoder(model, device=device)
+    def __init__(self, model: Any) -> None:
+        self._model = model
 
     def score(self, query: str, texts: list[str]) -> list[float]:
         return [float(s) for s in self._model.predict([(query, t) for t in texts])]
+
+
+def rerank_device() -> str | None:
+    """``SEVERIAN_RERANK_DEVICE`` (for example ``cuda:1`` or ``cpu``); None lets the library choose."""
+    return os.environ.get("SEVERIAN_RERANK_DEVICE", "").strip() or None
+
+
+def _load(model: str, device: str | None) -> Any:
+    from sentence_transformers import CrossEncoder  # optional dependency
+
+    return CrossEncoderReranker(CrossEncoder(model, device=device))
+
+
+@functools.lru_cache(maxsize=4)
+def load_reranker(model: str, device: str | None) -> Any | None:
+    """Load once per process. The device fails: try the CPU. Nothing loads: None (no rerank). Never raises."""
+    try:
+        return _load(model, device)
+    except Exception as exc:  # noqa: BLE001 - loading a reranker must never break Severian
+        if device != "cpu":
+            _LOG.warning("rerank model %s failed to load on %s (%s); falling back to the CPU", model, device, exc)
+            try:
+                return _load(model, "cpu")
+            except Exception as cpu_exc:  # noqa: BLE001
+                exc = cpu_exc
+        _LOG.warning("rerank model %s failed to load (%s); searching without rerank", model, exc)
+        return None
