@@ -183,3 +183,16 @@ def test_event_time_is_the_same_with_or_without_the_dates(tmp_path, monkeypatch)
         finally:
             bundle.close()
     assert spans[True] == spans[False] and any(span[1] is not None for span in spans[True])
+
+
+def test_this_week_said_on_a_sunday_is_left_as_written():
+    # Sunday ends the calendar week, but people often mean the coming one: unclear, so no date is added.
+    sunday = datetime(2026, 4, 26, 18, 0, tzinfo=UTC)
+    text = "[2026/04/26 (Sun) 18:00] The user is busy this week."
+    assert dated(text, sunday) == text
+
+
+def test_this_week_on_any_other_day_is_the_current_week():
+    assert dated("The user is busy this week.", MON) == (
+        "[2026/04/20 (Mon) 02:00] The user is busy this week (week of 2026/04/20)."
+    )

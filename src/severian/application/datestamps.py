@@ -71,6 +71,8 @@ def resolve(text: str, reference: datetime) -> str:
         phrase = text[item.span[0] : item.span[1]]
         if not _RELATIVE.search(phrase):
             continue
+        if as_utc(reference).weekday() == 6 and re.fullmatch(r"this week", phrase.strip(), re.I):
+            continue  # on a Sunday "this week" may mean the one ending or the one coming: leave as written
         shown = _period(item.start, item.end, item.precise, phrase)
         if shown:
             inserts.append((item.span[1], shown))
