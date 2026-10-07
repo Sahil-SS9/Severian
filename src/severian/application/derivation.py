@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from severian.application.anticipation import anticipation_enabled, extract_trigger
+from severian.application.datestamps import date_stamps_enabled, dated
 from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
 from severian.application.extraction import EntityExtractionService
 from severian.application.factanchors import grounded
@@ -55,6 +56,7 @@ class DerivationService:
         *,
         extraction: EntityExtractionService | None = None,
         event_time: bool | None = None,
+        date_stamps: bool | None = None,
         anticipation: bool | None = None,
         cue_generator: Callable[[str], list[str]] | None = None,
         fact_extractor: FactSource | None = None,
@@ -62,6 +64,10 @@ class DerivationService:
         self.repository = repository
         # Step 3: find "when it happened" in each derived memory (SEVERIAN_EVENT_TIME; off by default).
         self._event_time = event_time_enabled() if event_time is None else event_time
+        # Round 2 improvement 2 (SEVERIAN_DATE_STAMPS; off by default): each memory's text carries its date and
+        # weekday, and relative dates get the real date in brackets. Event time, cues and dedupe still read
+        # the text as derived, so turning this on changes only what is stored and shown.
+        self._date_stamps = date_stamps_enabled() if date_stamps is None else date_stamps
         # Step 4: triggers for instructions-for-later (rules) and cues (one background model call per
         # memory). SEVERIAN_ANTICIPATION, off by default. A cue failure never fails the derive.
         self._anticipation = anticipation_enabled() if anticipation is None else anticipation
@@ -198,7 +204,7 @@ class DerivationService:
                     trigger=extract_trigger(content) if self._anticipation else None,
                     scope=scope,
                     kind=kind,
-                    content=content,
+                    content=self._dated(content, observation),
                     source_observation_ids=[observation.id],
                     model_id=model_id,
                     prompt_version=prompt_version,
@@ -221,6 +227,11 @@ class DerivationService:
             return list(self._cue_generator(content))
         except Exception:  # cues are an extra; the memory must still be written
             return []
+
+    def _dated(self, content: str, observation: Observation) -> str:
+        if not self._date_stamps:
+            return content
+        return dated(content, message_time(observation.source, observation.created_at))
 
     def derive_user_facts(self, scope: Scope, observation_ids: Sequence[str]) -> UserFacts:
         """Facts the user stated in these turns, from ONE batch to the model (Round 2 idea 1).
@@ -270,7 +281,7 @@ class DerivationService:
                         occurred_until=span[1] if span else None,
                         scope=scope,
                         kind=FACT_KIND,
-                        content=content,
+                        content=self._dated(content, observation),
                         source_observation_ids=[observation.id],
                         model_id=model_id,
                         prompt_version=PROMPT_VERSION,
