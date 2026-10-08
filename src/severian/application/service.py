@@ -25,6 +25,7 @@ from severian.application.eventtime import as_utc, event_time_enabled, query_win
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
+from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
 from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
@@ -167,6 +168,9 @@ class MemoryService:
         # Round 2 idea 1 (SEVERIAN_USER_FACTS): every saved turn also queues a background fact job.
         self._user_facts = user_facts_enabled() if user_facts is None else user_facts
         self._repository = repository
+        # Round 2 improvement 4 (SEVERIAN_RERANK): optional cross-encoder; None = search exactly as before.
+        self._reranker: Reranker | None = None
+        self._rerank_pool = rerank_pool()
         self._ingestion = ingestion
         self._retrieval = retrieval
         self._projection = projection
@@ -541,13 +545,17 @@ class MemoryService:
             query,
             as_of=as_of_moment,
             window=window,
-            limit=min(limit * 3, limit + 50),
+            limit=max(min(limit * 3, limit + 50), self._rerank_pool if self._reranker else 0),
             min_vector_score=min_vector_score,
             min_fused_score=min_fused_score,
             min_coverage=min_coverage,
             salience_weight=salience_weight,
             salience_halflife_h=salience_halflife_h,
         )
+        if self._reranker is not None and query.strip() not in {"", "*"}:
+            pool = reranked(
+                query, pool, self._reranker, text=lambda item: item.memory.content, pool=self._rerank_pool
+            )
         if self._truth_state or view != "now":
             results, labels = self._truth_view(pool, view=view, limit=limit)
         else:
