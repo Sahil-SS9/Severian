@@ -28,9 +28,35 @@ def rerank_model() -> str | None:
     return name or None
 
 
-def reranked(query: str, items: Sequence[T], scorer: Reranker, *, text: Callable[[T], str]) -> list[T]:
-    """``items`` with the top ``RERANK_POOL`` re-ordered by ``scorer``; the tail keeps its place."""
-    head, tail = list(items[:RERANK_POOL]), list(items[RERANK_POOL:])
+def _positive_int(name: str) -> int | None:
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        if raw:
+            _LOG.warning("%s=%r is not a whole number; using the default", name, raw)
+        return None
+    if value < 1:
+        _LOG.warning("%s=%r must be at least 1; using the default", name, raw)
+        return None
+    return value
+
+
+def rerank_pool() -> int:
+    """``SEVERIAN_RERANK_POOL``: how many top candidates are re-scored (default ``RERANK_POOL``)."""
+    return _positive_int("SEVERIAN_RERANK_POOL") or RERANK_POOL
+
+
+def rerank_max_tokens() -> int | None:
+    """``SEVERIAN_RERANK_MAX_TOKENS``: cut each candidate to this many model tokens (None = the model's own limit)."""
+    return _positive_int("SEVERIAN_RERANK_MAX_TOKENS")
+
+
+def reranked(
+    query: str, items: Sequence[T], scorer: Reranker, *, text: Callable[[T], str], pool: int = RERANK_POOL
+) -> list[T]:
+    """``items`` with the top ``pool`` re-ordered by ``scorer``; the tail keeps its place."""
+    head, tail = list(items[:pool]), list(items[pool:])
     if len(head) < 2:
         return list(items)
     try:
@@ -60,22 +86,22 @@ def rerank_device() -> str | None:
     return os.environ.get("SEVERIAN_RERANK_DEVICE", "").strip() or None
 
 
-def _load(model: str, device: str | None) -> Any:
+def _load(model: str, device: str | None, max_tokens: int | None = None) -> Any:
     from sentence_transformers import CrossEncoder  # optional dependency
 
-    return CrossEncoderReranker(CrossEncoder(model, device=device))
+    return CrossEncoderReranker(CrossEncoder(model, device=device, max_length=max_tokens))
 
 
 @functools.lru_cache(maxsize=4)
-def load_reranker(model: str, device: str | None) -> Any | None:
+def load_reranker(model: str, device: str | None, max_tokens: int | None = None) -> Any | None:
     """Load once per process. The device fails: try the CPU. Nothing loads: None (no rerank). Never raises."""
     try:
-        return _load(model, device)
+        return _load(model, device, max_tokens)
     except Exception as exc:  # noqa: BLE001 - loading a reranker must never break Severian
         if device != "cpu":
             _LOG.warning("rerank model %s failed to load on %s (%s); falling back to the CPU", model, device, exc)
             try:
-                return _load(model, "cpu")
+                return _load(model, "cpu", max_tokens)
             except Exception as cpu_exc:  # noqa: BLE001
                 exc = cpu_exc
         _LOG.warning("rerank model %s failed to load (%s); searching without rerank", model, exc)

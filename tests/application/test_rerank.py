@@ -108,7 +108,9 @@ def test_without_a_reranker_search_is_unchanged(tmp_path, monkeypatch):
 
 def test_the_bundle_builds_a_reranker_only_when_the_switch_names_a_model(tmp_path, monkeypatch):
     made = []
-    monkeypatch.setattr("severian.composition.load_reranker", lambda model, device: made.append(model) or Scorer())
+    monkeypatch.setattr(
+        "severian.composition.load_reranker", lambda model, device, max_tokens=None: made.append(model) or Scorer()
+    )
     monkeypatch.setenv("SEVERIAN_RERANK", "some/model")
     bundle = build(tmp_path)
     try:
@@ -144,7 +146,9 @@ def test_the_model_loads_once_per_process(monkeypatch):
     from severian.application import rerank
 
     loads = []
-    monkeypatch.setattr(rerank, "_load", lambda model, device: loads.append((model, device)) or object())
+    monkeypatch.setattr(
+        rerank, "_load", lambda model, device, max_tokens=None: loads.append((model, device)) or object()
+    )
     rerank.load_reranker.cache_clear()
     try:
         assert rerank.load_reranker("m", "cuda:1") is rerank.load_reranker("m", "cuda:1")
@@ -156,7 +160,7 @@ def test_the_model_loads_once_per_process(monkeypatch):
 def test_a_device_that_fails_falls_back_to_the_cpu_with_a_warning(monkeypatch, caplog):
     from severian.application import rerank
 
-    def load(model, device):
+    def load(model, device, max_tokens=None):
         if device != "cpu":
             raise RuntimeError("CUDA out of memory")
         return "cpu-model"
@@ -173,7 +177,7 @@ def test_a_device_that_fails_falls_back_to_the_cpu_with_a_warning(monkeypatch, c
 def test_when_nothing_loads_there_is_no_rerank_and_a_warning(monkeypatch, caplog):
     from severian.application import rerank
 
-    def load(model, device):
+    def load(model, device, max_tokens=None):
         raise RuntimeError("no model")
 
     monkeypatch.setattr(rerank, "_load", load)
@@ -188,7 +192,7 @@ def test_when_nothing_loads_there_is_no_rerank_and_a_warning(monkeypatch, caplog
 def test_a_load_failure_never_breaks_building_severian(tmp_path, monkeypatch):
     from severian.application import rerank
 
-    def load(model, device):
+    def load(model, device, max_tokens=None):
         raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(rerank, "_load", load)
@@ -204,3 +208,58 @@ def test_a_load_failure_never_breaks_building_severian(tmp_path, monkeypatch):
             bundle.close()
     finally:
         rerank.load_reranker.cache_clear()
+
+
+# -- trim: how many candidates, how long each text (round 2 improvement 4, 08/10) -------------------------
+
+
+def test_pool_size_and_text_length_are_settings(monkeypatch):
+    from severian.application import rerank
+
+    monkeypatch.delenv("SEVERIAN_RERANK_POOL", raising=False)
+    monkeypatch.delenv("SEVERIAN_RERANK_MAX_TOKENS", raising=False)
+    assert rerank.rerank_pool() == RERANK_POOL and rerank.rerank_max_tokens() is None
+    monkeypatch.setenv("SEVERIAN_RERANK_POOL", "15")
+    monkeypatch.setenv("SEVERIAN_RERANK_MAX_TOKENS", "128")
+    assert rerank.rerank_pool() == 15 and rerank.rerank_max_tokens() == 128
+
+
+@pytest.mark.parametrize("bad", ["0", "-3", "lots"])
+def test_a_bad_pool_setting_falls_back_to_the_default(monkeypatch, bad):
+    from severian.application import rerank
+
+    monkeypatch.setenv("SEVERIAN_RERANK_POOL", bad)
+    assert rerank.rerank_pool() == RERANK_POOL
+
+
+def test_a_smaller_pool_rescores_only_that_many():
+    items = [f"m{i}" for i in range(20)]
+    scorer = Scorer()
+    out = reranked("gym?", items, scorer, text=lambda x: x, pool=10)
+    assert len(scorer.calls[0][1]) == 10 and out[10:] == items[10:]
+
+
+def test_the_text_length_reaches_the_model_loader(monkeypatch):
+    from severian.application import rerank
+
+    seen = []
+    monkeypatch.setattr(rerank, "_load", lambda model, device, max_tokens=None: seen.append(max_tokens) or object())
+    rerank.load_reranker.cache_clear()
+    try:
+        rerank.load_reranker("m", "cpu", 128)
+        assert seen == [128]
+    finally:
+        rerank.load_reranker.cache_clear()
+
+
+def test_the_service_uses_the_pool_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEVERIAN_RERANK_POOL", "2")
+    bundle = build(tmp_path)
+    try:
+        fill(bundle)
+        scorer = Scorer()
+        bundle.service._reranker = scorer
+        bundle.service.search(SCOPE, query="Which gym?", limit=4)
+        assert len(scorer.calls[0][1]) == 2
+    finally:
+        bundle.close()

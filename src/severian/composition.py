@@ -29,7 +29,7 @@ from severian.application.derivation import DerivationService
 from severian.application.extraction import EntityExtractionService
 from severian.application.ingestion import IngestionService
 from severian.application.projections import ProjectionCoordinator
-from severian.application.rerank import load_reranker, rerank_device, rerank_model
+from severian.application.rerank import load_reranker, rerank_device, rerank_max_tokens, rerank_model
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
 from severian.application.userfacts import FactExtractor, user_facts_enabled
@@ -135,7 +135,7 @@ def _compose(
     )
     model = rerank_model()
     if model is not None:
-        service._reranker = load_reranker(model, rerank_device())
+        service._reranker = load_reranker(model, rerank_device(), rerank_max_tokens())
     return ServiceBundle(
         service=service,
         repository=repository,
