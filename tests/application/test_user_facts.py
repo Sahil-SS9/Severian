@@ -266,7 +266,7 @@ def test_a_message_that_keeps_failing_is_given_up_and_logged_once(caplog):
             got = extractor.extract(["I moved to York"])
             assert got.facts == {} and "connection refused" in got.failed[1]
     assert (extractor.calls, extractor.failures, extractor.given_up, extractor.failed_batches) == (6, 6, 3, 3)
-    assert len([r for r in caplog.records if "fact extraction failed" in r.getMessage()]) == 1
+    assert len([r for r in caplog.records if "fact extraction failed" in r.getMessage()]) == extractor.failures
 
     def cut_off(request, timeout):
         return _Reply({"choices": [{"message": {"content": '{"1": ["The user'}, "finish_reason": "length"}]})

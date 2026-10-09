@@ -317,8 +317,8 @@ class FactExtractor:
         except Exception as exc:  # facts are optional; never let a model fault escape
             error = exc if isinstance(exc, FactCallError) else FactCallError(f"{type(exc).__name__}: {exc}")
             self.failures += 1
-            if self.failures == 1:  # say so once, so a misconfigured model is visible without log spam
-                _log.warning("fact extraction failed (model %r at %s): %s", self.model, self.url, error.describe())
+            _log.warning("fact extraction failed (call %d, failures %d, model %r at %s): %s",
+                         self.calls, self.failures, self.model, self.url, error.describe())
             if len(self.bad_replies) < MAX_KEPT_REPLIES:
                 self.bad_replies.append(
                     {"reason": error.reason, "reply": error.reply[:MAX_KEPT_REPLY_CHARS], "messages": len(messages)}
