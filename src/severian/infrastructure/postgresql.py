@@ -43,6 +43,7 @@ from sqlalchemy import (
     create_engine,
     func,
     inspect,
+    literal,
     or_,
     select,
     update,
@@ -1117,6 +1118,28 @@ class PostgreSQLBackend:
                 # for the caller, matching the pre-fix no-op contract.
                 return self.get_memory(scope, memory_id)
         return self.get_memory(scope, memory_id)
+
+    def close_memory(self, scope: Scope, memory_id: str, *, valid_until: datetime, replaced_by_id: str) -> bool:
+        """Mark one active, still-open memory as replaced; it stays as history (see the port).
+
+        One conditional UPDATE against the CURRENT payload: a concurrent supersede, erase or earlier
+        close makes it match nothing (returns False), and it never rewrites a stale read-back copy.
+        """
+        self._require_scope(scope)
+        change = {"valid_until": valid_until.isoformat(), "replaced_by_id": replaced_by_id}
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                    records.c.payload["valid_until"].astext.is_(None),
+                )
+                .values(payload=records.c.payload.op("||")(literal(change, type_=JSONB)))
+            )
+        return result.rowcount == 1
 
     def count_memories(self, scope: Scope) -> int:
         """Count ACTIVE memories in scope (cheap COUNT, no payload load)."""

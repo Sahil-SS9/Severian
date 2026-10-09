@@ -176,6 +176,14 @@ class _FakeRepository:
         self._memories[key] = updated
         return updated
 
+    def close_memory(self, scope: Scope, memory_id: str, *, valid_until: datetime, replaced_by_id: str) -> bool:
+        key = self._key(scope, memory_id)
+        found = self._memories.get(key)
+        if found is None or found.superseded_by_id is not None or found.valid_until is not None:
+            return False
+        self._memories[key] = found.model_copy(update={"valid_until": valid_until, "replaced_by_id": replaced_by_id})
+        return True
+
     def count_memories(self, scope: Scope) -> int:
         return len(self.list_memories(scope))
 

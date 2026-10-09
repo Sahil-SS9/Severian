@@ -191,6 +191,15 @@ class ScopedCanonicalPort(Protocol):
         """
         ...
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int: ...
+    def close_memory(self, scope: Scope, memory_id: str, *, valid_until: datetime, replaced_by_id: str) -> bool:
+        """Mark one ACTIVE, still-open memory as no longer current (a newer fact replaced it).
+
+        Sets ``valid_until`` and ``replaced_by_id`` on the stored record in one atomic update and
+        returns True. The memory is NOT superseded, deleted or removed from any index: it stays
+        readable as history. Returns False (and changes nothing) if the memory is not in this scope,
+        is superseded or erased, or is already closed — so repeating the call is harmless.
+        """
+        ...
     def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
         """Mark one active memory as superseded by a replacement head.
 
