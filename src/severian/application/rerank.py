@@ -82,7 +82,7 @@ class CrossEncoderReranker:
 
 
 def rerank_device() -> str | None:
-    """``SEVERIAN_RERANK_DEVICE`` (for example ``cuda:1`` or ``cpu``); None lets the library choose."""
+    """``SEVERIAN_RERANK_DEVICE`` (``cuda:1``, ``cpu``, or ``sidecar`` = the embedding sidecar's shared model)."""
     return os.environ.get("SEVERIAN_RERANK_DEVICE", "").strip() or None
 
 
@@ -95,6 +95,14 @@ def _load(model: str, device: str | None, max_tokens: int | None = None) -> Any:
 @functools.lru_cache(maxsize=4)
 def load_reranker(model: str, device: str | None, max_tokens: int | None = None) -> Any | None:
     """Load once per process. The device fails: try the CPU. Nothing loads: None (no rerank). Never raises."""
+    if device == "sidecar":
+        socket_path = os.environ.get("SEVERIAN_EMBED_SOCKET", "").strip()
+        if not socket_path:
+            _LOG.warning("SEVERIAN_RERANK_DEVICE=sidecar needs SEVERIAN_EMBED_SOCKET; searching without rerank")
+            return None
+        from severian.infrastructure.remote_qwen_embedding import RemoteReranker
+
+        return RemoteReranker(socket_path)
     try:
         return _load(model, device, max_tokens)
     except Exception as exc:  # noqa: BLE001 - loading a reranker must never break Severian

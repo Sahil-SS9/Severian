@@ -21,12 +21,23 @@ from typing import Any
 from severian.infrastructure.qwen_embedding import QwenEmbedding
 
 MAX_REQUEST_BYTES = 64 * 1024
+# A rerank request carries up to a pool of candidate texts, so it gets its own larger budget; each text is cut to
+# about what the cross-encoder reads anyway (512 tokens), then shortened further only if the request is still too big.
+RERANK_REQUEST_BYTES = 256 * 1024
+RERANK_TEXT_CHARS = 2000
 # Encode cost scales linearly with characters (~1.3ms/char pinned CPU): texts
 # beyond this cap cannot complete inside any sane socket timeout, so they are
 # rejected up front instead of wedging a drain pass into dead-letter territory.
 MAX_TEXT_CHARS = 8000
 # Linear backoff between transport retries: 0.25s, 0.5s, 0.75s, ...
 _RETRY_BACKOFF_SECONDS = 0.25
+
+
+def _encoded(payload: dict[str, Any]) -> bytes:
+    try:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+    except (TypeError, ValueError) as exc:  # defensive: payload is internal
+        raise RemoteEmbeddingTransportError("remote Qwen request could not be encoded") from exc
 
 
 class RemoteEmbeddingTransportError(RuntimeError):
@@ -118,12 +129,9 @@ class RemoteQwenEmbedding(QwenEmbedding):
         response = self._request({"op": operation, "text": text})
         return self._validated_vector(response)
 
-    def _request(self, payload: dict[str, str]) -> dict[str, Any]:
-        try:
-            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
-        except (TypeError, ValueError) as exc:  # defensive: payload is internal
-            raise RemoteEmbeddingTransportError("remote Qwen request could not be encoded") from exc
-        if len(encoded) > MAX_REQUEST_BYTES:
+    def _request(self, payload: dict[str, Any], limit: int = MAX_REQUEST_BYTES) -> dict[str, Any]:
+        encoded = _encoded(payload)
+        if len(encoded) > limit:
             raise RemoteEmbeddingTransportError("remote Qwen request exceeds the sidecar limit")
         self._require_private_socket()
 
@@ -207,13 +215,40 @@ class RemoteQwenEmbedding(QwenEmbedding):
         return values
 
 
+class RemoteReranker:
+    """Cross-encoder scores from the sidecar's one shared CPU model (``SEVERIAN_RERANK_DEVICE=sidecar``).
+
+    Chat-path call: one short attempt. Any failure raises, and ``reranked`` then keeps the original order.
+    """
+
+    def __init__(self, socket_path: str | Path, *, timeout_seconds: float = 2.0) -> None:
+        self.socket_path = _validated_absolute_socket_path(socket_path)
+        self._transport = RemoteQwenEmbedding(self.socket_path, timeout_seconds=timeout_seconds, max_attempts=1)
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        cap = RERANK_TEXT_CHARS
+        payload: dict[str, Any] = {"op": "rerank", "query": query[:cap], "texts": [t[:cap] for t in texts]}
+        while len(_encoded(payload)) > RERANK_REQUEST_BYTES and cap > 64:
+            cap //= 2
+            payload = {"op": "rerank", "query": query[:cap], "texts": [t[:cap] for t in texts]}
+        scores = self._transport._request(payload, RERANK_REQUEST_BYTES).get("scores")
+        if not isinstance(scores, list) or len(scores) != len(texts):
+            raise RemoteEmbeddingProtocolError("remote rerank returned the wrong number of scores")
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in scores):
+            raise RemoteEmbeddingProtocolError("remote rerank returned invalid scores")
+        return [float(v) for v in scores]
+
+
 __all__ = [
     "MAX_REQUEST_BYTES",
     "MAX_TEXT_CHARS",
+    "RERANK_REQUEST_BYTES",
+    "RERANK_TEXT_CHARS",
     "RemoteEmbeddingConnectError",
     "RemoteEmbeddingProtocolError",
     "RemoteEmbeddingTextTooLongError",
     "RemoteEmbeddingTimeoutError",
     "RemoteEmbeddingTransportError",
     "RemoteQwenEmbedding",
+    "RemoteReranker",
 ]

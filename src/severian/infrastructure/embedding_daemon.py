@@ -19,7 +19,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from severian.application.rerank import load_reranker, rerank_max_tokens, rerank_model
 from severian.infrastructure.qwen_embedding import QWEN_DIMENSION, QwenEmbedding
+from severian.infrastructure.remote_qwen_embedding import RERANK_REQUEST_BYTES
+
+MAX_RERANK_TEXTS = 100
 
 
 class _StoppedDuringPreload(RuntimeError):
@@ -29,16 +33,17 @@ class _StoppedDuringPreload(RuntimeError):
 class EmbeddingSocketDaemon:
     """Serve one preloaded Qwen embedding provider over a private Unix socket."""
 
-    MAX_REQUEST_BYTES = 64 * 1024
+    MAX_REQUEST_BYTES = RERANK_REQUEST_BYTES
     MAX_CONCURRENT_CONNECTIONS = 16
     REQUEST_TIMEOUT_SECONDS = 2.0
 
-    def __init__(self, socket_path: str | Path, *, embedding: Any | None = None) -> None:
+    def __init__(self, socket_path: str | Path, *, embedding: Any | None = None, reranker: Any | None = None) -> None:
         path = Path(socket_path)
         if not path.is_absolute():
             raise ValueError("embedding socket path must be absolute")
         self.socket_path = path
         self.embedding = embedding if embedding is not None else QwenEmbedding(device="cpu")
+        self.reranker = reranker
         self._server: socket.socket | None = None
         self._socket_inode: int | None = None
         self._connection_slots = threading.BoundedSemaphore(self.MAX_CONCURRENT_CONNECTIONS)
@@ -161,6 +166,9 @@ class EmbeddingSocketDaemon:
         if operation == "health" and set(request) == {"op"}:
             self._send(connection, {"ok": True, "status": "ready"})
             return
+        if operation == "rerank":
+            self._rerank(connection, request)
+            return
         text = request.get("text")
         if operation not in {"encode", "encode_query"} or not isinstance(text, str) or set(request) != {"op", "text"}:
             self._send(connection, {"ok": False, "error": "invalid request"})
@@ -173,6 +181,28 @@ class EmbeddingSocketDaemon:
         except Exception:
             # Do not leak model errors or supplied text over a shared boundary.
             self._send(connection, {"ok": False, "error": "embedding unavailable"})
+
+    def _rerank(self, connection: socket.socket, request: dict[str, Any]) -> None:
+        query, texts = request.get("query"), request.get("texts")
+        if (
+            set(request) != {"op", "query", "texts"}
+            or not isinstance(query, str)
+            or not isinstance(texts, list)
+            or not 0 < len(texts) <= MAX_RERANK_TEXTS
+            or not all(isinstance(text, str) for text in texts)
+        ):
+            self._send(connection, {"ok": False, "error": "invalid request"})
+            return
+        if self.reranker is None:
+            self._send(connection, {"ok": False, "error": "rerank unavailable"})
+            return
+        try:
+            scores = [float(score) for score in self.reranker.score(query, texts)]
+            if len(scores) != len(texts) or not all(math.isfinite(score) for score in scores):
+                raise ValueError("invalid rerank scores")
+            self._send(connection, {"ok": True, "scores": scores})
+        except Exception:
+            self._send(connection, {"ok": False, "error": "rerank unavailable"})
 
     def _read_request_line(self, connection: socket.socket) -> bytes | None:
         chunks: list[bytes] = []
@@ -219,6 +249,12 @@ class EmbeddingSocketDaemon:
             return
 
 
+def reranker_from_env() -> Any | None:
+    """The shared cross-encoder named by ``SEVERIAN_RERANK``, always on the sidecar's CPU; None when unset."""
+    model = rerank_model()
+    return load_reranker(model, "cpu", rerank_max_tokens()) if model else None
+
+
 def _absolute_socket_argument(value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
@@ -231,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the private Severian Qwen embedding sidecar.")
     parser.add_argument("--socket", required=True, type=_absolute_socket_argument)
     args = parser.parse_args(argv)
-    daemon = EmbeddingSocketDaemon(args.socket)
+    daemon = EmbeddingSocketDaemon(args.socket, reranker=reranker_from_env())
 
     def _stop(_signum: int, _frame: object) -> None:
         daemon.close()
@@ -257,4 +293,4 @@ if __name__ == "__main__":  # pragma: no cover - module entry point
     raise SystemExit(main())
 
 
-__all__ = ["EmbeddingSocketDaemon", "main"]
+__all__ = ["EmbeddingSocketDaemon", "main", "reranker_from_env"]

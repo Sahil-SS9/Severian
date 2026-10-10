@@ -59,8 +59,10 @@ class _FakeEmbedding:
 
 
 @contextmanager
-def _running_daemon(path: Path, embedding: _FakeEmbedding) -> Iterator[EmbeddingSocketDaemon]:
-    daemon = EmbeddingSocketDaemon(path, embedding=embedding)
+def _running_daemon(
+    path: Path, embedding: _FakeEmbedding, reranker: object | None = None
+) -> Iterator[EmbeddingSocketDaemon]:
+    daemon = EmbeddingSocketDaemon(path, embedding=embedding, reranker=reranker)
     daemon.start()
     thread = threading.Thread(target=daemon.serve_forever, daemon=True)
     thread.start()
@@ -563,3 +565,101 @@ def test_daemon_rejects_oversized_request_without_echoing_text(tmp_path: Path) -
             assert client.recv(1) == b""
 
     assert fake.calls == []
+
+
+# Rerank served by the sidecar: one shared CPU cross-encoder for every gateway (SEVERIAN_RERANK_DEVICE=sidecar).
+
+
+class _FakeScorer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        self.calls.append((query, texts))
+        return [float(len(text)) for text in texts]
+
+
+def test_daemon_reranks_with_its_loaded_scorer(tmp_path: Path) -> None:
+    from severian.infrastructure.remote_qwen_embedding import RemoteReranker
+
+    path = tmp_path / "rr.sock"
+    scorer = _FakeScorer()
+    with _running_daemon(path, _FakeEmbedding(), scorer):
+        assert RemoteReranker(path).score("q", ["a", "abc", "ab"]) == [1.0, 3.0, 2.0]
+    assert scorer.calls == [("q", ["a", "abc", "ab"])]
+
+
+def test_daemon_without_a_reranker_refuses_rerank_and_still_embeds(tmp_path: Path) -> None:
+    path = tmp_path / "norr.sock"
+    with _running_daemon(path, _FakeEmbedding()):
+        assert _json_request(path, {"op": "rerank", "query": "q", "texts": ["a", "b"]}) == {
+            "ok": False,
+            "error": "rerank unavailable",
+        }
+        assert _json_request(path, {"op": "health"}) == {"ok": True, "status": "ready"}
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"op": "rerank", "query": "q", "texts": "ab"},
+        {"op": "rerank", "query": "q", "texts": ["a", 1]},
+        {"op": "rerank", "query": 3, "texts": ["a"]},
+        {"op": "rerank", "query": "q", "texts": ["a"] * 101},
+        {"op": "rerank", "query": "q", "texts": ["a"], "extra": 1},
+    ],
+)
+def test_daemon_rejects_malformed_rerank_requests(tmp_path: Path, request_body: dict[str, object]) -> None:
+    path = tmp_path / "bad.sock"
+    scorer = _FakeScorer()
+    with _running_daemon(path, _FakeEmbedding(), scorer):
+        assert _json_request(path, request_body) == {"ok": False, "error": "invalid request"}
+    assert scorer.calls == []
+
+
+def test_remote_reranker_cuts_long_texts_to_fit_one_request(tmp_path: Path) -> None:
+    from severian.infrastructure.remote_qwen_embedding import RERANK_TEXT_CHARS, RemoteReranker
+
+    path = tmp_path / "long.sock"
+    scorer = _FakeScorer()
+    with _running_daemon(path, _FakeEmbedding(), scorer):
+        scores = RemoteReranker(path).score("q", ["é" * 9000] * 30)
+    assert scores == [float(RERANK_TEXT_CHARS)] * 30
+
+
+def test_remote_reranker_failure_keeps_the_original_search_order(tmp_path: Path) -> None:
+    from severian.application.rerank import reranked
+    from severian.infrastructure.remote_qwen_embedding import RemoteReranker
+
+    items = ["x", "yyy", "zz"]
+    assert reranked("q", items, RemoteReranker(tmp_path / "missing.sock"), text=str) == items
+
+
+def test_sidecar_device_loads_the_socket_reranker_without_sentence_transformers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from severian.application.rerank import load_reranker
+    from severian.infrastructure.remote_qwen_embedding import RemoteReranker
+
+    monkeypatch.setenv("SEVERIAN_EMBED_SOCKET", str(tmp_path / "embed.sock"))
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+    load_reranker.cache_clear()
+    try:
+        scorer = load_reranker("cross-encoder/any", "sidecar")
+    finally:
+        load_reranker.cache_clear()
+    assert isinstance(scorer, RemoteReranker)
+    assert scorer.socket_path == tmp_path / "embed.sock"
+
+
+def test_daemon_loads_its_reranker_on_cpu_from_the_rerank_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from severian.infrastructure import embedding_daemon
+
+    seen: list[tuple[str, str | None, int | None]] = []
+    monkeypatch.setattr(embedding_daemon, "load_reranker", lambda *args: seen.append(args) or "scorer")
+    monkeypatch.delenv("SEVERIAN_RERANK", raising=False)
+    assert embedding_daemon.reranker_from_env() is None
+    monkeypatch.setenv("SEVERIAN_RERANK", "cross-encoder/ms-marco-MiniLM-L6-v2")
+    monkeypatch.setenv("SEVERIAN_RERANK_DEVICE", "sidecar")
+    assert embedding_daemon.reranker_from_env() == "scorer"
+    assert seen == [("cross-encoder/ms-marco-MiniLM-L6-v2", "cpu", None)]
