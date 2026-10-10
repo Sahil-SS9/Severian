@@ -236,6 +236,22 @@ class Entity(BaseModel):
     created_at: datetime = Field(default_factory=now)
 
 
+class TaskNote(BaseModel):
+    """Where an agent left off on one task ("task progress"). One current note per task key per scope.
+
+    Setting a task again replaces its note; the old one stays as history (``replaced_at`` set). Notes
+    are working state, not facts about the user: they are never derived, projected or searched.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    scope: Scope
+    task: str = Field(min_length=1, max_length=200)
+    state: str = Field(min_length=1, max_length=20000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=now)
+    replaced_at: datetime | None = None
+
+
 class Relation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     scope: Scope

@@ -41,7 +41,7 @@ from severian.application.derivation import DerivationGateway
 from severian.application.eventtime import parse_time
 from severian.application.service import SEARCH_VIEWS, MemoryService
 from severian.domain.errors import ConflictError, NotFoundError
-from severian.domain.models import Scope
+from severian.domain.models import Scope, TaskNote
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,13 @@ _SCOPE_DIMS = ("tenant_id", "profile_id", "collection_id", "agent_id", "session_
 _EXPLICIT_DIMS = _SCOPE_DIMS[:-1]  # all but session_id
 _DEFAULT_FORGET_REASON = "user requested erasure"
 _WRITE_TOOLS = frozenset({"severian_ingest", "severian_correct", "severian_forget"})
+_TASK_ACTIONS = ("set", "get", "list", "clear")
+_TASK_WRITES = frozenset({"set", "clear"})
+
+
+def _note_entry(note: TaskNote) -> dict[str, Any]:
+    return {"task": note.task, "state": note.state, "metadata": dict(note.metadata),
+            "updated_at": note.created_at.isoformat()}
 
 
 def _single_target(arguments: Mapping[str, Any]) -> tuple[str, str] | None:
@@ -466,7 +473,8 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             f"[{self.PROVIDER_NAME} v{self.PROVIDER_VERSION}] "
             "Severian memory engine is active. Use the provided memory "
             "tools include severian_correct when a fact is wrong and severian_forget when the user asks to forget it. "
-            "Give exactly one target from a search hit (observation_id or memory_id), not both."
+            "Give exactly one target from a search hit (observation_id or memory_id), not both. "
+            "Use severian_task_progress to save and read where you left off on a task."
         )
         if self._scope is None:
             return block
@@ -732,6 +740,25 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                     [],
                 ),
             },
+            {
+                "name": "severian_task_progress",
+                "description": (
+                    "Where you left off on a task, kept across chats and sessions. set: save the current state "
+                    "of a task (replaces the previous note, which stays as history); get: read one task's "
+                    "latest state (include_history for earlier ones); list: all tracked tasks, newest first; "
+                    "clear: stop tracking a task. Notes are working state, not facts: search never shows them."
+                ),
+                "parameters": schema(
+                    {
+                        "action": {"type": "string", "enum": list(_TASK_ACTIONS)},
+                        "task": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "state": {"type": "string", "minLength": 1, "maxLength": 20000},
+                        "metadata": {"type": "object", "default": {}},
+                        "include_history": {"type": "boolean", "default": False},
+                    },
+                    ["action"],
+                ),
+            },
         ]
 
     def handle_tool_call(
@@ -755,6 +782,8 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         scope_result = self._validate_tool_scope(arguments, scope)
         if scope_result is not None:
             return _encode_tool_result(scope_result)
+        if tool_name == "severian_task_progress":
+            return _encode_tool_result(self._task_progress(scope, arguments))
         if tool_name in _WRITE_TOOLS and not self._writes_enabled:
             # Same contract as turn sync: cron, subagent and flush runs read only.
             return _encode_tool_result({"error": "memory writes are disabled in this context"})
@@ -934,6 +963,43 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         return _encode_tool_result({"error": "unknown tool"})
 
     # -- internals --------------------------------------------------------
+
+    def _task_progress(self, scope: Scope, arguments: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) - {*_SCOPE_DIMS, "action", "task", "state", "metadata", "include_history"}:
+            return {"error": "invalid arguments"}
+        action = arguments.get("action")
+        if action not in _TASK_ACTIONS:
+            return {"error": "action must be one of set, get, list, clear"}
+        if action in _TASK_WRITES and not self._writes_enabled:
+            return {"error": "memory writes are disabled in this context"}
+        if action == "list":
+            return {"tasks": [_note_entry(note) for note in self._service.list_task_notes(scope)]}
+        task = arguments.get("task")
+        if not isinstance(task, str) or not task.strip() or len(task) > 200:
+            return {"error": "task must be a non-empty name (up to 200 characters)"}
+        task = task.strip()
+        if action == "set":
+            state, metadata = arguments.get("state"), arguments.get("metadata", {})
+            if not isinstance(state, str) or not state.strip() or len(state) > 20000:
+                return {"error": "state must be non-empty text (up to 20000 characters)"}
+            if not isinstance(metadata, Mapping):
+                return {"error": "metadata must be an object"}
+            try:
+                note = self._service.set_task_note(scope, task, state.strip(), dict(metadata))
+            except ConflictError:
+                return {"error": "task note changed at the same moment; try again"}
+            return _note_entry(note)
+        if action == "clear":
+            if self._service.clear_task_note(scope, task):
+                return {"cleared": task}
+            return {"error": "no note for this task"}
+        current, history = self._service.get_task_note(scope, task)
+        if current is None:
+            return {"error": "no note for this task"}
+        entry = _note_entry(current)
+        if arguments.get("include_history") is True:
+            entry["history"] = [_note_entry(note) for note in history]
+        return entry
 
     def _validate_tool_scope(
         self,

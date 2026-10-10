@@ -71,6 +71,7 @@ from severian.domain.models import (
     source_identity,
 )
 from severian.infrastructure.snapshot import validate_snapshot
+from severian.infrastructure.task_notes import TaskNoteStore
 
 T = TypeVar("T")
 
@@ -130,7 +131,9 @@ Index(
 )
 
 
-class PostgreSQLBackend:
+class PostgreSQLBackend(TaskNoteStore):
+    _records = records
+
     def __init__(self, *, dsn: str):
         if not dsn or not dsn.strip():
             raise ValueError("PostgreSQL backend requires a non-empty DSN")

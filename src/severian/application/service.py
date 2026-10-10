@@ -24,7 +24,7 @@ from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.factslots import asks_about_past
 from severian.application.ingestion import IngestionResult, IngestionService
-from severian.application.ports import CanonicalRepository, LexicalIndex
+from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
@@ -32,7 +32,7 @@ from severian.application.statements import assess_truth, drop_replaced
 from severian.application.truthresolution import truth_resolution_enabled
 from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
 from severian.domain.errors import ConflictError, NotFoundError
-from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
+from severian.domain.models import ERASED, Memory, Observation, Scope, TaskNote, TruthState
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +372,25 @@ class MemoryService:
         return self._repository.get_observation(scope, observation_id)
 
     # -- reads ----------------------------------------------------------
+
+    # -- task notes (never derived, projected or searched) --------------
+
+    def _task_notes(self) -> TaskNoteRepository:
+        if not isinstance(self._repository, TaskNoteRepository):
+            raise NotImplementedError("this storage backend does not support task notes")
+        return self._repository
+
+    def set_task_note(self, scope: Scope, task: str, state: str, metadata: Mapping[str, Any] | None = None) -> TaskNote:
+        return self._task_notes().set_task_note(scope, task, state, dict(metadata or {}))
+
+    def get_task_note(self, scope: Scope, task: str) -> tuple[TaskNote | None, list[TaskNote]]:
+        return self._task_notes().get_task_note(scope, task)
+
+    def list_task_notes(self, scope: Scope) -> list[TaskNote]:
+        return self._task_notes().list_task_notes(scope)
+
+    def clear_task_note(self, scope: Scope, task: str) -> bool:
+        return self._task_notes().clear_task_note(scope, task)
 
     def get_observation(self, scope: Scope, observation_id: str) -> Observation:
         # ``CanonicalRepository.get_observation`` already filters by scope

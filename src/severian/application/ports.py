@@ -50,6 +50,7 @@ from severian.domain.models import (
     Observation,
     Relation,
     Scope,
+    TaskNote,
 )
 
 
@@ -410,3 +411,17 @@ __all__ = [
     "ScopedCanonicalPort",
     "SnapshotAdminPort",
 ]
+
+
+@runtime_checkable
+class TaskNoteRepository(Protocol):
+    """Optional capability: task notes (where an agent left off), one current note per task per scope.
+
+    Kept off :class:`CanonicalRepository` so existing third-party backends stay conformant; the
+    bundled SQLite and PostgreSQL backends implement it.
+    """
+
+    def set_task_note(self, scope: Scope, task: str, state: str, metadata: dict[str, Any]) -> TaskNote: ...
+    def get_task_note(self, scope: Scope, task: str) -> tuple[TaskNote | None, list[TaskNote]]: ...
+    def list_task_notes(self, scope: Scope) -> list[TaskNote]: ...
+    def clear_task_note(self, scope: Scope, task: str) -> bool: ...

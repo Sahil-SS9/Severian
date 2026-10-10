@@ -558,3 +558,21 @@ def test_close_memory_survives_a_usage_update(backend) -> None:
     stored = backend.get_memory(scope, old.id)
     assert stored.valid_until == _CLOSED_AT and stored.replaced_by_id == new.id
     assert stored.usage_count == 1
+
+
+def test_task_notes_conform_on_both_backends(backend):
+    """One current note per task, history kept in order, scoped, clearable (task progress)."""
+    scope, other = _scope(), _scope(profile_id="p2")
+    assert backend.get_task_note(scope, "hps") == (None, [])
+    backend.set_task_note(scope, "hps", "first", {"n": 1})
+    backend.set_task_note(scope, "hps", "second", {"n": 2})
+    backend.set_task_note(scope, "other", "x", {})
+    current, history = backend.get_task_note(scope, "hps")
+    assert current is not None and (current.state, current.metadata) == ("second", {"n": 2})
+    assert [n.state for n in history] == ["first"] and history[0].replaced_at is not None
+    assert [n.task for n in backend.list_task_notes(scope)] == ["other", "hps"]
+    assert backend.list_task_notes(other) == [] and backend.get_task_note(other, "hps") == (None, [])
+    assert backend.clear_task_note(scope, "hps") is True
+    assert backend.clear_task_note(scope, "hps") is False
+    assert [n.task for n in backend.list_task_notes(scope)] == ["other"]
+    assert [n.state for n in backend.get_task_note(scope, "hps")[1]] == ["first"]

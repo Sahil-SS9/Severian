@@ -32,6 +32,7 @@ from severian.domain.models import (
     source_identity,
 )
 from severian.infrastructure.snapshot import validate_snapshot
+from severian.infrastructure.task_notes import TaskNoteStore
 
 T = TypeVar("T")
 
@@ -80,7 +81,9 @@ Index(
 )
 
 
-class SQLiteRepository:
+class SQLiteRepository(TaskNoteStore):
+    _records = records
+
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.engine: Engine = create_engine(
