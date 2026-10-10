@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -459,3 +459,102 @@ def test_multi_valued_relation_keeps_every_value_open(backend) -> None:
     _publish_fact(backend, scope, "Alice", "works_with", "Bob")
     _publish_fact(backend, scope, "Alice", "works_with", "Carol")
     assert _open_objects(backend, scope, "works_with") == {"Bob", "Carol"}
+
+
+# -- close_memory: a newer fact closes an older one without deleting it ------------
+
+
+def _memory_for(backend, scope: Scope, text: str) -> Any:
+    observation = backend.add_observation(Observation(scope=scope, content=f"obs for {text}"))
+    return backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="user_fact",
+            content=text,
+            confidence=0.9,
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+        )
+    )
+
+
+_CLOSED_AT = datetime(2026, 1, 28, 4, 0, tzinfo=UTC)
+
+
+def _pair(backend: Any, scope: Scope) -> tuple[Any, Any]:
+    """An older home and the newer one that will replace it."""
+    return (
+        _memory_for(backend, scope, "The user lives in Brighton."),
+        _memory_for(backend, scope, "The user lives in Bath."),
+    )
+
+
+def test_close_memory_sets_the_close_fields_and_keeps_the_memory(backend) -> None:
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    assert old.valid_until is None and old.replaced_by_id is None
+
+    assert backend.close_memory(scope, old.id, valid_until=_CLOSED_AT, replaced_by_id=new.id) is True
+
+    stored = backend.get_memory(scope, old.id)
+    assert stored.valid_until == _CLOSED_AT and stored.replaced_by_id == new.id
+    assert stored.content == old.content and stored.superseded_by_id is None  # not superseded, not deleted
+    assert stored.id in {m.id for m in backend.list_memories(scope)}  # still an active memory
+    assert backend.get_memory(scope, new.id).valid_until is None  # the newer one is untouched
+
+
+def test_close_memory_is_idempotent_and_never_reopens_or_rewrites(backend) -> None:
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    third = _memory_for(backend, scope, "The user lives in Leeds.")
+    assert backend.close_memory(scope, old.id, valid_until=_CLOSED_AT, replaced_by_id=new.id) is True
+    again = backend.close_memory(scope, old.id, valid_until=_CLOSED_AT.replace(day=29), replaced_by_id=third.id)
+    assert again is False  # already closed: nothing changes, so the first answer stands
+    stored = backend.get_memory(scope, old.id)
+    assert stored.valid_until == _CLOSED_AT and stored.replaced_by_id == new.id
+
+
+def test_close_memory_respects_scope(backend) -> None:
+    scope, other = _unique_scope(), _unique_scope()
+    old, new = _pair(backend, scope)
+    assert backend.close_memory(other, old.id, valid_until=_CLOSED_AT, replaced_by_id=new.id) is False
+    assert backend.get_memory(scope, old.id).valid_until is None
+
+
+def test_close_memory_unknown_id_returns_false(backend) -> None:
+    scope = _unique_scope()
+    assert backend.close_memory(scope, "no-such-memory", valid_until=_CLOSED_AT, replaced_by_id="x") is False
+
+
+def test_close_memory_skips_a_superseded_memory(backend) -> None:
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content="obs"))
+    old = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="first",
+            confidence=0.9,
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+        )
+    )
+    backend.supersede_memories_for_source(scope, observation.id)
+    assert backend.close_memory(scope, old.id, valid_until=_CLOSED_AT, replaced_by_id="x") is False
+
+
+def test_close_memory_survives_a_usage_update(backend) -> None:
+    if isinstance(backend, PostgreSQLBackend):
+        pytest.skip(
+            "record_memory_usage is broken on PostgreSQL on the base branch (jsonb_set is given a "
+            "VARCHAR path and an integer); not caused by close_memory, tracked as a separate finding"
+        )
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    backend.close_memory(scope, old.id, valid_until=_CLOSED_AT, replaced_by_id=new.id)
+    backend.record_memory_usage(scope, old.id)  # a read-modify-write elsewhere must not drop the close
+    stored = backend.get_memory(scope, old.id)
+    assert stored.valid_until == _CLOSED_AT and stored.replaced_by_id == new.id
+    assert stored.usage_count == 1

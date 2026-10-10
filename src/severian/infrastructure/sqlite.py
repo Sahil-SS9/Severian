@@ -974,6 +974,35 @@ class SQLiteRepository:
                 return self.get_memory(scope, memory_id)
         return self.get_memory(scope, memory_id)
 
+    def close_memory(self, scope: Scope, memory_id: str, *, valid_until: datetime, replaced_by_id: str) -> bool:
+        """Mark one active, still-open memory as replaced; it stays as history (see the port).
+
+        One conditional UPDATE against the CURRENT payload: a concurrent supersede, erase or earlier
+        close makes it match nothing (returns False), and it never rewrites a stale read-back copy.
+        """
+        self._require_scope(scope)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+                    func.json_extract(records.c.payload, "$.valid_until").is_(None),
+                )
+                .values(
+                    payload=func.json_set(
+                        records.c.payload,
+                        "$.valid_until",
+                        valid_until.isoformat(),
+                        "$.replaced_by_id",
+                        replaced_by_id,
+                    )
+                )
+            )
+        return result.rowcount == 1
+
     def count_memories(self, scope: Scope) -> int:
         """Count ACTIVE memories in scope (cheap COUNT, no payload load)."""
         self._require_scope(scope)

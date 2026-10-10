@@ -16,6 +16,7 @@ from severian.application.ports import (
 from severian.application.ports import (
     DerivationGateway as DerivationGateway,
 )
+from severian.application.truthresolution import TruthResolver
 from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, Extraction, time_label, user_text
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Observation, Scope
@@ -60,8 +61,12 @@ class DerivationService:
         anticipation: bool | None = None,
         cue_generator: Callable[[str], list[str]] | None = None,
         fact_extractor: FactSource | None = None,
+        truth_resolver: TruthResolver | None = None,
     ) -> None:
         self.repository = repository
+        # Handoff 1 (SEVERIAN_TRUTH_RESOLUTION; off by default): after memories are saved, close the ones a
+        # newer fact replaces. Only the worker's derivation gets one; it never deletes and never raises.
+        self._truth_resolver = truth_resolver
         # Step 3: find "when it happened" in each derived memory (SEVERIAN_EVENT_TIME; off by default).
         self._event_time = event_time_enabled() if event_time is None else event_time
         # Round 2 improvement 2 (SEVERIAN_DATE_STAMPS; off by default): each memory's text carries its date and
@@ -79,6 +84,14 @@ class DerivationService:
         # every derive pass also upserts entities/relations so the
         # graph store stays populated without manual seeding.
         self._extraction = extraction
+
+    @property
+    def truth_resolver(self) -> TruthResolver | None:
+        return self._truth_resolver
+
+    def _resolve(self, scope: Scope, published: Sequence[Memory]) -> None:
+        if self._truth_resolver is not None and published:
+            self._truth_resolver.resolve(scope, published)
 
     @property
     def fact_extractor(self) -> FactSource | None:
@@ -211,13 +224,15 @@ class DerivationService:
                     confidence=float(candidate.get("confidence", 0.5)),
                 )
             )
-        return self.repository.publish_derivation(
+        published = self.repository.publish_derivation(
             scope,
             entities=extracted_entities,
             relations=extracted_relations,
             memories=validated,
             source_observation_id=observation.id,
         )
+        self._resolve(scope, published)
+        return published
 
     def _cues_for(self, content: str) -> list[str]:
         """Cues for one memory: ``[]`` when anticipation is off, no generator is set, or it fails."""
@@ -289,8 +304,10 @@ class DerivationService:
                     )
                 )
             if memories:
-                published += self.repository.publish_derivation(
+                saved = self.repository.publish_derivation(
                     scope, entities=[], relations=[], memories=memories, source_observation_id=observation.id
                 )
+                published += saved
+                self._resolve(scope, saved)
         failed = {turns[number - 1][1].id: why for number, why in found.failed.items() if 1 <= number <= len(turns)}
         return UserFacts(published=published, failed=failed)

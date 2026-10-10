@@ -188,6 +188,11 @@ class Memory(BaseModel):
     # instructions for later ("next time X, do Y"). Both stay empty unless anticipation is switched on.
     cues: list[str] = Field(default_factory=list)
     trigger: Trigger | None = None
+    # Truth resolution (handoff 1, SEVERIAN_TRUTH_RESOLUTION): set when a newer fact replaced this one.
+    # ``valid_until`` is when the newer message was written; ``replaced_by_id`` is the newer memory.
+    # The memory stays in the store as history and is never deleted; both stay None unless switched on.
+    valid_until: datetime | None = None
+    replaced_by_id: str | None = None
     # Usage tracking (Tier 2 salience): number of retrieval-time hits
     # recorded for this memory. Feeds the salience blend in curation and
     # the optional retrieval decay. Deterministic; incremented via

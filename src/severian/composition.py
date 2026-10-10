@@ -32,6 +32,7 @@ from severian.application.projections import ProjectionCoordinator
 from severian.application.rerank import load_reranker, rerank_device, rerank_max_tokens, rerank_model
 from severian.application.retrieval import ContextAssembler, RetrievalService
 from severian.application.service import BuildMemoryService, MemoryService
+from severian.application.truthresolution import TruthResolver, truth_resolution_enabled
 from severian.application.userfacts import FactExtractor, user_facts_enabled
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.vector import LocalVectorIndex
@@ -124,6 +125,8 @@ def _compose(
         cue_generator=CueGenerator.from_env().generate if anticipation_enabled() else None,
         # Round 2 idea 1: only the worker's background fact pass calls this model.
         fact_extractor=FactExtractor.from_env() if user_facts_enabled() else None,
+        # Handoff 1: close the memories a newer fact replaces (SEVERIAN_TRUTH_RESOLUTION; off by default).
+        truth_resolver=TruthResolver.from_env(repository) if truth_resolution_enabled() else None,
     )
     service = BuildMemoryService(
         repository=repository,

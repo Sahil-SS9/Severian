@@ -22,12 +22,14 @@ from typing import Any
 from severian.application.anticipation import MAX_REMINDERS, DueContext, anticipation_enabled, match_due
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
+from severian.application.factslots import asks_about_past
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import ProjectionCoordinator
 from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
+from severian.application.truthresolution import truth_resolution_enabled
 from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope, TruthState
@@ -86,6 +88,8 @@ class SearchHitView:
     # Event time (Step 3): the period the memory says the thing happened in, when known.
     occurred_at: datetime | None = None
     occurred_until: datetime | None = None
+    # Truth resolution (SEVERIAN_TRUTH_RESOLUTION): when a newer fact replaced this one; None while current.
+    valid_until: datetime | None = None
 
     @classmethod
     def from_result(
@@ -95,6 +99,7 @@ class SearchHitView:
         truth_state: TruthState = TruthState.CURRENT,
         replaced_by_id: str | None = None,
         previous: tuple[str, ...] = (),
+        valid_until: datetime | None = None,
     ) -> SearchHitView:
         return cls(
             memory_id=result.memory.id,
@@ -109,6 +114,7 @@ class SearchHitView:
             previous=previous,
             occurred_at=result.memory.occurred_at,
             occurred_until=result.memory.occurred_until,
+            valid_until=valid_until,
         )
 
 
@@ -161,7 +167,11 @@ class MemoryService:
         event_time: bool | None = None,
         anticipation: bool | None = None,
         user_facts: bool | None = None,
+        truth_resolution: bool | None = None,
     ) -> None:
+        # Handoff 1 (SEVERIAN_TRUTH_RESOLUTION; off by default): memories a newer fact closed leave the "now"
+        # view and show up, dated, in "history"; a question about the past reads "history".
+        self._truth_resolution = truth_resolution_enabled() if truth_resolution is None else truth_resolution
         self._anticipation = anticipation_enabled() if anticipation is None else anticipation
         self._truth_state = truth_state_enabled() if truth_state is None else truth_state
         self._event_time = event_time_enabled() if event_time is None else event_time
@@ -556,6 +566,11 @@ class MemoryService:
             pool = reranked(
                 query, pool, self._reranker, text=lambda item: item.memory.content, pool=self._rerank_pool
             )
+        closed_labels: dict[str, dict[str, Any]] = {}
+        if self._truth_resolution:
+            if view == "now" and asks_about_past(query):
+                view = "history"
+            pool, closed_labels = self._apply_closures(scope, pool, view=view, as_of=as_of_moment)
         if self._truth_state or view != "now":
             results, labels = self._truth_view(pool, view=view, limit=limit)
         else:
@@ -572,7 +587,57 @@ class MemoryService:
         if track_usage:
             for item in results:
                 self._repository.record_memory_usage(scope, item.memory.id)
+        for memory_id, extra in closed_labels.items():
+            labels[memory_id] = {**labels.get(memory_id, {}), **extra}
+        if self._truth_resolution and view == "changes":
+            # What a newer fact closed counts as a change even when the words are too different for the
+            # text rule; keep the pool's order and the caller's limit.
+            replacers = {mid for mid, extra in closed_labels.items() if extra.get("previous")}
+            already = {item.memory.id for item in results}
+            results = [item for item in pool if item.memory.id in replacers or item.memory.id in already][:limit]
         return [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
+
+    def _apply_closures(
+        self, scope: Scope, pool: list[RetrievalResult], *, view: str, as_of: datetime | None
+    ) -> tuple[list[RetrievalResult], dict[str, dict[str, Any]]]:
+        """Memories a newer fact closed: out of ``now``; in ``history``/``changes``, dated and linked.
+
+        As of a date before the close, the memory was still current, so it is not treated as closed.
+        """
+
+        def closed(item: RetrievalResult) -> bool:
+            until = item.memory.valid_until
+            return until is not None and (as_of is None or as_utc(until) <= as_of)
+
+        if view == "now":
+            return [item for item in pool if not closed(item)], {}
+        # Who replaced whom, including predecessors that did not rank into the pool themselves.
+        wanted = {item.memory.id for item in pool}
+        predecessors: dict[str, dict[str, Memory]] = {}
+        for memory in self._repository.list_memories(scope):
+            target = memory.replaced_by_id
+            if target is None or target not in wanted or memory.valid_until is None:
+                continue
+            if as_of is None or as_utc(memory.valid_until) <= as_of:
+                predecessors.setdefault(target, {})[memory.id] = memory
+        labels: dict[str, dict[str, Any]] = {}
+        for item in pool:
+            memory = item.memory
+            extra: dict[str, Any] = {}
+            if closed(item):
+                extra = {
+                    "truth_state": TruthState.HISTORICAL,
+                    "replaced_by_id": memory.replaced_by_id,
+                    "valid_until": memory.valid_until,
+                }
+            if memory.id in predecessors:
+                earlier = sorted(predecessors[memory.id].values(), key=lambda m: (m.created_at, m.id))
+                extra["previous"] = tuple(m.content for m in earlier)
+                if view == "changes":
+                    extra["truth_state"] = TruthState.TRANSITION
+            if extra:
+                labels[memory.id] = extra
+        return pool, labels
 
     @staticmethod
     def _truth_view(
