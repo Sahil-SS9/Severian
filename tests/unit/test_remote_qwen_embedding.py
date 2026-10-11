@@ -663,3 +663,22 @@ def test_daemon_loads_its_reranker_on_cpu_from_the_rerank_switch(monkeypatch: py
     monkeypatch.setenv("SEVERIAN_RERANK_DEVICE", "sidecar")
     assert embedding_daemon.reranker_from_env() == "scorer"
     assert seen == [("cross-encoder/ms-marco-MiniLM-L6-v2", "cpu", None)]
+
+
+def test_sidecar_device_switch_moves_embedding_and_rerank_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEVERIAN_SIDECAR_DEVICE puts both shared models on one device; unset keeps the CPU default."""
+    from severian.infrastructure import embedding_daemon
+
+    seen: list[tuple[str, str | None, int | None]] = []
+    monkeypatch.setattr(embedding_daemon, "load_reranker", lambda *args: seen.append(args) or "scorer")
+    monkeypatch.setenv("SEVERIAN_RERANK", "cross-encoder/ms-marco-MiniLM-L6-v2")
+    monkeypatch.delenv("SEVERIAN_SIDECAR_DEVICE", raising=False)
+    assert embedding_daemon.sidecar_device() == "cpu"
+    monkeypatch.setenv("SEVERIAN_SIDECAR_DEVICE", " cuda:1 ")
+    assert embedding_daemon.sidecar_device() == "cuda:1"
+    embedding_daemon.reranker_from_env()
+    assert seen == [("cross-encoder/ms-marco-MiniLM-L6-v2", "cuda:1", None)]
+    made: list[str] = []
+    monkeypatch.setattr(embedding_daemon, "QwenEmbedding", lambda device: made.append(device) or object())
+    embedding_daemon.EmbeddingSocketDaemon("/tmp/x.sock")
+    assert made == ["cuda:1"]

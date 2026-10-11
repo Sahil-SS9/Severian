@@ -42,7 +42,7 @@ class EmbeddingSocketDaemon:
         if not path.is_absolute():
             raise ValueError("embedding socket path must be absolute")
         self.socket_path = path
-        self.embedding = embedding if embedding is not None else QwenEmbedding(device="cpu")
+        self.embedding = embedding if embedding is not None else QwenEmbedding(device=sidecar_device())
         self.reranker = reranker
         self._server: socket.socket | None = None
         self._socket_inode: int | None = None
@@ -249,10 +249,19 @@ class EmbeddingSocketDaemon:
             return
 
 
+def sidecar_device() -> str:
+    """``SEVERIAN_SIDECAR_DEVICE`` (e.g. ``cuda:1``) for both shared models; the CPU when unset.
+
+    A device that fails to load falls back to the CPU in ``load_reranker``; the embedding model raises,
+    so a bad value stops the service at start-up instead of serving from the wrong place.
+    """
+    return os.environ.get("SEVERIAN_SIDECAR_DEVICE", "").strip() or "cpu"
+
+
 def reranker_from_env() -> Any | None:
-    """The shared cross-encoder named by ``SEVERIAN_RERANK``, always on the sidecar's CPU; None when unset."""
+    """The shared cross-encoder named by ``SEVERIAN_RERANK``, on the sidecar device; None when unset."""
     model = rerank_model()
-    return load_reranker(model, "cpu", rerank_max_tokens()) if model else None
+    return load_reranker(model, sidecar_device(), rerank_max_tokens()) if model else None
 
 
 def _absolute_socket_argument(value: str) -> Path:
@@ -293,4 +302,4 @@ if __name__ == "__main__":  # pragma: no cover - module entry point
     raise SystemExit(main())
 
 
-__all__ = ["EmbeddingSocketDaemon", "main", "reranker_from_env"]
+__all__ = ["EmbeddingSocketDaemon", "main", "reranker_from_env", "sidecar_device"]
