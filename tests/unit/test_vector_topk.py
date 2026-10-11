@@ -30,7 +30,9 @@ def _index(tmp_path: Path, n: int) -> LocalVectorIndex:
 
 
 @pytest.mark.parametrize("limit", [1, 5, 20, 200])
-def test_numpy_topk_matches_reference_on_large_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int) -> None:
+def test_numpy_topk_matches_reference_on_large_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
     idx = _index(tmp_path, 3000)
     out = {}
     for mode in (False, True):
