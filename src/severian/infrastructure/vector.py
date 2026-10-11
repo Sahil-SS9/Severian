@@ -444,32 +444,27 @@ class LocalVectorIndex:
         import numpy as np
 
         n = len(rows)
-        memory_ids: list[str] = []
-        contents: list[str] = []
-        blobs = bytearray()
-        for memory_id, encoded, content in rows:
-            memory_ids.append(memory_id)
-            contents.append(content)
-            blobs.extend(encoded)
         dim = self.embedding.dimension
-        matrix = np.frombuffer(bytes(blobs), dtype="<f4").reshape(n, dim).astype(np.float64)
+        matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype="<f4").reshape(n, dim).astype(np.float64)
         with np.errstate(over="ignore", invalid="ignore"):
             scores = matrix @ np.asarray(query_vector, dtype=np.float64)
         if not np.isfinite(scores).all():
             raise VectorFormatError("non-finite dot product")
+        # Candidate cut: keep every row scoring >= the limit-th best score.
+        # Ties AT the boundary are all kept, so the exact tie-break below
+        # sees the same rows the full sort would rank first.
+        if limit < n:
+            kth = np.partition(scores, n - limit)[n - limit]
+            cand = np.flatnonzero(scores >= kth)
+        else:
+            cand = np.arange(n)
+        ids = [rows[i][0] for i in cand]
+        texts = [rows[i][2] for i in cand]
+        sub = scores[cand]
         # lexsort: LAST key is primary. (-scores, contents, memory_ids)
         # == (score desc, content, memory_id) total order, exactly.
-        order = np.lexsort(
-            (
-                np.asarray(memory_ids),
-                np.asarray(contents),
-                -scores,
-            )
-        )
-        return [
-            VectorHit(memory_id=memory_ids[i], score=float(scores[i]))
-            for i in order[:limit]
-        ]
+        order = np.lexsort((np.asarray(ids), np.asarray(texts), -sub))
+        return [VectorHit(memory_id=ids[i], score=float(sub[i])) for i in order[:limit]]
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         self.clear(scope)
