@@ -1,5 +1,5 @@
 name: severian
-version: 0.3.6
+version: 0.3.7
 description: "Severian local-first memory — canonical observations, five-dimensional scope, and private derivation."
 pip_dependencies: []
 hooks: []
