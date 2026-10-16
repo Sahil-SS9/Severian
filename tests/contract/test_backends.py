@@ -264,6 +264,7 @@ class _FakeRepository:
         *,
         worker_id: str | None = None,
         error: str | None = None,
+        retry_in: float | None = None,
     ) -> Job:
         raise NotFoundError("job not claimed")
 

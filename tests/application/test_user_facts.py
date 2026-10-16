@@ -17,11 +17,12 @@ import io
 import json
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from typer.testing import CliRunner
 
 from severian.application.eventtime import extract_event_span, message_time
@@ -36,9 +37,10 @@ from severian.application.userfacts import (
     Extraction,
     FactExtractor,
     clean_facts,
+    facts_skip_profiles,
     user_text,
 )
-from severian.application.worker import DerivationWorker, WorkerSummary
+from severian.application.worker import FACTS_MAX_ATTEMPTS, FACTS_RETRY_BASE_S, DerivationWorker, WorkerSummary
 from severian.cli.app import cli
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.models import Job, Memory, Scope
@@ -66,6 +68,29 @@ LABEL = "[2023/05/20 (Sat) 10:00]"
 )
 def test_user_text_is_only_what_the_user_said(content, source, expected):
     assert user_text(content, source) == expected
+
+
+@pytest.mark.parametrize(
+    ("content", "source"),
+    [
+        ("user: work kanban task t_af102605\nassistant: Task done.", {"platform": "cli"}),  # a kanban worker's dispatch
+        ("user: Summarise the overnight runs\nassistant: ok", {"platform": "cron"}),
+        ("user: Pick up the next card\nassistant: ok", {"platform": "kanban"}),
+    ],
+)
+def test_machine_prompts_are_not_the_user_speaking(content, source):
+    """16/10: facts like "The user is working on kanban task t_af102605" came from bot-to-bot prompts."""
+    assert user_text(content, source) is None
+
+
+def test_a_person_mentioning_kanban_is_still_the_user():
+    said = "I want to work kanban task t_af102605 myself tomorrow"
+    assert user_text(f"user: {said}\nassistant: ok", {"platform": "discord"}) == said
+
+
+def test_profiles_can_be_left_out_of_fact_extraction():
+    assert facts_skip_profiles({}) == frozenset()
+    assert facts_skip_profiles({"SEVERIAN_FACTS_SKIP_PROFILES": " custom, eval-bench ,"}) == {"custom", "eval-bench"}
 
 
 def test_clean_facts_accepts_both_reply_shapes_dedupes_and_caps():
@@ -240,6 +265,38 @@ def test_a_server_fault_is_retried_once_after_a_pause_and_never_split():
 
     recovered = FactExtractor(opener=flaky, sleep=no_pause)
     assert recovered.extract(["I like tea"]) == Extraction(facts={1: ["The user likes tea."]})
+
+
+def busy(calls: list):
+    """The model gateway's answer while an identical request is still being served (16/10: Turbofit)."""
+    body = b'{"error": "request_in_progress", "message": "An identical request is already running", "retryable": true}'
+
+    def opener(request, timeout):
+        calls.append(json.loads(request.data))
+        raise HTTPError("http://127.0.0.1:8091", 409, "Conflict", hdrs=None, fp=io.BytesIO(body))  # type: ignore[arg-type]
+
+    return opener
+
+
+def test_a_busy_model_is_a_server_fault_retried_once_and_never_split():
+    calls: list = []
+    pauses: list[float] = []
+    extractor = FactExtractor(opener=busy(calls), sleep=pauses.append)
+    got = extractor.extract(["a", "b", "c"])
+    assert got.facts == {} and sorted(got.failed) == [1, 2, 3] and "request_in_progress" in got.failed[1]
+    assert len(calls) == 2 and pauses == [RETRY_PAUSE_S] and extractor.splits == 0
+
+
+def test_server_faults_are_marked_retryable_and_unreadable_replies_are_not():
+    assert FactExtractor(opener=unavailable([]), sleep=no_pause).extract(["a", "b"]).retryable == frozenset({1, 2})
+    assert FactExtractor(opener=busy([]), sleep=no_pause).extract(["a"]).retryable == frozenset({1})
+
+    def timed_out(request, timeout):
+        raise TimeoutError("timed out")
+
+    assert FactExtractor(opener=timed_out, sleep=no_pause).extract(["a"]).retryable == frozenset({1})
+    unreadable = FactExtractor(opener=echo_model(), sleep=no_pause).extract(["one", "BAD two"])
+    assert list(unreadable.failed) == [2] and unreadable.retryable == frozenset()
 
 
 def test_a_reply_cut_off_at_the_token_limit_is_retried_once_with_more_room():
@@ -488,6 +545,87 @@ def test_turns_the_model_cannot_read_fail_with_the_reason_and_the_rest_keep_thei
     by_status = {job.status: job for job in fact_jobs(bundle)}
     assert sorted(by_status) == ["done", "failed"] and by_status["failed"].last_error == "unreadable reply"
     assert any("boiler" in hit for hit in found(bundle, "boiler"))  # the turn itself stays searchable
+    bundle.close()
+
+
+class BusyExtractor(FakeExtractor):
+    """The model server is busy or down for every call: each turn comes back failed AND retryable."""
+
+    def extract(self, messages: list[str]) -> Extraction:
+        self.calls.append(list(messages))
+        numbers = range(1, len(messages) + 1)
+        return Extraction(failed={i: "timed out" for i in numbers}, retryable=frozenset(numbers))
+
+
+def _due_now(bundle: ServiceBundle) -> None:
+    """Move every deferred job's retry time into the past (stands in for waiting out the backoff)."""
+    with bundle.repository.engine.begin() as connection:  # type: ignore[attr-defined]
+        connection.execute(update(records).where(records.c.record_type == "job").values(retry_after=None))
+
+
+def test_a_busy_model_defers_the_turn_with_backoff_instead_of_failing_it(tmp_path, monkeypatch):
+    fake = BusyExtractor()
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I moved to York", "ok"))
+    drain(bundle)
+    summary = extract(bundle)
+    assert (summary.processed, summary.gave_up, summary.deferred) == (0, 0, 1)
+    [job] = fact_jobs(bundle)
+    assert job.status == "pending" and job.last_error == "timed out" and job.attempts == 1
+    soonest = datetime.now(UTC) + timedelta(seconds=FACTS_RETRY_BASE_S - 5)
+    assert job.retry_after is not None and job.retry_after > soonest
+    assert extract(bundle).total == 0 and len(fake.calls) == 1  # not retried before its time
+
+    _due_now(bundle)
+    assert extract(bundle).deferred == 1 and len(fake.calls) == 2
+    [job] = fact_jobs(bundle)
+    first_wait = FACTS_RETRY_BASE_S
+    assert job.retry_after is not None and job.retry_after > datetime.now(UTC) + timedelta(seconds=2 * first_wait - 5)
+    bundle.close()
+
+
+def test_a_turn_still_unserved_after_the_attempt_limit_fails_with_its_reason(tmp_path, monkeypatch):
+    fake = BusyExtractor()
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I moved to York", "ok"))
+    drain(bundle)
+    for _ in range(FACTS_MAX_ATTEMPTS - 1):
+        assert extract(bundle).deferred == 1
+        _due_now(bundle)
+    summary = extract(bundle)
+    assert (summary.deferred, summary.gave_up) == (0, 1) and len(fake.calls) == FACTS_MAX_ATTEMPTS
+    [job] = fact_jobs(bundle)
+    assert job.status == "failed" and job.last_error == "timed out" and job.attempts == FACTS_MAX_ATTEMPTS
+    _due_now(bundle)
+    assert extract(bundle).total == 0  # a failed job is never picked up again
+    bundle.close()
+
+
+def test_a_skipped_profile_never_reaches_the_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEVERIAN_FACTS_SKIP_PROFILES", "eval-bench")
+    fake = FakeExtractor(lambda text: ["The user lives in York."])
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    bench = SCOPE.model_copy(update={"profile_id": "eval-bench", "agent_id": "eval-bench"})
+    say(bundle, ("I moved to York", "ok"), scope=bench)
+    say(bundle, ("I moved to York", "ok"))
+    drain(bundle)
+    assert extract(bundle).processed == 2
+    assert fake.calls == [["I moved to York"]]  # only the real profile's turn was sent
+    assert facts(bundle, bench) == [] and len(facts(bundle)) == 1
+    bundle.close()
+
+
+def test_a_busy_model_recovering_later_still_gets_the_facts(tmp_path, monkeypatch):
+    fake = BusyExtractor()
+    bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
+    say(bundle, ("I moved to York", "ok"))
+    drain(bundle)
+    assert extract(bundle).deferred == 1
+    bundle.derivation._fact_extractor = FakeExtractor(lambda text: ["The user lives in York."])
+    _due_now(bundle)
+    assert extract(bundle).processed == 1
+    assert [f.content for f in facts(bundle)] == [f"{LABEL} The user lives in York."]
+    assert [job.status for job in fact_jobs(bundle)] == ["done"]
     bundle.close()
 
 

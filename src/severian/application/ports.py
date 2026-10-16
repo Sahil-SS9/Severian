@@ -279,7 +279,10 @@ class JobQueuePort(Protocol):
         *,
         worker_id: str | None = None,
         error: str | None = None,
-    ) -> Job: ...
+        retry_in: float | None = None,
+    ) -> Job:
+        """``retry_in`` (failed only): put the job back to ``pending``, claimable after that many seconds."""
+        ...
     def list_profile_scopes(self, tenant_id: str, profile_id: str) -> list[Scope]:
         """Every scope holding turns, memories or jobs for one profile (for per-profile operations)."""
         ...

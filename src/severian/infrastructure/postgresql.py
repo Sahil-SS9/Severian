@@ -1753,10 +1753,16 @@ class PostgreSQLBackend(TaskNoteStore):
         *,
         worker_id: str | None = None,
         error: str | None = None,
+        retry_in: float | None = None,
     ) -> Job:
-        """Mark a claimed job as done or failed (atomically, owner-checked)."""
+        """Mark a claimed job as done or failed (atomically, owner-checked).
+
+        ``retry_in`` (failed only) sends the job back to ``pending`` with the error kept, claimable again
+        after that many seconds: for work that failed only because something it needs was busy."""
         if status not in ("done", "failed"):
             raise ValueError("job status must be 'done' or 'failed'")
+        if retry_in is not None and status != "failed":
+            raise ValueError("only a failed job can be retried later")
         with self.engine.begin() as connection:
             row = (
                 connection.execute(
@@ -1779,7 +1785,10 @@ class PostgreSQLBackend(TaskNoteStore):
                 "last_error": error if status == "failed" else None,
             }
             if status == "failed":
-                update_fields["retry_after"] = datetime.now(UTC) + timedelta(seconds=5)
+                wait = 5.0 if retry_in is None else retry_in
+                update_fields["retry_after"] = datetime.now(UTC) + timedelta(seconds=wait)
+            if retry_in is not None:
+                update_fields.update(status="pending", worker_id=None, lease_until=None)
             updated = job.model_copy(update=update_fields)
             result = connection.execute(
                 update(records)
@@ -1788,7 +1797,12 @@ class PostgreSQLBackend(TaskNoteStore):
                     records.c.record_type == "job",
                     records.c.status == "running",
                 )
-                .values(status=status, payload=updated.model_dump(mode="json"), retry_after=_iso(updated.retry_after))
+                .values(
+                    status=updated.status,
+                    payload=updated.model_dump(mode="json"),
+                    retry_after=_iso(updated.retry_after),
+                    lease_until=_iso(updated.lease_until),
+                )
             )
             if result.rowcount != 1:
                 raise ConflictError("job completion conflict")

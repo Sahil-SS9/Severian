@@ -17,7 +17,14 @@ from severian.application.ports import (
     DerivationGateway as DerivationGateway,
 )
 from severian.application.truthresolution import TruthResolver
-from severian.application.userfacts import FACT_KIND, PROMPT_VERSION, Extraction, time_label, user_text
+from severian.application.userfacts import (
+    FACT_KIND,
+    PROMPT_VERSION,
+    Extraction,
+    facts_skip_profiles,
+    time_label,
+    user_text,
+)
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Observation, Scope
 
@@ -40,10 +47,14 @@ class FactSource(Protocol):
 
 @dataclass(frozen=True)
 class UserFacts:
-    """What one fact batch gave: the facts published, and the turns given up on (observation id -> why)."""
+    """What one fact batch gave: the facts published, and the turns given up on (observation id -> why).
+
+    ``retryable`` names the given-up turns whose only problem was a busy or unreachable model server.
+    """
 
     published: list[Memory] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
+    retryable: frozenset[str] = frozenset()
 
 
 class CloudPolicyError(PermissionError):
@@ -80,6 +91,7 @@ class DerivationService:
         # Round 2 idea 1 (SEVERIAN_USER_FACTS): the background fact pass's model. Only the worker's
         # derivation gets one; derive_user_facts does nothing without it.
         self._fact_extractor = fact_extractor
+        self._facts_skip_profiles = facts_skip_profiles()
         # Optional deterministic graph extractor (P1c). When provided,
         # every derive pass also upserts entities/relations so the
         # graph store stays populated without manual seeding.
@@ -256,7 +268,7 @@ class DerivationService:
         the raw turn stays linked. Turns the model could not serve come back in ``failed`` with the
         reason; their raw turns are already saved and searchable.
         """
-        if self._fact_extractor is None:
+        if self._fact_extractor is None or scope.profile_id in self._facts_skip_profiles:
             return UserFacts()
         turns: list[tuple[str, Observation, str]] = []
         for observation_id in observation_ids:
@@ -310,4 +322,5 @@ class DerivationService:
                 published += saved
                 self._resolve(scope, saved)
         failed = {turns[number - 1][1].id: why for number, why in found.failed.items() if 1 <= number <= len(turns)}
-        return UserFacts(published=published, failed=failed)
+        retryable = frozenset(turns[n - 1][1].id for n in found.retryable if 1 <= n <= len(turns))
+        return UserFacts(published=published, failed=failed, retryable=retryable)

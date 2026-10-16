@@ -284,7 +284,7 @@ def work(
             gateway=bundle.gateway,
             max_jobs=None if max_jobs == 0 else max_jobs,
         )
-        facts_processed = facts_failed = facts_projection_failed = 0
+        facts_processed = facts_failed = facts_projection_failed = facts_gave_up = facts_deferred = 0
         if bundle.derivation.fact_extractor is not None:  # wired only while SEVERIAN_USER_FACTS is on
             batch = 8 if max_jobs == 0 else min(8, max_jobs)
             facts = worker.extract_facts(
@@ -294,6 +294,7 @@ def work(
             )
             facts_processed, facts_failed = facts.processed, facts.failed
             facts_projection_failed = facts.projection_failed
+            facts_gave_up, facts_deferred = facts.gave_up, facts.deferred
         _emit(
             {
                 "processed": summary.processed,
@@ -303,6 +304,8 @@ def work(
                 "facts_processed": facts_processed,
                 "facts_failed": facts_failed,
                 "facts_projection_failed": facts_projection_failed,
+                "facts_gave_up": facts_gave_up,  # the model could not serve them: failed with the reason
+                "facts_deferred": facts_deferred,  # the model was busy: waiting to be tried again
             }
         )
     finally:

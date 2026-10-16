@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 
 # OPS-01b: upper bound on outbox events applied per idle backlog sweep.
 _MAX_BACKLOG_EVENTS_PER_PASS = 500
+# 16/10/2026: a busy local model (timeouts, "identical request already running", restarts) failed ~13% of fact
+# jobs for good. A turn the model could not serve ONLY because the server was busy now waits and is tried again:
+# 5, 10, 20, 40, 60 min apart (about 2 h 15 m in all), and fails with its reason after the last attempt.
+FACTS_MAX_ATTEMPTS = 6
+FACTS_RETRY_BASE_S = 300.0
+FACTS_RETRY_MAX_S = 3600.0
+
+
+def facts_retry_wait(attempts: int) -> float:
+    """Seconds before a busy-model fact job is tried again, after its ``attempts``-th try."""
+    return min(FACTS_RETRY_MAX_S, FACTS_RETRY_BASE_S * 2.0 ** max(0, attempts - 1))
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,8 @@ class WorkerSummary:
     # Round 2 idea 1: fact jobs the model could not serve (after its retry and split) are completed
     # as failed with the reason; counted apart from ``failed`` (storage faults) so callers can tell.
     gave_up: int = 0
+    # Fact jobs sent back to wait for a busy model (FACTS_MAX_ATTEMPTS bounds it); not failures yet.
+    deferred: int = 0
 
     @property
     def total(self) -> int:
@@ -243,12 +256,15 @@ class DerivationWorker:
         job means its facts are searchable. Turns the model could not serve (after the extractor's
         retry and split) complete as failed with the reason and the start of the bad reply as the
         job's error (``gave_up``); they are not retried in a loop, and their raw turns were saved
-        and made searchable by the normal pass. ``max_batches`` bounds the pass; ``None`` empties
+        and made searchable by the normal pass. The exception is a turn that failed only because
+        the model server was busy or down: it goes back to wait (``deferred``) and is tried again
+        later, up to ``FACTS_MAX_ATTEMPTS`` tries in all (``facts_retry_wait``). ``max_batches`` bounds
+        the pass; ``None`` empties
         the queue.
         """
         if self._derivation is None:
             raise RuntimeError("fact extraction needs a derivation service")
-        processed = failed = gave_up = batches = projection_failed = 0
+        processed = failed = gave_up = deferred = batches = projection_failed = 0
         touched_all: dict[str, Scope] = {}
         while max_batches is None or batches < max_batches:
             claimed: list[Job] = []
@@ -264,7 +280,7 @@ class DerivationWorker:
             for job in claimed:
                 groups.setdefault(job.scope.model_dump_json(), []).append(job)
             done: list[Job] = []
-            unserved: list[tuple[Job, str]] = []
+            unserved: list[tuple[Job, str, bool]] = []
             touched: dict[str, Scope] = {}
             for key, jobs in groups.items():
                 ids = [str(job.payload.get("observation_id", "")) for job in jobs]
@@ -279,26 +295,33 @@ class DerivationWorker:
                     failed += len(jobs)
                     continue
                 for job in jobs:
-                    reason = result.failed.get(str(job.payload.get("observation_id", "")))
+                    observation_id = str(job.payload.get("observation_id", ""))
+                    reason = result.failed.get(observation_id)
                     if reason is None:
                         done.append(job)
                     else:
-                        unserved.append((job, reason))
+                        unserved.append((job, reason, observation_id in result.retryable))
                 touched[key] = jobs[0].scope
             applied = self._project_outbox(touched, worker_id)
             if applied is None:
                 projection_failed = 1
             for job in done:
                 self._repository.complete_job(job.id, "done", worker_id=worker_id)
-            for job, reason in unserved:
-                self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=reason)
+            for job, reason, busy in unserved:
+                if busy and job.attempts < FACTS_MAX_ATTEMPTS:
+                    self._repository.complete_job(
+                        job.id, "failed", worker_id=worker_id, error=reason, retry_in=facts_retry_wait(job.attempts)
+                    )
+                    deferred += 1
+                else:
+                    self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=reason)
+                    gave_up += 1
             if applied:
                 try:
                     self._repository.ack_outbox_many([event.id for event in applied])
                 except Exception:
                     logger.warning("failed to ack outbox batch", exc_info=True)
             processed += len(done)
-            gave_up += len(unserved)
             touched_all.update(touched)
         return WorkerSummary(
             processed=processed,
@@ -306,6 +329,7 @@ class DerivationWorker:
             touched_scopes=tuple(touched_all.values()),
             projection_failed=projection_failed,
             gave_up=gave_up,
+            deferred=deferred,
         )
 
     def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> list[Event] | None:

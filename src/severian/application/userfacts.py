@@ -58,9 +58,23 @@ def user_facts_enabled(env: Mapping[str, str] | None = None) -> bool:
     return values.get("SEVERIAN_USER_FACTS", "").strip().lower() in _TRUE
 
 
+def facts_skip_profiles(env: Mapping[str, str] | None = None) -> frozenset[str]:
+    """Profiles whose turns are never sent for facts (SEVERIAN_FACTS_SKIP_PROFILES, comma-separated).
+
+    For evaluation and test harnesses that write to a live store (16/10: profile ``custom``): their scripted
+    "user" lines are not a person, and every batch costs a call on the shared local model.
+    """
+    values = os.environ if env is None else env
+    return frozenset(p.strip() for p in values.get("SEVERIAN_FACTS_SKIP_PROFILES", "").split(",") if p.strip())
+
+
 # -- what the user said ---------------------------------------------------------------------
 
 _LABEL = re.compile(r"^\[[^\]\n]{1,80}\][ \t]*")
+# Turns where the "user" is another program, not a person (16/10: facts such as "The user is working on kanban
+# task t_af102605"): sessions started by the scheduler or the kanban board, and the board's dispatch line.
+MACHINE_PLATFORMS = frozenset({"cron", "kanban"})
+_DISPATCH = re.compile(r"work kanban task t_[0-9a-f]+")
 
 
 def time_label(content: str) -> str:
@@ -75,13 +89,17 @@ def user_text(content: str, source: Mapping[str, Any]) -> str | None:
     Turns are saved the way Hermes ``sync_turn`` writes them: ``user: X\\nassistant: Y``, or just
     ``X`` when there is no reply yet (``source`` then carries the turn number). A caller that saves
     a bare assistant message marks it with ``source["speaker"] = "assistant"``. Anything else
-    (delegated tasks, notes) is not a conversation turn and is skipped.
+    (delegated tasks, notes) is not a conversation turn and is skipped, and so is a turn whose
+    "user" is a program (``MACHINE_PLATFORMS``, or the kanban board's dispatch line).
     """
+    if source.get("platform") in MACHINE_PLATFORMS:
+        return None
     body = _LABEL.sub("", content, count=1).strip()
     if body.startswith("user:"):
         said = body[len("user:") :]
         cut = said.find("\nassistant:")
-        return (said if cut < 0 else said[:cut]).strip() or None
+        said = (said if cut < 0 else said[:cut]).strip()
+        return None if not said or _DISPATCH.fullmatch(said) else said
     if body.startswith("assistant:") or source.get("turn") is None or source.get("speaker") == "assistant":
         return None
     return body or None
@@ -175,10 +193,15 @@ def _first_json(text: str) -> object:
 
 @dataclass(frozen=True)
 class Extraction:
-    """Facts per message number (1-based) and, for messages given up on, why."""
+    """Facts per message number (1-based) and, for messages given up on, why.
+
+    ``retryable`` holds the given-up messages that failed only because the model server was down, busy or
+    slow (never an unreadable reply): sending them again later can still work.
+    """
 
     facts: dict[int, list[str]] = field(default_factory=dict)
     failed: dict[int, str] = field(default_factory=dict)
+    retryable: frozenset[int] = frozenset()
 
 
 _DESCRIBED_REPLY_CHARS = 300
@@ -262,14 +285,23 @@ class FactExtractor:
         self.batches += 1
         facts: dict[int, list[str]] = {}
         failed: dict[int, str] = {}
-        self._attempt(messages, 0, facts, failed, top=True)
+        retryable: set[int] = set()
+        self._attempt(messages, 0, facts, failed, retryable, top=True)
         if failed:
             self.failed_batches += 1
             self.given_up += len(failed)
-        return Extraction(facts=dict(sorted(facts.items())), failed=dict(sorted(failed.items())))
+        return Extraction(facts=dict(sorted(facts.items())), failed=dict(sorted(failed.items())),
+                          retryable=frozenset(retryable))
 
     def _attempt(
-        self, messages: list[str], offset: int, facts: dict[int, list[str]], failed: dict[int, str], *, top: bool
+        self,
+        messages: list[str],
+        offset: int,
+        facts: dict[int, list[str]],
+        failed: dict[int, str],
+        retryable: set[int],
+        *,
+        top: bool,
     ) -> None:
         try:
             found = self._call(messages)
@@ -277,7 +309,7 @@ class FactExtractor:
             if top:
                 self.first_failures += 1
             if not (top or first.transient):  # inside a split: only a server fault earns a retry
-                self._split_or_give_up(messages, offset, facts, failed, first)
+                self._split_or_give_up(messages, offset, facts, failed, retryable, first)
                 return
             self.retries += 1
             if first.transient:
@@ -287,7 +319,7 @@ class FactExtractor:
                     messages, room=2 if first.cut_off else 1, nudge=not (first.transient or first.cut_off)
                 )
             except FactCallError as second:
-                self._split_or_give_up(messages, offset, facts, failed, second)
+                self._split_or_give_up(messages, offset, facts, failed, retryable, second)
                 return
         for number, items in found.items():
             facts[offset + number] = items
@@ -298,15 +330,19 @@ class FactExtractor:
         offset: int,
         facts: dict[int, list[str]],
         failed: dict[int, str],
+        retryable: set[int],
         error: FactCallError,
     ) -> None:
         if error.transient or len(messages) == 1:
-            failed.update({offset + number: error.describe() for number in range(1, len(messages) + 1)})
+            numbers = range(offset + 1, offset + len(messages) + 1)
+            failed.update({number: error.describe() for number in numbers})
+            if error.transient:
+                retryable.update(numbers)
             return
         self.splits += 1
         half = (len(messages) + 1) // 2
-        self._attempt(messages[:half], offset, facts, failed, top=False)
-        self._attempt(messages[half:], offset + half, facts, failed, top=False)
+        self._attempt(messages[:half], offset, facts, failed, retryable, top=False)
+        self._attempt(messages[half:], offset + half, facts, failed, retryable, top=False)
 
     def _call(self, messages: list[str], *, room: int = 1, nudge: bool = False) -> dict[int, list[str]]:
         """One model call; any problem becomes a FactCallError, counted and kept."""
@@ -346,7 +382,9 @@ class FactExtractor:
             with self._open(request, timeout=self.timeout) as response:
                 payload = json.loads(response.read())
         except urllib.error.HTTPError as exc:  # the server answered with an error status
-            raise FactCallError(str(exc), reply=_error_body(exc), transient=exc.code >= 500 or exc.code == 429) from exc
+            # 409 = the gateway is still serving an identical request (our timed-out first try): busy, not bad.
+            transient = exc.code >= 500 or exc.code in (409, 429)
+            raise FactCallError(str(exc), reply=_error_body(exc), transient=transient) from exc
         except (OSError, http.client.HTTPException) as exc:  # refused, reset or timed out
             raise FactCallError(str(exc) or type(exc).__name__, transient=True) from exc
         usage = payload.get("usage") or {}

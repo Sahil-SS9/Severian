@@ -6,10 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, update
 
 from severian.domain.models import Collection, Memory, Observation, Relation, Scope
-from severian.infrastructure.sqlite import ConflictError, NotFoundError, SQLiteRepository
+from severian.infrastructure.sqlite import ConflictError, NotFoundError, SQLiteRepository, records
 
 
 def scope(tenant: str = "t1", profile: str = "p1") -> Scope:
@@ -341,6 +341,27 @@ def test_job_claim_leases_and_owner_check_completion(repo):
     assert done.status == "done"
     with pytest.raises(NotFoundError, match="no pending job"):
         repo.claim_job("w3")
+
+
+def test_a_failed_job_with_retry_in_goes_back_to_pending_after_the_wait(repo):
+    seed_collection(repo)
+    job = repo.enqueue_job(scope(), "extract_facts", {"observation_id": "x"})
+    repo.claim_job("w1", kind="extract_facts")
+    with pytest.raises(ValueError, match="only a failed job"):
+        repo.complete_job(job.id, "done", worker_id="w1", retry_in=60)
+
+    deferred = repo.complete_job(job.id, "failed", worker_id="w1", error="timed out", retry_in=600)
+    assert (deferred.status, deferred.last_error, deferred.attempts) == ("pending", "timed out", 1)
+    assert deferred.worker_id is None and deferred.lease_until is None
+    assert deferred.retry_after is not None and deferred.retry_after > datetime.now(UTC)
+    with pytest.raises(NotFoundError, match="no pending job"):
+        repo.claim_job("w2", kind="extract_facts")  # not before its time
+    assert repo.list_dead_letter_jobs() == []
+
+    with repo.engine.begin() as connection:  # time passes
+        connection.execute(update(records).where(records.c.id == job.id).values(retry_after=None))
+    again = repo.claim_job("w2", kind="extract_facts")
+    assert (again.id, again.attempts, again.worker_id) == (job.id, 2, "w2")
 
 
 def test_job_reap_requeues_expired_lease_and_dead_letters_exhausted(repo):
