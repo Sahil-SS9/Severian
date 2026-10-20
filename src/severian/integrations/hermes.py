@@ -555,6 +555,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 scope,
                 session_hits,
                 max_chars=self._max_context_chars,
+                query=query,
             ) if session_hits else ""
 
         header = "[Profile bootstrap reference — Current system and user instructions take priority.]\n"
@@ -563,6 +564,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             scope,
             session_hits,
             max_chars=session_budget,
+            query=query,
         ) if session_hits else ""
         separator = "\n\n" if session_context else ""
         bootstrap_budget = self._max_context_chars - len(session_context) - len(separator) - len(header)
@@ -572,6 +574,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
             bootstrap_scope,
             bootstrap_hits,
             max_chars=bootstrap_budget,
+            query=query,
         )
         if not bootstrap_context:
             return session_context

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from severian.application.eventtime import TimeWindow, as_utc, message_time
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
+from severian.application.replytrim import fit_contents
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS, porter_stem
@@ -448,18 +450,51 @@ class ContextAssembler:
             raise ValueError("max_chars must be at least 32")
         self.max_chars = max_chars
 
-    def assemble(self, results: list[RetrievalResult]) -> str:
+    def assemble(
+        self,
+        results: list[RetrievalResult],
+        *,
+        contents: Sequence[str] | None = None,
+        query: str | None = None,
+        trim_replies: bool = False,
+        note: str | None = None,
+    ) -> str:
+        """Results as cited blocks within ``max_chars``: whole blocks in order, the first that does not fit cut short.
+
+        ``contents`` replaces the text shown for each result (same order). ``trim_replies`` (fix a,
+        SEVERIAN_REPLY_TRIM): when the blocks would not all fit, every saved turn is cut to what the user said
+        before anything else is cut, unless ``query`` asks what was said. ``note`` (fix b, SEVERIAN_CONFLICT_NOTES)
+        goes after the blocks with its room kept free; it is left out when that room would leave the blocks under
+        32 characters. With none of these the output is exactly as before.
+        """
+        texts = [result.memory.content for result in results] if contents is None else list(contents)
+        if len(texts) != len(results):
+            raise ValueError("contents must give one text per result")
+        limit = self.max_chars
+        if note and limit - len(note) - 2 < 32:
+            note = None
+        if note:
+            limit -= len(note) + 2
+        frames = [
+            (f"[{result.memory.id}] ", f"\nsource: {', '.join(result.source_observation_ids)}") for result in results
+        ]
+        if trim_replies:
+
+            def cost(items: Sequence[str]) -> int:
+                pairs = zip(frames, items, strict=True)
+                return sum(len(prefix) + len(item) + len(suffix) + 2 for (prefix, suffix), item in pairs)
+
+            texts = fit_contents(texts, limit, query=query, cost=cost)
         blocks: list[str] = []
         used = 0
-        for result in results:
-            citation = ", ".join(result.source_observation_ids)
-            prefix = f"[{result.memory.id}] "
-            suffix = f"\nsource: {citation}"
-            available = self.max_chars - used - len(prefix) - len(suffix) - 2
+        for (prefix, suffix), text in zip(frames, texts, strict=True):
+            available = limit - used - len(prefix) - len(suffix) - 2
             if available <= 0:
                 break
-            content = result.memory.content[:available]
+            content = text[:available]
             block = f"{prefix}{content}{suffix}"
             blocks.append(block)
             used += len(block) + 2
+        if note and blocks:
+            blocks.append(note)
         return "\n\n".join(blocks)
