@@ -3,6 +3,15 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.3.10] - 2026-10-22
+
+### Added
+- Repo tidied for catalog submission: pitch README with the October competitor round, docs index, CHANGELOG, CONTRIBUTING, SECURITY, issue/PR templates, a runnable example with its own test, and rule-13 disclosures in the plugin directory.
+
+### Changed
+- Dependency floors carry upper bounds (pydantic, sqlalchemy, alembic, psycopg, pgvector).
+- The GitHub repository is renamed to `Sahil-SS9/Severian` (old links redirect).
+
 ## [0.3.9] - 2026-10-21
 
 ### Changed
