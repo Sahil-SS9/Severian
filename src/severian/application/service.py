@@ -774,13 +774,10 @@ class MemoryService:
                 )
             )
         stored = [result.memory.content for result in results]
-        shown = (
-            mark_ties(stored, self._message_order(scope, [result.memory for result in results]))
-            if self._tie_order and results
-            else None
-        )
+        # Fix (d): the assembler adds the marks after its cut, so they count only the blocks actually shown.
+        order = self._message_order(scope, [result.memory for result in results]) if self._tie_order else None
         note = conflict_note(stored, query=query) if self._conflict_notes else None
-        return assembler.assemble(results, contents=shown, query=query, trim_replies=self._reply_trim, note=note)
+        return assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note, tie_order=order)
 
     def health(self) -> HealthReport:
         components: dict[str, str] = {}

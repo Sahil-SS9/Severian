@@ -5,11 +5,13 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Any
 
 from severian.application.eventtime import TimeWindow, as_utc, message_time
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
 from severian.application.replytrim import fit_contents
+from severian.application.tieorder import mark_ties
 from severian.domain.errors import NotFoundError
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS, porter_stem
@@ -458,14 +460,18 @@ class ContextAssembler:
         query: str | None = None,
         trim_replies: bool = False,
         note: str | None = None,
+        tie_order: Sequence[tuple[Any, ...] | None] | None = None,
     ) -> str:
         """Results as cited blocks within ``max_chars``: whole blocks in order, the first that does not fit cut short.
 
         ``contents`` replaces the text shown for each result (same order). ``trim_replies`` (fix a,
-        SEVERIAN_REPLY_TRIM): when the blocks would not all fit, every saved turn is cut to what the user said
-        before anything else is cut, unless ``query`` asks what was said. ``note`` (fix b, SEVERIAN_CONFLICT_NOTES)
-        goes after the blocks with its room kept free; it is left out when that room would leave the blocks under
-        32 characters. With none of these the output is exactly as before.
+        SEVERIAN_REPLY_TRIM): when the blocks would not all fit, replies are dropped from the last saved turn upward
+        until they do (``fit_contents``), before anything else is cut, unless ``query`` asks what was said. ``note``
+        (fix b, SEVERIAN_CONFLICT_NOTES) goes after the blocks with its room kept free; it is left out when that room
+        would leave the blocks under 32 characters. ``tie_order`` (fix d, SEVERIAN_TIE_ORDER): one message-order key
+        per result; time labels shared by blocks that are actually shown get their order (``mark_ties``), counted
+        after the cut so a mark never points at a block that was left out. With none of these the output is exactly as
+        before.
         """
         texts = [result.memory.content for result in results] if contents is None else list(contents)
         if len(texts) != len(results):
@@ -485,16 +491,31 @@ class ContextAssembler:
                 return sum(len(prefix) + len(item) + len(suffix) + 2 for (prefix, suffix), item in pairs)
 
             texts = fit_contents(texts, limit, query=query, cost=cost)
+        blocks = self._layout(frames, texts, limit)
+        if tie_order is not None:
+            if len(tie_order) != len(results):
+                raise ValueError("tie_order must give one key (or None) per result")
+            # Marks make labels longer, so the shown blocks can only shrink; re-count until they stop shrinking.
+            while True:
+                shown = len(blocks)
+                marked = mark_ties(texts[:shown], tie_order[:shown]) + texts[shown:]
+                blocks = self._layout(frames, marked, limit)
+                if len(blocks) >= shown:
+                    break
+        if note and blocks:
+            blocks.append(note)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _layout(frames: Sequence[tuple[str, str]], texts: Sequence[str], limit: int) -> list[str]:
+        """Whole blocks in order within ``limit``, the first that does not fit cut short, then stop."""
         blocks: list[str] = []
         used = 0
         for (prefix, suffix), text in zip(frames, texts, strict=True):
             available = limit - used - len(prefix) - len(suffix) - 2
             if available <= 0:
                 break
-            content = text[:available]
-            block = f"{prefix}{content}{suffix}"
+            block = f"{prefix}{text[:available]}{suffix}"
             blocks.append(block)
             used += len(block) + 2
-        if note and blocks:
-            blocks.append(note)
-        return "\n\n".join(blocks)
+        return blocks

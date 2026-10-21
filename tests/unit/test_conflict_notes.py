@@ -11,7 +11,7 @@ import pytest
 from severian.application.conflicts import conflict_note, conflict_notes_enabled
 
 LABEL = "[2024/03/15 (Fri) 09:00] "
-ASK = "If it matters, mention both and ask which is right."
+ASK = "If it matters, mention both."  # not "and ask which is right": the answer hedged instead of adding up (21/10)
 
 
 def test_a_denial_and_a_matching_statement_get_a_note() -> None:

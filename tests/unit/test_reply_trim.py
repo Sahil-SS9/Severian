@@ -43,9 +43,33 @@ def test_when_everything_fits_nothing_changes() -> None:
     assert fit_contents(contents, sum(map(len, contents))) == contents
 
 
-def test_when_the_turns_do_not_fit_every_reply_goes_before_any_user_words() -> None:
+def test_when_nothing_less_will_do_every_reply_goes_before_any_user_words() -> None:
     contents = [TURN, PLAIN, FACT]
-    assert fit_contents(contents, sum(map(len, contents)) - 1) == [without_reply(TURN), without_reply(PLAIN), FACT]
+    assert fit_contents(contents, 1) == [without_reply(TURN), without_reply(PLAIN), FACT]
+
+
+def test_replies_go_from_the_lowest_ranked_turn_up_and_stop_once_everything_fits() -> None:
+    # Round 3 re-run (21/10/2026): cutting every reply as soon as anything did not fit left ~74% of the 8,000
+    # characters empty on LongMemEval, and 3 lost answers were inside a reply that would have fitted.
+    contents = [TURN, PLAIN, FACT]
+    total = sum(map(len, contents))
+    plain_reply = len(PLAIN) - len(without_reply(PLAIN))
+    assert fit_contents(contents, total - 1) == [TURN, without_reply(PLAIN), FACT]
+    assert fit_contents(contents, total - plain_reply) == [TURN, without_reply(PLAIN), FACT]
+    assert fit_contents(contents, total - plain_reply - 1) == [without_reply(TURN), without_reply(PLAIN), FACT]
+
+
+def test_facts_are_skipped_when_choosing_which_reply_goes_next() -> None:
+    contents = [TURN, FACT, PLAIN, FACT]
+    assert fit_contents(contents, sum(map(len, contents)) - 1) == [TURN, FACT, without_reply(PLAIN), FACT]
+
+
+def test_the_callers_measure_decides_when_it_fits() -> None:
+    contents = [TURN, PLAIN]
+    # A measure that charges 100 per item on top of the text: cutting PLAIN alone is not enough.
+    measure = lambda items: sum(len(item) + 100 for item in items)  # noqa: E731
+    budget = measure(contents) - (len(PLAIN) - len(without_reply(PLAIN))) - 1
+    assert fit_contents(contents, budget, cost=measure) == [without_reply(TURN), without_reply(PLAIN)]
 
 
 @pytest.mark.parametrize(

@@ -198,4 +198,4 @@ def conflict_note(contents: Sequence[str], *, query: str | None = None) -> str |
     said = "; ".join(
         f'"{_quote(denial.text, denial.anchor)}" but also "{_quote(other.text)}"' for denial, other in pairs
     )
-    return f"Memories that disagree: {said}. If it matters, mention both and ask which is right."
+    return f"Memories that disagree: {said}. If it matters, mention both."

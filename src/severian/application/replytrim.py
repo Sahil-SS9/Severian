@@ -4,11 +4,15 @@ A saved turn holds what the user said and the assistant's reply (``user: ...\\na
 time label). The reply is usually most of the text (84% on LongMemEval), so under a tight space limit it pushes the
 user's own facts out. Round 3 trial (20/10/2026, 60 LongMemEval questions): cutting every turn down to what the user
 said took the 1,500-character score from 43% to 68%, but with no limit it cost points, because a reply can hold a
-word the answer needs. The rule is therefore all or nothing, decided per context:
+word the answer needs. So replies go only as far as needed, decided per context:
 
 - everything fits: nothing changes;
-- it does not fit: every saved turn is cut to what the user said, before any of the user's words are cut;
+- it does not fit: replies go one at a time from the lowest-ranked saved turn up, stopping as soon as everything
+  fits, and all of them go before any of the user's words are cut;
 - the question asks what was said ("what did you recommend", "remind me"): nothing changes.
+
+The first version (0.3.8) cut every reply as soon as anything did not fit; at 8,000 characters on LongMemEval that
+left ~74% of the space empty and lost 3 answers that sat in replies which would have fitted (re-run 21/10/2026).
 
 Facts and anything else that is not a saved user turn are never touched. Off by default.
 """
@@ -58,12 +62,21 @@ def fit_contents(
     query: str | None = None,
     cost: Callable[[Sequence[str]], int] | None = None,
 ) -> list[str]:
-    """``contents`` unchanged when they fit ``budget`` or the question asks what was said; else every reply dropped.
+    """``contents`` unchanged when they fit ``budget`` or the question asks what was said; else replies dropped from
+    the last saved turn upward until they fit (all of them if nothing less will do).
 
     ``cost`` measures a list of contents (default: total characters). The caller still cuts whatever does not fit
     after the replies are gone, exactly as before.
     """
     measure = cost if cost is not None else (lambda items: sum(len(item) for item in items))
-    if measure(contents) <= budget or asks_what_was_said(query):
-        return list(contents)
-    return [without_reply(content) for content in contents]
+    items = list(contents)
+    if measure(items) <= budget or asks_what_was_said(query):
+        return items
+    for index in range(len(items) - 1, -1, -1):
+        cut = without_reply(items[index])
+        if cut == items[index]:
+            continue
+        items[index] = cut
+        if measure(items) <= budget:
+            break
+    return items
