@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -23,7 +23,7 @@ from severian.application.anticipation import MAX_REMINDERS, DueContext, anticip
 from severian.application.conflicts import conflict_note, conflict_notes_enabled
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.emptyitems import demote_empty, drop_empty_enabled
-from severian.application.eventtime import as_utc, event_time_enabled, message_time, query_window
+from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.factslots import asks_about_past
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
@@ -32,7 +32,6 @@ from severian.application.replytrim import reply_trim_enabled
 from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
-from severian.application.tieorder import mark_ties, tie_order_enabled
 from severian.application.truthresolution import truth_resolution_enabled
 from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
 from severian.domain.errors import ConflictError, NotFoundError
@@ -175,17 +174,15 @@ class MemoryService:
         reply_trim: bool | None = None,
         conflict_notes: bool | None = None,
         drop_empty: bool | None = None,
-        tie_order: bool | None = None,
     ) -> None:
         # Round 3 fixes, each off by default (None = read its SEVERIAN_* switch):
         # (a) SEVERIAN_REPLY_TRIM: when a context does not fit, the assistant's replies go before any user words.
         # (b) SEVERIAN_CONFLICT_NOTES: a note naming two returned memories that disagree.
         # (c) SEVERIAN_DROP_EMPTY: results that carry nothing move behind all the others.
-        # (d) SEVERIAN_TIE_ORDER: returned items sharing a time label show their message order.
+        # (d) SEVERIAN_TIE_ORDER was removed after the 21/10/2026 re-test: no change in answers.
         self._reply_trim = reply_trim_enabled() if reply_trim is None else reply_trim
         self._conflict_notes = conflict_notes_enabled() if conflict_notes is None else conflict_notes
         self._drop_empty = drop_empty_enabled() if drop_empty is None else drop_empty
-        self._tie_order = tie_order_enabled() if tie_order is None else tie_order
         # Handoff 1 (SEVERIAN_TRUTH_RESOLUTION; off by default): memories a newer fact closed leave the "now"
         # view and show up, dated, in "history"; a question about the past reads "history".
         self._truth_resolution = truth_resolution_enabled() if truth_resolution is None else truth_resolution
@@ -635,36 +632,7 @@ class MemoryService:
             already = {item.memory.id for item in results}
             results = [item for item in pool if item.memory.id in replacers or item.memory.id in already][:limit]
         views = [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
-        if self._tie_order and views and query.strip() not in {"", "*"}:
-            # Fix (d): items sharing a time label show which was said first. Only the text shown changes. Not on the
-            # list-all read (empty or "*" query), which feeds admin views and may cover the whole scope.
-            shown = mark_ties([view.content for view in views], self._message_order(scope, [r.memory for r in results]))
-            views = [
-                view if text == view.content else replace(view, content=text)
-                for view, text in zip(views, shown, strict=True)
-            ]
         return views
-
-    def _message_order(self, scope: Scope, memories: Sequence[Memory]) -> list[tuple[Any, ...] | None]:
-        """For each memory, when its (latest) source message was said, as a sortable key; None when unknown.
-
-        The key is the message time (else save time), then the save time, then the turn number, then the id, so
-        messages saved in one go still keep their turn order.
-        """
-        keys: list[tuple[Any, ...] | None] = []
-        for memory in memories:
-            found: list[tuple[Any, ...]] = []
-            for observation_id in memory.source_observation_ids:
-                try:
-                    observation = self._repository.get_observation(scope, observation_id)
-                except NotFoundError:
-                    continue
-                saved = as_utc(observation.created_at)
-                turn = observation.source.get("turn")
-                number = int(turn) if isinstance(turn, (int, str)) and str(turn).isdigit() else -1
-                found.append((message_time(observation.source, saved), saved, number, observation.id))
-            keys.append(max(found) if found else None)
-        return keys
 
     def conflict_note(self, hits: Sequence[SearchHitView], *, query: str | None = None) -> str | None:
         """Fix (b): a note naming up to two disagreements among ``hits``; None if none or the switch is off."""
@@ -774,10 +742,8 @@ class MemoryService:
                 )
             )
         stored = [result.memory.content for result in results]
-        # Fix (d): the assembler adds the marks after its cut, so they count only the blocks actually shown.
-        order = self._message_order(scope, [result.memory for result in results]) if self._tie_order else None
         note = conflict_note(stored, query=query) if self._conflict_notes else None
-        return assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note, tie_order=order)
+        return assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note)
 
     def health(self) -> HealthReport:
         components: dict[str, str] = {}

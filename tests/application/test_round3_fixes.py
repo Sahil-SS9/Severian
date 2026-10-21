@@ -1,7 +1,8 @@
 """Round 3 fixes wired into the service: search results and the context Severian hands the answering model.
 
-Each fix has its own switch, off by default, and with every switch off the output is exactly as before:
-(a) SEVERIAN_REPLY_TRIM, (b) SEVERIAN_CONFLICT_NOTES, (c) SEVERIAN_DROP_EMPTY, (d) SEVERIAN_TIE_ORDER.
+Each fix has its own switch, and with every switch off the output is exactly as before: (a) SEVERIAN_REPLY_TRIM,
+(b) SEVERIAN_CONFLICT_NOTES (on by default), (c) SEVERIAN_DROP_EMPTY. (d) SEVERIAN_TIE_ORDER was removed after the
+21/10/2026 re-test: it changed no answers.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from severian.application.worker import DerivationWorker
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.models import Scope
 
-SWITCHES = ("SEVERIAN_REPLY_TRIM", "SEVERIAN_CONFLICT_NOTES", "SEVERIAN_DROP_EMPTY", "SEVERIAN_TIE_ORDER")
+SWITCHES = ("SEVERIAN_REPLY_TRIM", "SEVERIAN_CONFLICT_NOTES", "SEVERIAN_DROP_EMPTY")
 A = Scope(tenant_id="t", profile_id="alice", collection_id="profile", agent_id="a", session_id="s1")
 B = Scope(tenant_id="t", profile_id="bob", collection_id="profile", agent_id="a", session_id="s1")
 LABEL = "[2024/03/15 (Fri) 09:00]"
@@ -62,83 +63,6 @@ def search(bundle: ServiceBundle, scope: Scope, query: str) -> list[str]:
 def context(bundle: ServiceBundle, scope: Scope, query: str, max_chars: int | None = None) -> str:
     hits = bundle.service.search(scope, query=query, limit=10)
     return bundle.service.assemble_context(scope, hits, max_chars=max_chars, query=query)
-
-
-# -- (d) message order for tied time labels ------------------------------------------------------------------
-
-
-def test_tied_time_labels_show_the_message_order(make) -> None:
-    bundle = make("SEVERIAN_TIE_ORDER")
-    save(bundle, A, OLD, NEW)
-    found = search(bundle, A, "When is my sprint 1 deadline?")
-    assert sorted(found) == sorted(
-        [
-            OLD.replace(LABEL, "[2024/03/15 (Fri) 09:00, 1st at this time]"),
-            NEW.replace(LABEL, "[2024/03/15 (Fri) 09:00, 2nd at this time]"),
-        ]
-    )
-    assembled = context(bundle, A, "When is my sprint 1 deadline?")
-    assert "09:00, 1st at this time] user: My sprint 1 deadline is April 1" in assembled
-    assert "09:00, 2nd at this time] user: Update: the new sprint 1 deadline is April 5" in assembled
-
-
-def test_the_order_comes_from_when_the_message_was_saved_not_its_rank(make) -> None:
-    bundle = make("SEVERIAN_TIE_ORDER")
-    save(bundle, A, NEW, OLD)  # the April 5 turn was said first here
-    found = search(bundle, A, "When is my sprint 1 deadline?")
-    (new,) = [text for text in found if "user: Update: the new sprint 1" in text]
-    (old,) = [text for text in found if "user: My sprint 1 deadline" in text]
-    assert new.startswith("[2024/03/15 (Fri) 09:00, 1st at this time] ")
-    assert old.startswith("[2024/03/15 (Fri) 09:00, 2nd at this time] ")
-
-
-def test_a_mark_counts_only_the_items_actually_shown(make) -> None:
-    # Round 3 re-run (21/10/2026): marks were counted before the space cut, so a shown "2nd at this time" could
-    # point at a 1st that had been cut (27 of 60 LME questions at 1,500 characters).
-    bundle = make("SEVERIAN_TIE_ORDER")
-    save(bundle, A, OLD, NEW)
-    query = "When is my sprint 1 deadline?"
-    first = context(bundle, A, query).split("\n\n")[0]
-    unmarked = first.replace(", 1st at this time]", "]").replace(", 2nd at this time]", "]")
-    assembled = context(bundle, A, query, max_chars=len(unmarked) + 20)
-    assert "\n\n" not in assembled  # only one of the two items fits
-    assert "at this time]" not in assembled
-    assert LABEL in assembled
-
-
-def test_no_shown_mark_ever_points_at_an_item_that_is_not_shown(make) -> None:
-    # Where the marks themselves would push the partner out, both stay unmarked rather than lose the partner.
-    bundle = make("SEVERIAN_TIE_ORDER")
-    save(bundle, A, OLD, NEW)
-    query = "When is my sprint 1 deadline?"
-    marked = context(bundle, A, query)
-    unmarked = marked.replace(", 1st at this time]", "]").replace(", 2nd at this time]", "]")
-    # Room for both unmarked items, with the second cut short; the marks then leave no room for it at all.
-    second = unmarked.split("\n\n")[1]
-    tail = second[second.index("\nsource: ") :]
-    room = len(unmarked) - len(second) + len(second.split("]", 1)[0]) + 1 + len(tail) + 2
-    for limit in range(room - 40, room + 40):
-        assembled = context(bundle, A, query, max_chars=limit)
-        assert len(assembled) <= limit
-        blocks = assembled.split("\n\n")
-        if len(blocks) == 1:
-            assert "at this time]" not in assembled
-        elif "1st at this time]" in blocks[0]:
-            shown = blocks[1].split("] ", 1)[1].rsplit("\nsource: ", 1)[0]
-            assert "2nd at this time]" in shown or "]" not in shown  # partner marked, or cut inside its label
-
-
-def test_tie_order_off_shows_the_stored_text(make) -> None:
-    bundle = make()
-    save(bundle, A, OLD, NEW)
-    assert sorted(search(bundle, A, "When is my sprint 1 deadline?")) == sorted([OLD, NEW])
-
-
-def test_listing_every_memory_shows_the_stored_text_even_with_tie_order_on(make) -> None:
-    # The list-all read (empty or "*" query) feeds admin views, not an answer; it may cover the whole scope.
-    bundle = make("SEVERIAN_TIE_ORDER")
-    save(bundle, A, OLD, NEW)
-    assert sorted(search(bundle, A, "*")) == sorted([OLD, NEW])
 
 
 # -- (c) empty items give their place to the next result -----------------------------------------------------
