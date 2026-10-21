@@ -14,3 +14,5 @@ native/target/
 native/.venv/
 *.whl
 .hermes/
+# local stores created by the quick start
+data/

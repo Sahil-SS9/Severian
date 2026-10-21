@@ -1,6 +1,6 @@
 """Release gates (step 10 of the brutal-critique remediation).
 
-Replays the five release gates from docs/qa-e2e-blueprint.md against the
+Replays the five release gates from docs/release-gates.md against the
 fixed system, on BOTH the reference SQLite backend and a live
 PostgreSQL backend (skipped when SEVERIAN_PG_DSN is unset):
 

@@ -16,7 +16,7 @@ The script:
    SHA and environment fingerprint to the evidence directory.
 
 This script is the ONLY sanctioned way to produce release benchmark
-numbers (per docs/provider-benchmark.md). Numbers are never copied
+numbers (per docs/benchmarks/provider-benchmark.md). Numbers are never copied
 into source.
 """
 from __future__ import annotations

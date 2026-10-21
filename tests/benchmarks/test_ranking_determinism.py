@@ -57,7 +57,7 @@ def test_ranking_deterministic_across_fresh_adapters() -> None:
     q14 multi-source) are a deterministic ranking sample. This does NOT
     claim byte-identical determinism for all metrics, all providers, the
     graph, the worker or dreaming state — that would require a broader
-    evidence package (see EVID-05 in docs/review/objective-review-2026-08-05.md).
+    evidence package (see EVID-05 in docs/history/review/objective-review-2026-08-05.md).
     """
     manifest = MANIFEST_LOCOMO
     queries = ["q1", "q3", "q5", "q7", "q8", "q14"]  # fact, paraphrase, correction, temporal x2, multi_source

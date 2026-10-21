@@ -152,16 +152,19 @@ fn exact_top_k(
                     // stream is lazy, so the flag is final only after
                     // fsum consumes it; check AFTER the summation.
                     let mut nan = false;
-                    let products = blob.chunks_exact(4).zip(q.iter()).map(|(chunk, a)| {
-                        let mut bits = [0u8; 4];
-                        bits.copy_from_slice(chunk);
-                        let bits = u32::from_le_bytes(bits);
-                        if bits & 0x7F80_0000 == 0x7F80_0000 {
-                            nan = true;
-                        }
-                        let b = f32::from_bits(bits) as f64;
-                        a * b
-                    });
+                    let products =
+                        blob.as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(q.iter())
+                            .map(|(chunk, a)| {
+                                let bits = u32::from_le_bytes(*chunk);
+                                if bits & 0x7F80_0000 == 0x7F80_0000 {
+                                    nan = true;
+                                }
+                                let b = f32::from_bits(bits) as f64;
+                                a * b
+                            });
                     let score = fsum(products, &mut partials)?;
                     if nan {
                         return Err("vector contains NaN or infinity".to_string());
