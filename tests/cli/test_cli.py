@@ -236,11 +236,12 @@ def test_search_command_routes_through_service(data_root: Path):
 
 def test_cli_is_installed_as_module():
     """``python -m severian.cli --help`` must succeed."""
+    repo_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [sys.executable, "-m", "severian.cli", "--help"],
         capture_output=True,
         text=True,
-        cwd="/home/kensei/repos/Severian",
+        cwd=str(repo_root),
     )
     assert result.returncode == 0, result.stderr
     assert "ingest" in result.stdout

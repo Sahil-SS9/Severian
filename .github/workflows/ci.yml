@@ -137,7 +137,8 @@ jobs:
       - name: Install native wheel + run native test suites
         run: |
           uv sync --group dev
-          uv pip install native/target/wheels/severian_native-0.1.0-*.whl
+          tag="cp$(python -c 'import sys; print(f"{sys.version_info[0]}{sys.version_info[1]}")')"
+          uv pip install native/target/wheels/severian_native-0.1.0-${tag}-*.whl
           uv run pytest -q -ra tests/unit/test_native_vector_backend.py \
             tests/integration/test_native_vector_integration.py \
             tests/gates/test_native_fallback_contract.py \
