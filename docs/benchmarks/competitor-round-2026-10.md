@@ -70,6 +70,10 @@ questions cannot be answered from general knowledge.
 
 ## Since this round
 
+Every competitor ran against the same answering prompt, top-10 retrieval cap and marker, so the comparison is between
+memory systems, not answer pipelines. The runs used local models (Qwen3.8-27B answers, Carwin extraction). A
+cloud-model run of the best Severian setup is planned and is listed in the repo README's roadmap.
+
 - **0.3.9** turns on a note when two returned memories disagree. Re-test on 21/10 (same harness, Opus marks): +1.9
   points on BEAM with no size limit and +2.2 at 8,000 characters, no change elsewhere, never lower in total.
 - In progress: joining facts across conversations (LoCoMo multi-hop), saying "I don't know" when nothing fits (BEAM

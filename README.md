@@ -59,6 +59,8 @@ Full table, intervals, method and footnotes: [docs/benchmarks/competitor-round-2
   salience, and retention policies archive instead of deleting.
 - **Operable.** Crash-safe leased worker jobs, dead-letter recovery, export/import, side-by-side vector rebuilds, an
   integrity audit, per-profile fact rollback and an optional Rust acceleration module.
+- **Harness-agnostic.** The same engine serves any agent framework through the CLI, the Python SDK, the HTTP API or
+  MCP, and runs unchanged on SQLite or PostgreSQL; the Hermes plugin is one adapter on top.
 
 ## How it works
 
