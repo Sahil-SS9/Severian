@@ -32,7 +32,7 @@ def make(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator:
             if name in on:
                 monkeypatch.setenv(name, "1")
             else:
-                monkeypatch.delenv(name, raising=False)
+                monkeypatch.setenv(name, "0")  # explicit: fix (b) is on by default
         where = tmp_path / f"store{len(built)}"
         where.mkdir()
         bundle = build_bundle(database=where / "s.db", fts=where / "s.fts", vectors=where / "s.vec")

@@ -67,8 +67,11 @@ _MIN_SHARE = 0.6
 
 
 def conflict_notes_enabled() -> bool:
-    """``SEVERIAN_CONFLICT_NOTES`` switches fix (b) on. Off: no note is ever added."""
-    return os.environ.get("SEVERIAN_CONFLICT_NOTES", "").strip().lower() in {"1", "true", "on", "yes"}
+    """Fix (b) is on unless ``SEVERIAN_CONFLICT_NOTES`` switches it off (0/false/off/no). Off: no note is added.
+
+    On by default since the re-test of 21/10/2026 (ext-20261022-r3fix2): more answers right on BEAM, never fewer.
+    """
+    return os.environ.get("SEVERIAN_CONFLICT_NOTES", "").strip().lower() not in {"0", "false", "off", "no"}
 
 
 @dataclass(frozen=True)

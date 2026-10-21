@@ -156,8 +156,11 @@ def test_long_statements_are_shortened_at_a_word() -> None:
     assert len(quoted) <= 151 and quoted.endswith("…") and not quoted[:-1].endswith(" ")
 
 
-def test_the_switch_is_off_unless_set(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_switch_is_on_unless_switched_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SEVERIAN_CONFLICT_NOTES", raising=False)
-    assert not conflict_notes_enabled()
-    monkeypatch.setenv("SEVERIAN_CONFLICT_NOTES", "on")
+    assert conflict_notes_enabled()
+    for off in ("0", "false", "OFF", " no "):
+        monkeypatch.setenv("SEVERIAN_CONFLICT_NOTES", off)
+        assert not conflict_notes_enabled()
+    monkeypatch.setenv("SEVERIAN_CONFLICT_NOTES", "1")
     assert conflict_notes_enabled()
