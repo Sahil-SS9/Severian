@@ -9,7 +9,7 @@ every user's memories apart.**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahil-SS9/severian/actions/workflows/ci.yml)
+[![CI](https://github.com/Sahil-SS9/Severian/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahil-SS9/Severian/actions/workflows/ci.yml)
 [![MCP](https://img.shields.io/badge/MCP-ready-6366f1)](#use-it-from)
 
 </div>
@@ -90,7 +90,7 @@ More: [architecture](docs/architecture.md), [memory engine](docs/memory-engine.m
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/Sahil-SS9/severian.git
+git clone https://github.com/Sahil-SS9/Severian.git
 cd severian
 uv sync
 

@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through GitHub's
-[private vulnerability reporting](https://github.com/Sahil-SS9/severian/security/advisories/new) rather than in a
+[private vulnerability reporting](https://github.com/Sahil-SS9/Severian/security/advisories/new) rather than in a
 public issue. Include the version, a description of the impact and steps to reproduce. You should get a reply within
 a week.
 
