@@ -191,3 +191,16 @@ def test_mcp_principal_overrides_args_collection_is_arg_selectable(principal_ser
     assert payload["scope"]["tenant_id"] == "t1"
     assert payload["scope"]["profile_id"] == "p1"
     assert payload["scope"]["collection_id"] == "c2"
+
+
+def test_mcp_with_principal_rejects_cross_tenant_correct(principal_server):
+    """New write tools follow the same principal boundary as ingest."""
+    response = principal_server.handle_message(
+        _tools_call(
+            "severian_correct",
+            {**_scope_args(tenant_id="evil"), "memory_id": "m1", "content": "x"},
+        )
+    )
+    assert response["result"]["isError"] is True
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert "scope" in payload["error"].lower() or "principal" in payload["error"].lower()

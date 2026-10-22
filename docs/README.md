@@ -9,4 +9,5 @@
 | [threat-model.md](threat-model.md) | Security boundary, assumptions and mitigations |
 | [release-gates.md](release-gates.md) | The release quality gates the test suite replays |
 | [benchmarks/](benchmarks/README.md) | Competitor round, internal quality gates, method and evidence |
+| [integrations.md](integrations.md) | MCP recipes for Claude Code, Codex, OpenCode and Claude Desktop |
 | [history/](history/) | Design plans, reviews and handoffs from development (kept for the record) |

@@ -3,6 +3,16 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.3.11] - 2026-10-22
+
+### Added
+- The MCP server now exposes the full seven-tool surface (`severian_correct`, `severian_forget`,
+  `severian_task_progress`, `severian_search_shared` alongside ingest/search/get), so Claude Code, Codex,
+  OpenCode and Claude Desktop get feature parity with the Hermes provider. All new tools carry the same
+  principal binding, explicit-scope rule and error mapping as the existing three.
+- `docs/integrations.md`: MCP recipes per harness, with the verification status of each stated honestly
+  (all protocol-verified over live stdio; harness end-to-end runs marked where pending).
+
 ## [0.3.10] - 2026-10-22
 
 ### Added

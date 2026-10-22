@@ -3,6 +3,7 @@
 Covers protocol handshake, tools/list, tools/call with explicit scope,
 cross-scope rejection, malformed input, and stdio runner.
 """
+
 from __future__ import annotations
 
 import io
@@ -71,9 +72,7 @@ def server(tmp_path: Path):
     # P1-4: MCP requires the initialize handshake before tools/list or
     # tools/call. The fixture performs it so tool tests exercise real
     # protocol state (a separate test covers the rejection path).
-    srv.handle_message(
-        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    )
+    srv.handle_message(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
     srv.handle_message(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
     yield srv
     fts.close()
@@ -83,10 +82,9 @@ def server(tmp_path: Path):
 
 # -- protocol handshake ---------------------------------------------------
 
+
 def test_initialize_returns_protocol_and_capabilities(server):
-    response = server.handle_message(
-        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    )
+    response = server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
     assert response is not None
     assert response["jsonrpc"] == "2.0"
     assert response["id"] == 1
@@ -96,9 +94,7 @@ def test_initialize_returns_protocol_and_capabilities(server):
 
 
 def test_initialized_notification_returns_nothing(server):
-    response = server.handle_message(
-        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    )
+    response = server.handle_message(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
     assert response is None
 
 
@@ -110,6 +106,7 @@ def test_ping_returns_empty_result(server):
 
 
 # -- tools/list -----------------------------------------------------------
+
 
 def test_tools_list_before_initialize_rejected(tmp_path):
     # P1-4 repro: _initialized was set but never enforced; a client
@@ -127,9 +124,7 @@ def test_tools_list_before_initialize_rejected(tmp_path):
         context=ContextAssembler(),
     )
     srv = SeverianMCPServer(service=service, gateway=FakeGateway())
-    response = srv.handle_message(
-        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-    )
+    response = srv.handle_message(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
     assert response is not None
     assert "error" in response
     assert response["error"]["code"] == -32002  # ERR_SERVER_NOT_INITIALIZED
@@ -138,7 +133,7 @@ def test_tools_list_before_initialize_rejected(tmp_path):
     repo.close()
 
 
-def test_tools_list_advertises_three_tools(server):
+def test_tools_list_advertises_seven_tools(server):
     response = server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
     tools = response["result"]["tools"]
     names = {t["name"] for t in tools}
@@ -146,6 +141,10 @@ def test_tools_list_advertises_three_tools(server):
         "severian_ingest_observation",
         "severian_search",
         "severian_get_observation",
+        "severian_correct",
+        "severian_forget",
+        "severian_task_progress",
+        "severian_search_shared",
     }
     for tool in tools:
         assert "inputSchema" in tool
@@ -156,6 +155,7 @@ def test_tools_list_advertises_three_tools(server):
 
 
 # -- tools/call: ingest --------------------------------------------------
+
 
 def test_ingest_tool_round_trip(server):
     call = {
@@ -242,6 +242,7 @@ def test_ingest_tool_rejects_empty_content(server):
 
 # -- tools/call: search ---------------------------------------------------
 
+
 def test_search_tool_returns_hits(server):
     # Ingest first.
     ingest_call = {
@@ -321,6 +322,7 @@ def test_search_derive_without_gateway_returns_error(tmp_path: Path):
 
 # -- tools/call: get_observation ------------------------------------------
 
+
 def test_get_observation_tool_round_trip(server):
     ingest_call = {
         "jsonrpc": "2.0",
@@ -378,10 +380,9 @@ def test_get_observation_cross_scope_returns_error(server):
 
 # -- error handling -------------------------------------------------------
 
+
 def test_unknown_method_returns_method_not_found(server):
-    response = server.handle_message(
-        json.dumps({"jsonrpc": "2.0", "id": 40, "method": "nonexistent/method"})
-    )
+    response = server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 40, "method": "nonexistent/method"}))
     assert response["error"]["code"] == ERR_METHOD_NOT_FOUND
 
 
@@ -402,9 +403,7 @@ def test_missing_method_returns_invalid_request(server):
 
 
 def test_wrong_jsonrpc_version_returns_invalid_request(server):
-    response = server.handle_message(
-        json.dumps({"jsonrpc": "1.0", "id": 42, "method": "ping"})
-    )
+    response = server.handle_message(json.dumps({"jsonrpc": "1.0", "id": 42, "method": "ping"}))
     assert response["error"]["code"] == ERR_INVALID_REQUEST
 
 
@@ -504,6 +503,7 @@ def test_search_rejects_whitespace_query(server):
 
 # -- stdio runner ---------------------------------------------------------
 
+
 def test_stdio_runner_emits_protocol_json_only(server):
     lines = [
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
@@ -530,3 +530,340 @@ def test_stdio_runner_parse_error_emits_error(server):
     output = output_stream.getvalue().strip()
     parsed = json.loads(output)
     assert parsed["error"]["code"] == ERR_PARSE_ERROR
+
+
+# -- tools/call: correct / forget / task_progress / search_shared -----------
+
+_IDS = iter(range(7000, 7999))
+
+
+def _payload(server, call: dict, request_id: int | None = None) -> tuple[bool, dict]:
+    response = server.handle_message(json.dumps({**call, "id": request_id if request_id is not None else next(_IDS)}))
+    assert response is not None
+    assert response["jsonrpc"] == "2.0"
+    return response["result"].get("isError", False), json.loads(response["result"]["content"][0]["text"])
+
+
+def _ingest(server, content: str, request_id: int, **scope_overrides) -> str:
+    _, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_ingest_observation",
+                "arguments": {**_scope_args(**scope_overrides), "content": content},
+            },
+        },
+        request_id if request_id is not None else 500 + abs(hash(content)) % 100000,
+    )  # type: ignore[arg-type]
+    return payload["observation_id"]
+
+
+def _derived_memory(server, content: str, request_id: int, **scope_overrides) -> str:
+    _ingest(server, content, request_id, **scope_overrides)
+    _, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_search",
+                "arguments": {**_scope_args(**scope_overrides), "query": content, "derive": True, "limit": 5},
+            },
+        },
+        request_id + 1,
+    )
+    return payload["hits"][0]["memory_id"]
+
+
+def test_correct_observation_round_trip(server):
+    obs_id = _ingest(server, "Ada lives at 10 Downing Street.", 600)
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_correct",
+                "arguments": {**_scope_args(), "observation_id": obs_id, "content": "Ada lives at 12 Downing Street."},
+            },
+        },
+        601,
+    )
+    assert not err
+    assert payload["corrected"] == "observation"
+    assert payload["revision_of"] == obs_id
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_get_observation",
+                "arguments": {**_scope_args(), "observation_id": payload["id"]},
+            },
+        },
+        602,
+    )
+    assert not err
+    assert "12 Downing Street" in payload["content"]
+
+
+def test_correct_memory_round_trip_after_derive(server):
+    memory_id = _derived_memory(server, "Ada keeps her archives in the attic.", 610)
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_correct",
+                "arguments": {
+                    **_scope_args(),
+                    "memory_id": memory_id,
+                    "content": "Ada keeps her archives in the cellar.",
+                },
+            },
+        },
+        611,
+    )
+    assert not err
+    assert payload["corrected"] == "memory"
+    assert payload["revision_of"] == memory_id
+
+
+def test_correct_rejects_two_targets_and_missing_target(server):
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_correct",
+                "arguments": {**_scope_args(), "observation_id": "a", "memory_id": "b", "content": "c"},
+            },
+        },
+        620,
+    )
+    assert err
+    assert "exactly one" in payload["error"]
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "severian_correct", "arguments": {**_scope_args(), "content": "c"}},
+        },
+        621,
+    )
+    assert err and "exactly one" in payload["error"]
+
+
+def test_correct_memory_not_found_in_scope(server):
+    memory_id = _derived_memory(server, "Ada paints watercolours on Sundays.", 630)
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_correct",
+                "arguments": {**_scope_args(session_id="other"), "memory_id": memory_id, "content": "x"},
+            },
+        },
+        631,
+    )
+    assert err and payload["error"] == "not found in scope"
+
+
+def test_forget_memory_then_correct_is_conflict(server):
+    memory_id = _derived_memory(server, "Ada collects Victorian letters.", 640)
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "severian_forget", "arguments": {**_scope_args(), "memory_id": memory_id}},
+        },
+        641,
+    )
+    assert not err
+    assert payload["forgotten"] == "memory"
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_correct",
+                "arguments": {**_scope_args(), "memory_id": memory_id, "content": "rewrite"},
+            },
+        },
+        642,
+    )
+    assert err and payload["error"] == "already corrected or forgotten"
+
+
+def test_forget_gone_from_search(server):
+    content = "Ada recites Yeats every solstice."
+    memory_id = _derived_memory(server, content, 650)
+    _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "severian_forget", "arguments": {**_scope_args(), "memory_id": memory_id}},
+        },
+        651,
+    )
+    _, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_search",
+                "arguments": {**_scope_args(), "query": "Yeats solstice", "limit": 50},
+            },
+        },
+        652,
+    )
+    assert all(hit["memory_id"] != memory_id for hit in payload["hits"])
+
+
+def test_task_progress_set_get_list_clear(server):
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {
+                    **_scope_args(),
+                    "action": "set",
+                    "task": "demo",
+                    "state": "half done",
+                    "metadata": {"phase": 2},
+                },
+            },
+        },
+        660,
+    )
+    assert not err and payload["task"] == "demo" and payload["state"] == "half done"
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {**_scope_args(), "action": "set", "task": "demo", "state": "all done"},
+            },
+        },
+        661,
+    )
+    assert not err and payload["state"] == "all done"
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {**_scope_args(), "action": "get", "task": "demo", "include_history": True},
+            },
+        },
+        662,
+    )
+    assert not err and len(payload["history"]) >= 1
+    assert payload["history"][-1]["state"] == "half done"
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "severian_task_progress", "arguments": {**_scope_args(), "action": "list"}},
+        },
+        663,
+    )
+    assert not err and any(t["task"] == "demo" for t in payload["tasks"])
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {**_scope_args(), "action": "clear", "task": "demo"},
+            },
+        },
+        664,
+    )
+    assert not err and payload["cleared"] == "demo"
+
+
+def test_task_progress_errors(server):
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {**_scope_args(), "action": "set", "task": "demo"},
+            },
+        },
+        670,
+    )
+    assert err and "state" in payload["error"]
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_task_progress",
+                "arguments": {**_scope_args(), "action": "get", "task": "missing"},
+            },
+        },
+        671,
+    )
+    assert err and payload["error"] == "no note for this task"
+
+
+def test_search_shared_returns_only_own_plus_listed(server):
+    """Own memories + explicitly listed agents; unlisted agents stay invisible."""
+    _derived_memory(server, "Alpha agents archive auroras nightly.", 680)
+    _derived_memory(server, "Bravo agents balance budgets monthly.", 682, agent_id="a2")
+    _derived_memory(server, "Charlie agents chart coastlines daily.", 683, agent_id="a3")
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_search_shared",
+                "arguments": {**_scope_args(), "agent_ids": ["a2"], "query": "agents"},
+            },
+        },
+        684,
+    )
+    assert not err
+    assert payload["hits"], "listed agent's memory must be returned"
+    assert any("Bravo" in hit["content"] for hit in payload["hits"])
+    assert not any("Charlie" in hit["content"] for hit in payload["hits"])
+    err, payload = _payload(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "severian_search_shared",
+                "arguments": {**_scope_args(), "agent_ids": [], "query": "budgets"},
+            },
+        },
+        685,
+    )
+    assert err

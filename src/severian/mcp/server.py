@@ -9,8 +9,9 @@ Protocol surface implemented:
 
 - ``initialize`` / ``notifications/initialized`` handshake.
 - ``ping``.
-- ``tools/list`` — advertises the three Severian tools.
-- ``tools/call`` — dispatches a named tool with explicit scope.
+- ``tools/list`` — advertises the seven Severian tools.
+- ``tools/call`` — dispatches a named tool with explicit scope
+  (ingest, search, get, correct, forget, task progress, shared search).
 - Unknown methods, malformed JSON and missing fields produce the
   appropriate JSON-RPC error. Exception details are never leaked:
   error messages are static, safe strings.
@@ -19,25 +20,26 @@ Tool results are MCP ``content`` blocks of type ``text`` carrying a
 safe JSON payload. Domain/client errors set ``isError: true`` with a
 text block; protocol/transport errors use JSON-RPC error objects.
 """
+
 from __future__ import annotations
 
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from severian.application.derivation import DerivationGateway
 from severian.application.service import MemoryService
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope
 
 # -- protocol constants ---------------------------------------------------
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "severian-mcp"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 
 # JSON-RPC error codes (per spec).
 ERR_PARSE_ERROR = -32700
@@ -84,6 +86,7 @@ class MCPScope(BaseModel):
 
 
 # -- tool argument models --------------------------------------------------
+
 
 class IngestArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -190,7 +193,171 @@ class GetObservationArgs(BaseModel):
         )
 
 
+class _ExactlyOneTargetModel(BaseModel):
+    """Shared rule: correct/forget take exactly one of observation_id or memory_id."""
+
+    observation_id: str | None = Field(default=None)
+    memory_id: str | None = Field(default=None)
+
+    @field_validator("observation_id", "memory_id")
+    @classmethod
+    def _target_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("target ids must not be blank")
+        return value
+
+
+class CorrectArgs(_ExactlyOneTargetModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+    collection_id: str
+    agent_id: str
+    session_id: str
+    content: str = Field(min_length=1)
+
+    @field_validator("content")
+    @classmethod
+    def _content_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("content must not be blank")
+        return value
+
+    @field_validator(*_SCOPE_DIMS)
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scope dimensions must not be empty")
+        return value
+
+    def scope(self) -> Scope:
+        return Scope(
+            tenant_id=self.tenant_id,
+            profile_id=self.profile_id,
+            collection_id=self.collection_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+        )
+
+
+class ForgetArgs(_ExactlyOneTargetModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+    collection_id: str
+    agent_id: str
+    session_id: str
+    reason: str | None = Field(default=None)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("reason must not be blank")
+        return value
+
+    @field_validator(*_SCOPE_DIMS)
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scope dimensions must not be empty")
+        return value
+
+    def scope(self) -> Scope:
+        return Scope(
+            tenant_id=self.tenant_id,
+            profile_id=self.profile_id,
+            collection_id=self.collection_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+        )
+
+
+class TaskProgressArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+    collection_id: str
+    agent_id: str
+    session_id: str
+    action: Literal["set", "get", "list", "clear"]
+    task: str | None = Field(default=None)
+    state: str | None = Field(default=None)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    include_history: bool = False
+
+    @field_validator("task", "state")
+    @classmethod
+    def _optional_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("task/state must not be blank")
+        return value
+
+    @field_validator(*_SCOPE_DIMS)
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scope dimensions must not be empty")
+        return value
+
+    def scope(self) -> Scope:
+        return Scope(
+            tenant_id=self.tenant_id,
+            profile_id=self.profile_id,
+            collection_id=self.collection_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+        )
+
+
+class SearchSharedArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+    collection_id: str
+    agent_id: str
+    session_id: str
+    agent_ids: list[str] = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=10_000)
+    limit: int = Field(default=20, ge=1, le=200)
+
+    @field_validator("agent_ids")
+    @classmethod
+    def _agent_ids_nonblank(cls, value: list[str]) -> list[str]:
+        if any(not isinstance(a, str) or not a.strip() for a in value):
+            raise ValueError("agent_ids must be non-empty strings")
+        return value
+
+    @field_validator("query")
+    @classmethod
+    def _query_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be blank")
+        return value
+
+    @field_validator(*_SCOPE_DIMS)
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scope dimensions must not be empty")
+        return value
+
+    def scope(self) -> Scope:
+        return Scope(
+            tenant_id=self.tenant_id,
+            profile_id=self.profile_id,
+            collection_id=self.collection_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+        )
+
+
 # -- tool definitions ------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
@@ -227,6 +394,46 @@ _TOOLS: tuple[ToolDefinition, ...] = (
         ),
         input_schema=GetObservationArgs.model_json_schema(),
     ),
+    ToolDefinition(
+        name="severian_correct",
+        description=(
+            "Correct a remembered fact when the user says it is wrong. Give exactly one target "
+            "from a severian_search hit: observation_id (one of its source_observation_ids; the "
+            "source is replaced by your corrected text and re-derived on the next memory pass) "
+            "or memory_id (that memory is replaced at once). Cross-scope targets return an "
+            "error without revealing existence. All scope dimensions are mandatory."
+        ),
+        input_schema=CorrectArgs.model_json_schema(),
+    ),
+    ToolDefinition(
+        name="severian_forget",
+        description=(
+            "Forget: erase exactly one target (observation_id from a severian_search hit's "
+            "source_observation_ids, or memory_id) with reason. The store keeps the audit "
+            "history; search stops returning it. Cross-scope targets return an error without "
+            "revealing existence. All scope dimensions are mandatory."
+        ),
+        input_schema=ForgetArgs.model_json_schema(),
+    ),
+    ToolDefinition(
+        name="severian_task_progress",
+        description=(
+            "Where you left off on a task, kept across chats and sessions. action: set (needs "
+            "state), get, list, clear. Notes are never returned by severian_search. All scope "
+            "dimensions are mandatory."
+        ),
+        input_schema=TaskProgressArgs.model_json_schema(),
+    ),
+    ToolDefinition(
+        name="severian_search_shared",
+        description=(
+            "Read across a set of agent identities sharing the caller's tenant/profile "
+            "(the governed shared seam). agent_ids must be explicit; no wildcard. Preserves "
+            "the caller's scope and swaps only agent_id per listed identity. All scope "
+            "dimensions are mandatory."
+        ),
+        input_schema=SearchSharedArgs.model_json_schema(),
+    ),
 )
 
 
@@ -242,6 +449,7 @@ def _tool_list() -> list[dict[str, Any]]:
 
 
 # -- JSON-RPC helpers ------------------------------------------------------
+
 
 def _error(code: int, message: str, request_id: Any) -> dict[str, Any]:
     return {
@@ -269,6 +477,7 @@ def _safe_json(payload: Any) -> str:
 
 
 # -- the server ------------------------------------------------------------
+
 
 class SeverianMCPServer:
     """Canonical MCP adapter over JSON-RPC 2.0 / stdio.
@@ -362,9 +571,7 @@ class SeverianMCPServer:
         # serving them (previously _initialized was set but never
         # enforced).
         if not self._initialized:
-            raise _ProtocolError(
-                ERR_SERVER_NOT_INITIALIZED, "server not initialized"
-            )
+            raise _ProtocolError(ERR_SERVER_NOT_INITIALIZED, "server not initialized")
         if method == "tools/list":
             response = self._handle_tools_list(request_id)
             return None if is_notification else response
@@ -398,9 +605,7 @@ class SeverianMCPServer:
         name = params.get("name")
         arguments = params.get("arguments", {})
         if not isinstance(name, str) or not name:
-            return _result(
-                _text_content(_safe_json({"error": "missing tool name"}), is_error=True), request_id
-            )
+            return _result(_text_content(_safe_json({"error": "missing tool name"}), is_error=True), request_id)
         if not isinstance(arguments, dict):
             return _result(
                 _text_content(_safe_json({"error": "tool arguments must be an object"}), is_error=True),
@@ -414,6 +619,14 @@ class SeverianMCPServer:
                 return self._call_search(arguments, request_id)
             if name == "severian_get_observation":
                 return self._call_get_observation(arguments, request_id)
+            if name == "severian_correct":
+                return self._call_correct(arguments, request_id)
+            if name == "severian_forget":
+                return self._call_forget(arguments, request_id)
+            if name == "severian_task_progress":
+                return self._call_task_progress(arguments, request_id)
+            if name == "severian_search_shared":
+                return self._call_search_shared(arguments, request_id)
             return _result(_text_content(_safe_json({"error": "unknown tool"}), is_error=True), request_id)
         except ValidationError as exc:
             # Safe, structured validation error — strip Pydantic URLs
@@ -436,6 +649,11 @@ class SeverianMCPServer:
                 _text_content(_safe_json({"error": "not found in scope"}), is_error=True),
                 request_id,
             )
+        except ConflictError:
+            return _result(
+                _text_content(_safe_json({"error": "already corrected or forgotten"}), is_error=True),
+                request_id,
+            )
         except ValueError:
             return _result(
                 _text_content(_safe_json({"error": "invalid request"}), is_error=True),
@@ -443,6 +661,143 @@ class SeverianMCPServer:
             )
 
     # -- tool implementations --------------------------------------------
+
+    # -- tools/call: correct / forget / task progress / shared search -------
+
+    def _call_correct(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
+        args = CorrectArgs.model_validate(arguments)
+        if not args.content.strip():
+            return _result(_text_content(_safe_json({"error": "content must be blank"}), is_error=True), request_id)
+        n = sum(1 for t in (args.observation_id, args.memory_id) if t)
+        if n != 1:
+            return _result(
+                _text_content(_safe_json({"error": "give exactly one of observation_id or memory_id"}), is_error=True),
+                request_id,
+            )
+        scope = self._resolve_mcp_scope(args.scope())
+        try:
+            if args.observation_id:
+                revised = self._service.revise_observation(scope, args.observation_id.strip(), args.content.strip())
+                payload = {"corrected": "observation", "id": revised.id, "revision_of": args.observation_id.strip()}
+            else:
+                memory_id = args.memory_id
+                assert memory_id is not None  # exactly-one rule checked above
+                corrected = self._service.correct_memory(
+                    scope,
+                    memory_id,
+                    content=args.content.strip(),
+                    model_id=f"mcp-tool/{scope.agent_id}",
+                    prompt_version="severian_correct",
+                )
+                payload = {"corrected": "memory", "id": corrected.id, "revision_of": memory_id}
+        except NotFoundError:
+            return _result(_text_content(_safe_json({"error": "not found in scope"}), is_error=True), request_id)
+        except ConflictError:
+            return _result(
+                _text_content(_safe_json({"error": "already corrected or forgotten"}), is_error=True), request_id
+            )
+        return _result(_text_content(_safe_json(payload)), request_id)
+
+    def _call_forget(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
+        args = ForgetArgs.model_validate(arguments)
+        n = sum(1 for t in (args.observation_id, args.memory_id) if t)
+        if n != 1:
+            return _result(
+                _text_content(_safe_json({"error": "give exactly one of observation_id or memory_id"}), is_error=True),
+                request_id,
+            )
+        reason = (args.reason or "user requested erasure").strip()
+        scope = self._resolve_mcp_scope(args.scope())
+        kind = "observation" if args.observation_id else "memory"
+        target_id = (args.observation_id or args.memory_id or "").strip()
+        try:
+            if kind == "observation":
+                self._service.erase_observation(scope, target_id, reason=reason)
+            else:
+                self._service.erase_memory(scope, target_id, reason=reason)
+        except NotFoundError:
+            return _result(_text_content(_safe_json({"error": "not found in scope"}), is_error=True), request_id)
+        except ConflictError:
+            return _result(
+                _text_content(_safe_json({"error": "already corrected or forgotten"}), is_error=True), request_id
+            )
+        return _result(_text_content(_safe_json({"forgotten": kind, "id": target_id, "reason": reason})), request_id)
+
+    @staticmethod
+    def _note_entry(note: Any) -> dict[str, Any]:
+        return {
+            "task": note.task,
+            "state": note.state,
+            "metadata": dict(note.metadata),
+            "updated_at": note.created_at.isoformat() if getattr(note, "created_at", None) else None,
+        }
+
+    def _call_task_progress(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
+        args = TaskProgressArgs.model_validate(arguments)
+        scope = self._resolve_mcp_scope(args.scope())
+        action = args.action
+        if action == "list":
+            return _result(
+                _text_content(
+                    _safe_json({"tasks": [self._note_entry(n) for n in self._service.list_task_notes(scope)]})
+                ),
+                request_id,
+            )
+        task = (args.task or "").strip()
+        if not task or len(task) > 200:
+            return _result(
+                _text_content(
+                    _safe_json({"error": "task must be a non-empty name (up to 200 characters)"}), is_error=True
+                ),
+                request_id,
+            )
+        if action == "set":
+            state = (args.state or "").strip()
+            if not state or len(state) > 20_000:
+                return _result(
+                    _text_content(
+                        _safe_json({"error": "state must be non-empty text (up to 20000 characters)"}), is_error=True
+                    ),
+                    request_id,
+                )
+            note = self._service.set_task_note(scope, task, state, dict(args.metadata))
+            return _result(_text_content(_safe_json(self._note_entry(note))), request_id)
+        if action == "clear":
+            if self._service.clear_task_note(scope, task):
+                payload: dict[str, Any] = {"cleared": task}
+            else:
+                payload = {"error": "no note for this task"}
+            return _result(_text_content(_safe_json(payload), is_error=("error" in payload)), request_id)
+        # get
+        current, history = self._service.get_task_note(scope, task)
+        if current is None:
+            return _result(_text_content(_safe_json({"error": "no note for this task"}), is_error=True), request_id)
+        entry = self._note_entry(current)
+        if args.include_history:
+            entry["history"] = [self._note_entry(n) for n in history]
+        return _result(_text_content(_safe_json(entry)), request_id)
+
+    def _call_search_shared(self, arguments: dict[str, Any], request_id: Any) -> dict[str, Any]:
+        args = SearchSharedArgs.model_validate(arguments)
+        scope = self._resolve_mcp_scope(args.scope())
+        shared = self._service._retrieval.search_shared(
+            scope,
+            agent_ids=list(args.agent_ids),
+            query=args.query.strip(),
+            limit=args.limit,
+        )
+        payload = {
+            "hits": [
+                {
+                    "memory_id": hit.memory.id,
+                    "content": hit.memory.content,
+                    "source_observation_ids": list(hit.source_observation_ids),
+                    "fused_score": hit.fused_score,
+                }
+                for hit in shared
+            ]
+        }
+        return _result(_text_content(_safe_json(payload)), request_id)
 
     def _resolve_mcp_scope(self, args_scope: Scope) -> Scope:
         """Enforce the construct-time principal on a tool-call scope.
@@ -455,10 +810,7 @@ class SeverianMCPServer:
         """
         if self._principal is None:
             return args_scope
-        if (
-            args_scope.tenant_id != self._principal.tenant_id
-            or args_scope.profile_id != self._principal.profile_id
-        ):
+        if args_scope.tenant_id != self._principal.tenant_id or args_scope.profile_id != self._principal.profile_id:
             raise _ScopeError(
                 "scope outside principal: tenant/profile must be "
                 f"{self._principal.tenant_id}/{self._principal.profile_id}"
