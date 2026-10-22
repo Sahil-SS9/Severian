@@ -86,11 +86,72 @@ footnotes, loss accounting and interval details, and the repository ships the ha
 
 ## How it works
 
-<p align="center">
-  <img src="docs/assets/severian-architecture.png" alt="Severian data flow: agent surfaces, core service, canonical store, worker jobs, search indexes, hybrid retrieval and context assembly. Every call is scope-checked and every hit cites its source observation." width="100%">
-</p>
+```text
+                        ┌──────────────────────────────────────────┐
+                        │                SOURCE INPUT              │
+                        │  text observation · attachments (multi-  │
+                        │  modal metadata: image/audio/video/file) │
+                        └──────────────────┬───────────────────────┘
+                                           │
+                                           ▼
+                        ┌──────────────────────────────────────────┐
+                        │          IngestionService                │
+                        │  normalise · hash raw · source identity  │
+                        └──────────────────┬───────────────────────┘
+                                           │
+                 ┌─────────────────────────┼─────────────────────────┐
+                 ▼                         ▼                         ▼
+   ┌───────────────────────┐   ┌───────────────────────┐   ┌───────────────────────┐
+   │   CANONICAL STORE     │   │   derive job queue    │   │  Entity/Relation       │
+   │  (SQLite | PostgreSQL)│──▶│  (leased, crash-safe, │──▶│  Graph (auto-populated │
+   │  observations         │   │   idempotent)         │   │  by EntityExtraction)  │
+   │  memories             │   └───────────────────────┘   └───────────────────────┘
+   │  entities/relations   │
+   │  jobs · audit events  │   append-only · scoped · hashed · supersede-aware
+   └───────────────────────┘
+                 │
+                 ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  DerivationService (worker drains derive/episode/dream jobs) │
+   │  · policy-gated (cloud_allowed false by default)             │
+   │  · deterministic hash OR Qwen 0.6B semantic opt-in          │
+   │  · skips superseded observations (P0-5)                      │
+   │  · EntityExtractionService upserts entities + typed relations│
+   └──────────────────────────────────────────────────────────────┘
+                 │
+                 ├──────────────► ProjectionCoordinator
+                 │                 ├──► FTS5 lexical projection (BM25)
+                 │                 └──► vector projection (hash default;
+                 │                      Qwen 0.6B semantic opt-in, 384-dim)
+                 │
+                 ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  RetrievalService (hybrid RRF fusion)                        │
+   │  · coverage abstention gate    · salience-weighted ranking   │
+   │  · shared-scope read (search_shared, opt-in multi-agent)     │
+   │  · temporal query orientation (active head first for present)│
+   └───────────────┬──────────────────────────────────────────────┘
+                   │
+                   ├──────────────► ContextAssembler (bounded, source-cited)
+                   │
+                   ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  GraphRetrievalService                                       │
+   │  · BFS neighborhood over Entity/Relation (both directions)   │
+   │  · temporal validity filtering (expired relations excluded)  │
+   │  · related_memories by min graph distance                    │
+   └──────────────────────────────────────────────────────────────┘
 
-<p align="right"><sub>Editable source: <a href="docs/assets/severian-architecture.svg">docs/assets/severian-architecture.svg</a></sub></p>
+   OFFLINE SELF-REGULATION (dream worker jobs, non-destructive):
+   ┌──────────────────────────────────────────────────────────────┐
+   │  ConsolidationService  · Jaccard near-dup merge (>= 0.8)     │
+   │  CurationService       · salience scoring (recency+usage+    │
+   │                          confidence), review markers only    │
+   │  RetentionPolicyService· max_age/min_usage/kinds policy,     │
+   │                          evaluate + opt-in archive           │
+   │  ContradictionScanService · report-only, never auto-resolves │
+   └──────────────────────────────────────────────────────────────┘
+```
 
 
 - The **canonical store** is the only source of truth. Search indexes are projections that can be rebuilt from it at
