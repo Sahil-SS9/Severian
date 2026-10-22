@@ -86,19 +86,12 @@ footnotes, loss accounting and interval details, and the repository ships the ha
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Agent / MCP client / CLI / HTTP] -->|ingest, scoped| B[(Canonical store<br/>SQLite or PostgreSQL<br/>append-only observations)]
-    B --> C[Worker jobs<br/>leased, crash-safe]
-    C --> D[Memories<br/>turns, user facts,<br/>date stamps, revisions]
-    D --> E[FTS5 / BM25 index]
-    D --> F[Vector index<br/>Qwen3 0.6B or hash]
-    A -->|search, scoped| G[Hybrid retrieval<br/>RRF fusion + re-rank<br/>truth resolution]
-    E --> G
-    F --> G
-    G --> H[Context assembler<br/>cited blocks within budget<br/>conflict notes]
-    H -->|context| A
-```
+<p align="center">
+  <img src="docs/assets/severian-architecture.png" alt="Severian data flow: agent surfaces, core service, canonical store, worker jobs, search indexes, hybrid retrieval and context assembly. Every call is scope-checked and every hit cites its source observation." width="100%">
+</p>
+
+<p align="right"><sub>Editable source: <a href="docs/assets/severian-architecture.svg">docs/assets/severian-architecture.svg</a></sub></p>
+
 
 - The **canonical store** is the only source of truth. Search indexes are projections that can be rebuilt from it at
   any time.

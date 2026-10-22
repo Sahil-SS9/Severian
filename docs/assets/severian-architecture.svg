@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="760" viewBox="0 0 1000 760" font-family="ui-sans-serif, system-ui, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0891b2"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="760" fill="#f8fafc"/>
+  <text x="40" y="38" font-size="19" font-weight="650" fill="#0f172a">Severian: how it works</text>
+  <text x="40" y="58" font-size="13" fill="#64748b">One canonical store, rebuildable search indexes, and every call scoped and cited.</text>
+
+  <!-- return arrow (drawn early, behind cards) -->
+  <path d="M 330 686 L 120 686 L 120 128 L 322 128" fill="none" stroke="#0891b2" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ahc)"/>
+  <text x="96" y="420" font-size="12.5" fill="#0891b2" transform="rotate(-90 96 420)" text-anchor="middle">cited context returned to the calling agent</text>
+
+  <!-- 1. surfaces -->
+  <path d="M 500 122 L 500 154" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#ah)"/>
+  <rect x="330" y="76" width="340" height="52" rx="8" fill="#ffffff" stroke="#0891b2" stroke-width="1.5"/>
+  <text x="350" y="98" font-size="15" font-weight="650" fill="#0f172a">Agent, MCP server, CLI, HTTP API</text>
+  <text x="350" y="117" font-size="12" fill="#475569">every call names its full five-level scope</text>
+  <text x="512" y="143" font-size="11.5" fill="#64748b">saves + asks</text>
+
+  <!-- 2. core -->
+  <path d="M 500 220 L 500 252" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#ah)"/>
+  <rect x="330" y="160" width="340" height="60" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5"/>
+  <text x="350" y="182" font-size="15" font-weight="650" fill="#0f172a">Core service</text>
+  <text x="350" y="201" font-size="12" fill="#475569">ingest, search, correct, forget, task notes,</text>
+  <text x="350" y="215" font-size="12" fill="#475569">shared search across opted-in scopes</text>
+  <text x="512" y="241" font-size="11.5" fill="#64748b">writes observations</text>
+
+  <!-- 3. canonical store -->
+  <path d="M 500 302 L 500 346" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#ah)"/>
+  <rect x="330" y="258" width="340" height="88" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="350" y="282" font-size="15" font-weight="650" fill="#0f172a">Canonical store</text>
+  <text x="350" y="301" font-size="12" fill="#475569">SQLite, or PostgreSQL + pgvector</text>
+  <text x="350" y="318" font-size="12" fill="#475569">append-only observations, hashed,</text>
+  <text x="350" y="335" font-size="12" fill="#475569">corrected by revision, never rewritten</text>
+  <text x="512" y="331" font-size="11.5" fill="#64748b">derives memories</text>
+
+  <!-- 4. workers -->
+  <path d="M 500 410 L 500 462" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#ah)"/>
+  <rect x="330" y="352" width="340" height="64" rx="8" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="350" y="374" font-size="15" font-weight="650" fill="#0f172a">Worker jobs</text>
+  <text x="350" y="393" font-size="12" fill="#475569">leased and crash-safe: memories, user facts,</text>
+  <text x="350" y="407" font-size="12" fill="#475569">date stamps, truth resolution, dreaming</text>
+  <text x="512" y="450" font-size="11.5" fill="#64748b">indexes them</text>
+
+  <!-- 5. indexes -->
+  <path d="M 500 510 L 500 562" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#ah)"/>
+  <rect x="330" y="468" width="340" height="48" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="350" y="490" font-size="15" font-weight="650" fill="#0f172a">Search indexes (rebuildable)</text>
+  <text x="350" y="508" font-size="12" fill="#475569">FTS5 / BM25 + vectors (Qwen3 0.6B or hash)</text>
+
+  <!-- 6. retrieval -->
+  <rect x="330" y="568" width="340" height="76" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5"/>
+  <text x="350" y="590" font-size="15" font-weight="650" fill="#0f172a">Hybrid retrieval + context block</text>
+  <text x="350" y="609" font-size="12" fill="#475569">BM25 + vector fusion, optional re-ranker,</text>
+  <text x="350" y="626" font-size="12" fill="#475569">citations, budget-aware sizing,</text>
+  <text x="350" y="639" font-size="12" fill="#475569">conflict notes when memories disagree</text>
+
+  <!-- side notes -->
+  <rect x="720" y="160" width="240" height="186" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="738" y="184" font-size="13" font-weight="650" fill="#0f172a">Guarantees</text>
+  <text x="738" y="206" font-size="12" fill="#475569">No default scope; another</text>
+  <text x="738" y="223" font-size="12" fill="#475569">scope's memories are never</text>
+  <text x="738" y="240" font-size="12" fill="#475569">returned or hinted at.</text>
+  <text x="738" y="264" font-size="12" fill="#475569">Every hit cites the raw</text>
+  <text x="738" y="281" font-size="12" fill="#475569">observation it came from,</text>
+  <text x="738" y="298" font-size="12" fill="#475569">and corrections keep history.</text>
+  <text x="738" y="322" font-size="12" fill="#475569">No third-party calls by default;</text>
+  <text x="738" y="339" font-size="12" fill="#475569">embedding models are opt-in.</text>
+
+  <rect x="720" y="568" width="240" height="86" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="738" y="590" font-size="13" font-weight="650" fill="#0f172a">Operate</text>
+  <text x="738" y="609" font-size="12" fill="#475569">severian work, audit,</text>
+  <text x="738" y="626" font-size="12" fill="#475569">export/import, rebuild-vectors,</text>
+  <text x="738" y="643" font-size="12" fill="#475569">dead-letter recovery</text>
+
+  <text x="40" y="730" font-size="11.5" fill="#94a3b8">Source: docs/assets/severian-architecture.svg (text is selectable; render with ImageMagick for the README PNG)</text>
+</svg>
