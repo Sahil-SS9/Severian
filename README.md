@@ -21,24 +21,47 @@ client, a CLI, an HTTP API or plain Python.
 
 ## Results
 
-In a head-to-head round against Mem0, Mnemosyne, Hindsight and Honcho, run under one common rule on three public
-benchmarks, **Severian scored highest on all three**:
+In October 2026 we ran a head-to-head round against Mem0, Mnemosyne, Hindsight and Honcho: three public
+long-term-memory benchmarks, every system under one common rule (same answering model, top 10 memories, Opus
+marking), each row a 95% interval.
 
-| Benchmark | Severian | Next best |
-|---|---|---|
-| **BEAM 100K** | **58.3%** | Mnemosyne 47.9% (clear win, +10.4 points) |
-| **LongMemEval** (5,000-character context) | **66.7%** | Mnemosyne 51.7%, Mem0 46.7% (clear win over Mem0, +20 points) |
-| **LoCoMo** | **59.8%** | Mem0 53.3% |
+| System | LoCoMo (199 q) | BEAM 100K (100 q) | LongMemEval (60 q), 5,000 chars | LongMemEval, 1,500 chars |
+|---|---|---|---|---|
+| **Severian** | **59.8%** (52.8-66.3) | **58.3%** (50.5-66.1) | **66.7%** (55.0-78.3) | 43.3% (31.7-56.7) |
+| Severian, features off | 57.8% (50.8-64.8) | 55.7% (48.0-63.7) | 53.3% (40.0-65.0) | 36.7% (25.0-48.3) |
+| Mnemosyne | 48.2% (41.2-55.3) | 47.9% (39.8-56.1) | 51.7% (38.3-63.3) | 43.3% (30.0-55.0) |
+| Mem0 | 53.3% (46.2-60.3) | 28.4% (21.0-36.0) | 46.7% (33.3-60.0) | **48.3%** (36.7-61.7) |
+| Hindsight | 43.2% (36.7-50.3) | 40.8% (33.1-48.7) | not run [e] | not run [e] |
+| Honcho | 26.1% (20.1-32.2) | 37.6% (30.1-45.4) | not run [e] | not run [e] |
+
+Severian against the best competitor on the same questions:
+
+- **BEAM: +10.4 points** over Mnemosyne, a clear win.
+- **LongMemEval at 5,000 characters: +20.0 points** over Mem0, a clear win.
+- **LoCoMo: +6.5 points** over Mem0, ahead.
+- LongMemEval at 1,500 characters: level with the best (Mem0 leads overall, but within error).
+
+Where a competitor still leads, by category, and what we think is going on:
+
+| Benchmark / category | Severian | Best other | Note |
+|---|---|---|---|
+| LoCoMo multi-hop | 26% | Mem0 42% | checked: the evidence is fully present for only 12 of 43, and a quarter of the 10 slots hold no answer |
+| LoCoMo open-domain | 46% | Hindsight 46% | tie |
+| BEAM abstention | 40% | Mem0 80% | Severian answers when it should say "I don't know"; in 3 of 6 misses the detail came from the assistant's own replies |
+| BEAM contradiction resolution | 24% | Honcho 30% | checked: both sides returned in 10 of 10, but nothing says they conflict |
+| BEAM knowledge update | 70% | Mnemosyne 85% | checked: old and new value share one timestamp in 2 of 3 misses |
+| LongMemEval knowledge update | 50% / 30% at 1,500 | Mnemosyne 70% / Mem0 60% | checked: untrimmed Severian scores 70%; the character limit cuts the evidence |
+| Search speed (median) | 63 ms LoCoMo | Honcho 43 ms | fast enough; not fastest |
+
+Category cells hold 10-43 questions each, so single categories are noisy. Both sides of the ledger are published on
+purpose: [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md) has the method,
+footnotes, loss accounting and interval details, and the repository ships the harness itself.
 
 - **As good as perfect recall.** Handed only the turns the datasets label as the answer, the same answering model
   scores 59.8% on LoCoMo and 76.7% on LongMemEval. Severian matches the first and passes the second (81.7% with no
   size limit), because it resolves "yesterday" and "last Friday" to real dates when it saves a turn.
-- **Same model, same marker, same rules for every system.** One local answering model, top 10 memories each, every
-  answer marked by Claude Opus. Losses and lost work are counted, not hidden.
 - **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate, a corrected fact never comes back in
   search (0.000 stale-fact rate) and no query ever returns another scope's memory (0.000 leakage).
-
-Full table, intervals, method and footnotes: [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md).
 
 ## Why Severian
 
@@ -146,9 +169,11 @@ The recommended settings are the ones benchmarked above. PostgreSQL setup:
 
 ## Roadmap
 
-The next round targets the categories where another system still scores higher: joining facts across conversations,
-saying "I don't know" when nothing fits, and facts that change over time. Then more competitors (MemMachine,
-Graphiti/Zep, Letta, Cognee) and a cloud-model run of the best setup.
+The published gap list above drives the plan: joining facts across conversations (multi-hop), saying "I don't know"
+when nothing fits (abstention), flagging conflicts (done in 0.3.9, now default), and facts that change over time
+(knowledge update). Then more competitors (MemMachine, Graphiti/Zep, Letta, Cognee, LangMem, Memobase), a cloud-model
+check of the best setup, and extra measures (confident wrong answers vs "I don't know", cost per memory, 10x store
+size).
 
 ## Contributing and security
 
