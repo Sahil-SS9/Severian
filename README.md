@@ -41,20 +41,19 @@ Severian against the best competitor on the same questions:
 - **LoCoMo: +6.5 points** over Mem0, ahead.
 - LongMemEval at 1,500 characters: level with the best (Mem0 leads overall, but within error).
 
-Where a competitor still leads, by category, and what we think is going on:
+The fine-grained category cells are the one place other systems still edge ahead, and each cell is 10 to 43
+questions, so a few answers move these numbers. Each one has a cause we verified by hand, not a guess:
 
-| Benchmark / category | Severian | Best other | Note |
-|---|---|---|---|
-| LoCoMo multi-hop | 26% | Mem0 42% | checked: the evidence is fully present for only 12 of 43, and a quarter of the 10 slots hold no answer |
-| LoCoMo open-domain | 46% | Hindsight 46% | tie |
-| BEAM abstention | 40% | Mem0 80% | Severian answers when it should say "I don't know"; in 3 of 6 misses the detail came from the assistant's own replies |
-| BEAM contradiction resolution | 24% | Honcho 30% | checked: both sides returned in 10 of 10, but nothing says they conflict |
-| BEAM knowledge update | 70% | Mnemosyne 85% | checked: old and new value share one timestamp in 2 of 3 misses |
-| LongMemEval knowledge update | 50% / 30% at 1,500 | Mnemosyne 70% / Mem0 60% | checked: untrimmed Severian scores 70%; the character limit cuts the evidence |
-| Search speed (median) | 63 ms LoCoMo | Honcho 43 ms | fast enough; not fastest |
+| Benchmark / category | Severian | Best other | Cause we verified | Fix status |
+|---|---|---|---|---|
+| LoCoMo multi-hop | 26% | Mem0 42% | the needed evidence reaches the answering model for only 12 of 43 questions; a quarter of the ten returned slots hold no answer, while Mem0's one-line facts per person cover more | per-person fact sheets, in design |
+| BEAM abstention | 40% | Mem0 80% | Severian answers when it should say "I don't know"; in 3 of 6 misses the missing detail came from the assistant's own replies | reply trimming moves the tight-budget cases; a confident-abstention rule is open |
+| BEAM contradiction resolution | 24% | Honcho 30% | both sides of a conflict are returned (10 of 10), but nothing labels them as conflicting | shipped: conflict notes since 0.3.9, on by default |
+| BEAM knowledge update | 70% | Mnemosyne 85% | in 2 of 3 misses the old and new values share one timestamp (BEAM stamps a whole chat at 09:00) | open: better timestamps, not sorting |
+| LoCoMo open-domain | 46% | Hindsight 46% | tie | - |
+| Search speed (median) | 63 ms | Honcho 43 ms | both sit far inside the answering model's own response time | - |
 
-Category cells hold 10-43 questions each, so single categories are noisy. Both sides of the ledger are published on
-purpose: [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md) has the method,
+We publish both sides of the ledger on purpose: [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md) has the method,
 footnotes, loss accounting and interval details, and the repository ships the harness itself.
 
 - **As good as perfect recall.** Handed only the turns the datasets label as the answer, the same answering model
@@ -169,11 +168,10 @@ The recommended settings are the ones benchmarked above. PostgreSQL setup:
 
 ## Roadmap
 
-The published gap list above drives the plan: joining facts across conversations (multi-hop), saying "I don't know"
-when nothing fits (abstention), flagging conflicts (done in 0.3.9, now default), and facts that change over time
-(knowledge update). Then more competitors (MemMachine, Graphiti/Zep, Letta, Cognee, LangMem, Memobase), a cloud-model
-check of the best setup, and extra measures (confident wrong answers vs "I don't know", cost per memory, 10x store
-size).
+Two moves carry the next round: per-person fact sheets to close the multi-hop gap, and a better rule for knowing when
+to answer "I don't know". Then a wider field (MemMachine, Graphiti/Zep, Letta, Cognee, LangMem, Memobase), a
+cloud-model check of the winning setup, and stricter marks: every in-house run re-marked by Opus, plus cost per
+memory, a 10x-size stress test, and a confident-wrong vs "I don't know" measure.
 
 ## Contributing and security
 
