@@ -3,6 +3,20 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased]
+
+### Added
+- `SEVERIAN_LINK_SEEDS` / `SEVERIAN_LINK_WEIGHT` (off, seeds 0): name links. A name in one of the best matches
+  ("my manager is Kiran") runs one keyword search of its own and pulls in the memories that name the same person
+  ("Kiran is allergic to sesame"), scored at `LINK_WEIGHT` times the match so real matches stay first. Targets
+  multi-hop questions. Off means the ranking and the number of searches are exactly as before.
+- `SEVERIAN_CONTEXT_FORMAT=v2` (off): the answerer-facing block. It leads with the most directly relevant note, numbers
+  each note with its state (current / also true together / earlier, replaced / change) and the date it was said, quotes
+  the user's own words for a user fact, and ends with an explicit "if none of these notes is relevant, say you don't
+  know". Off keeps the 0.3.11 block byte for byte. **Order with conflict notes** (on by default since 0.3.9): a note's
+  state label carries the conflict information on the note it belongs to, so when v2 is on the trailing conflict note
+  is not added after the don't-know rule — one voice, nothing repeated.
+
 ## [0.3.11] - 2026-10-22
 
 ### Added
