@@ -105,3 +105,21 @@ def test_no_names_means_no_change(bundle):
     assert search(bundle, SearchTuning(link_seeds=3), "boiler serviced") == search(
         bundle, SearchTuning(), "boiler serviced"
     )
+
+
+OTHER = Scope(
+    tenant_id="kensei", profile_id="dezzy", collection_id="profile", agent_id="dezzy", session_id="shared"
+)
+
+
+def test_links_never_cross_a_profile(bundle):
+    """The link read is a keyword search: it is scope-bound, so another profile's memories can never appear."""
+    say(bundle, *TURNS)
+    for number, turn in enumerate(("Kiran told me the deploy key rotated.",)):
+        bundle.service.ingest_observation(OTHER, content=turn, source={"session_id": f"chat-{number}"})
+        assert DerivationWorker(bundle.repository, bundle.derivation, bundle.projection).drain(
+            gateway=bundle.gateway
+        ).failed == 0
+    found = search(bundle, SearchTuning(link_seeds=3), "who is my manager")
+    assert "Kiran told me they're allergic to sesame." in found, "control: the link fires inside the caller's profile"
+    assert not any("deploy key" in item for item in found), "the other profile's memory was not linked in"
