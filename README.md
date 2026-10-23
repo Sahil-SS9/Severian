@@ -215,6 +215,9 @@ Behaviour switches are environment variables, so the same code serves benchmarks
 | `SEVERIAN_RERANK` | off (**recommended**: `cross-encoder/ms-marco-MiniLM-L6-v2`) | Re-ranks the fused candidates |
 | `SEVERIAN_OPT_NUMPY` | off (**recommended on**) | Fast exact vector scoring on large scopes |
 | `SEVERIAN_CONFLICT_NOTES` | **on** | Adds a short note when two returned memories disagree (`0` turns it off) |
+| `SEVERIAN_FILL_BUDGET` | off | Search over-fetches a bounded pool and the context keeps adding ranked items until its character budget is full, instead of stopping at `limit` |
+| `SEVERIAN_COMPACT_CITES` | off | Cites the source observation ids in one bracket and drops the trailing `source:` line: about 45 characters less per item, every citation still resolvable through `severian_get_observation` |
+| `SEVERIAN_SUFFICIENCY` | off | Adds one line after the results when no returned memory holds the specific detail the question names |
 | `SEVERIAN_STORAGE` / `SEVERIAN_DSN` | Hermes store / unset | SQLite directory, or a PostgreSQL DSN |
 
 The recommended settings are the ones benchmarked above. PostgreSQL setup:

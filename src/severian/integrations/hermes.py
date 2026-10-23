@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from severian.application.anticipation import MAX_REMINDERS
 from severian.application.derivation import DerivationGateway
 from severian.application.eventtime import parse_time
+from severian.application.fillbudget import pool_limit
 from severian.application.service import SEARCH_VIEWS, MemoryService
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Scope, TaskNote
@@ -539,14 +540,14 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         session_hits = self._service.search(
             scope,
             query=query,
-            limit=limit,
+            limit=pool_limit(limit),
             derive=derive,
             gateway=self._gateway,
         )
         bootstrap_hits = self._service.search(
             bootstrap_scope,
             query=query,
-            limit=limit,
+            limit=pool_limit(limit),
             derive=derive,
             gateway=self._gateway,
         )

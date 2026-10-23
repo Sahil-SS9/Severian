@@ -3,6 +3,19 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased]
+
+### Added
+- `SEVERIAN_FILL_BUDGET` (off): search over-fetches a bounded pool (4 per item asked for, capped at 50) and the
+  assembled context keeps adding ranked items until its character budget is full. A tight budget is unchanged, because
+  it runs out inside the first `limit` items either way.
+- `SEVERIAN_COMPACT_CITES` (off): one id per item instead of two. The block cites the source observation ids in the
+  bracket and drops the trailing `source:` line, saving about 45 characters per item; every cited id still resolves
+  through `severian_get_observation`, `severian_correct` and `severian_forget`.
+- `SEVERIAN_SUFFICIENCY` (off): one line after the results when no returned memory holds the specific detail the
+  question names, so the reader knows it may not be in memory. Lexical and narrow on purpose - it fires on a missing
+  detail slot or on an absent `specific`/`exact` item, and never on a question the returned items answer.
+
 ## [0.3.11] - 2026-10-22
 
 ### Added
