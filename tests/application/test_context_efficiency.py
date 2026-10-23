@@ -193,6 +193,53 @@ def test_no_read_path_returns_another_profiles_records(make) -> None:
     )
 
 
+def legacy_assemble(results, limit: int) -> str:
+    """0.3.11's assemble, written out here: the frozen reference the off path must still equal byte for byte."""
+    blocks: list[str] = []
+    used = 0
+    for result in results:
+        prefix = f"[{result.memory.id}] "
+        suffix = f"\nsource: {', '.join(result.source_observation_ids)}"
+        available = limit - used - len(prefix) - len(suffix) - 2
+        if available <= 0:
+            break
+        block = f"{prefix}{result.memory.content[:available]}{suffix}"
+        blocks.append(block)
+        used += len(block) + 2
+    return "\n\n".join(blocks)
+
+
+@pytest.mark.parametrize("budget", [300, 900, 2_000, 8_000, 200_000])
+def test_off_equals_the_frozen_0_3_11_assembler_byte_for_byte(
+    make, budget: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from severian.application.retrieval import ContextAssembler, RetrievalResult
+
+    monkeypatch.delenv("SEVERIAN_CONFLICT_NOTES", raising=False)  # the conflict note is on by default; keep it out
+    monkeypatch.setenv("SEVERIAN_CONFLICT_NOTES", "0")
+    bundle = make()
+    save(bundle, A, *TURNS)
+    hits = bundle.service.search(A, query="When is the sprint 1 deadline?", limit=10)
+    results = [
+        RetrievalResult(
+            memory=memory,
+            source_observation_ids=memory.source_observation_ids,
+            lexical_score=hit.lexical_score,
+            vector_score=hit.vector_score,
+            fused_score=hit.fused_score,
+        )
+        for hit in hits
+        for memory in [bundle.repository.get_memory(A, hit.memory_id)]
+    ]
+    # Explicitly off, so the comparison cannot depend on the environment the suite runs in.
+    assert ContextAssembler(max_chars=budget).assemble(results, compact_cites=False, sufficiency=False) == (
+        legacy_assemble(results, budget)
+    )
+    assert bundle.service.assemble_context(A, hits, max_chars=budget, query="When is the sprint 1 deadline?") == (
+        legacy_assemble(results, budget)
+    )
+
+
 def _provider(bundle: ServiceBundle, *, max_context_chars: int = 900) -> SeverianMemoryProvider:
     provider = SeverianMemoryProvider(
         service=bundle.service, gateway=PassThrough(), max_context_chars=max_context_chars
