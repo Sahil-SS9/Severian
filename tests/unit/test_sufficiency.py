@@ -123,3 +123,36 @@ def test_a_missing_query_means_no_note() -> None:
 )
 def test_common_words_are_not_detail_slots(query: str, items: list[str]) -> None:
     assert sufficiency_note(query, items) is None
+
+
+def test_the_line_is_dropped_when_no_room_is_left_for_it() -> None:
+    """The line is paid for out of the same budget: with no room it must not push memories out or truncate them."""
+    from severian.application.retrieval import ContextAssembler, RetrievalResult
+    from severian.domain.models import Memory, Scope
+
+    scope = Scope(tenant_id="t", profile_id="alice", collection_id="profile", agent_id="a", session_id="s1")
+    memory = Memory(
+        scope=scope,
+        kind="fact",
+        content=("user: I set up the Trello board and moved every card across. " * 8),
+        source_observation_ids=["6f1d0a3e-0000-4000-8000-000000000001"],
+        model_id="local/test-model",
+        prompt_version="prompt-v1",
+        confidence=0.9,
+    )
+    result = RetrievalResult(
+        memory=memory,
+        source_observation_ids=list(memory.source_observation_ids),
+        lexical_score=1.0,
+        vector_score=1.0,
+        fused_score=1.0,
+    )
+    query = "What specific criteria did I use to prioritize the Trello board?"  # fires: no "criteria" anywhere
+
+    roomy = ContextAssembler(max_chars=8_000).assemble([result], query=query, sufficiency=True)
+    assert NOTE in roomy, "positive control: with room, this question does get the line"
+
+    tight_on = ContextAssembler(max_chars=120).assemble([result], query=query, sufficiency=True)
+    tight_off = ContextAssembler(max_chars=120).assemble([result], query=query, sufficiency=False)
+    assert NOTE not in tight_on, "with under 32 characters left after the line there is no room to say it"
+    assert tight_on == tight_off, "and the block is exactly what the switch-off path returns"

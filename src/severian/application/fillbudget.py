@@ -17,9 +17,10 @@ items. Measured, it failed both gates:
 
 **What it does instead.** It adds no search. It reads the turns either side of the items already shown, from the same
 conversations, and appends them after those items. Two indexed reads per query (the session's turns, then the
-memories of the neighbouring turns): no embedding, no rerank. The head cannot move, because the caller's items are
-laid out first, unchanged and in order — with the switch off the block is byte-identical to 0.3.11, and with it on the
-off block is a byte prefix of the new one.
+memories of the neighbouring turns): no embedding, no rerank. Nothing that was ranked can move, because the caller's
+items are laid out first, unchanged and in order — with the switch off the block is byte-identical to 0.3.11, and with
+it on the items and their order are unchanged, with the appended turns following them. (A trailing conflict note or
+sufficiency line, when those switches are on, comes after the appended items.)
 
 ``FILL_SEEDS`` bounds how many of the shown items are expanded and ``FILL_WINDOW`` how many turns each side are read.
 Measured on the kept stores, three seeds and two turns either side capture the whole gain: a wider window or more
@@ -101,12 +102,19 @@ def neighbour_memories(
     *,
     window: int | None = None,
     seeds: int | None = None,
+    drop_closed: bool = False,
 ) -> list[Memory]:
     """Memories from the turns around the shown items, in conversation order, never one already shown.
 
     ``results`` are the items the caller is about to see, in rank order. Only the first ``seeds`` of them are expanded,
     and only the ``window`` turns either side of each, so the read is bounded by the size of those conversations'
     turns rather than by the store. Every read is scope-bound, so no other profile's conversation can appear.
+
+    ``drop_closed`` applies truth resolution's rule for the ``now`` view (``service._apply_closures``): a memory a
+    newer fact closed carries ``valid_until`` and is history, not current. The fill reads memories directly instead of
+    searching, so it has to apply that rule itself or it would put a replaced fact back beside the fact that replaced
+    it. The caller passes its own switch state; with the rule off nothing is dropped, exactly as search leaves closed
+    memories visible then.
     """
     window = neighbour_window() if window is None else window
     seeds = fill_seeds() if seeds is None else seeds
@@ -167,6 +175,8 @@ def neighbour_memories(
         for memory in by_observation.get(observation_id, ()):
             if memory.id in shown:
                 continue
+            if drop_closed and memory.valid_until is not None:
+                continue  # a newer fact closed it: history, not current (service._apply_closures)
             shown.add(memory.id)
             appended.append(memory)
     return appended

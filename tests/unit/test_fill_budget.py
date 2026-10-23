@@ -153,10 +153,29 @@ def test_a_seed_with_no_session_adds_nothing() -> None:
 
 
 def test_conversation_order_is_not_the_repository_order() -> None:
-    """The repository returns a session's turns in id order; the fill must read the turn number, not that order."""
+    """The repository returns a session's turns in id order; the fill must place seeds by turn number.
+
+    A fixed, non-monotonic permutation: with the turn-number sort removed, turn 3 sits at index 3 of this list and
+    its "neighbours" become turns 6 and 2, so the assertion below fails. Reversal would not catch that.
+    """
     repository, seed = bundle()
-    repository.order = list(reversed(repository.order))  # id order now runs backwards through the conversation
+    order = [3, 0, 5, 2, 1, 4]  # turns 4, 1, 6, 3, 2, 5
+    repository.order = [repository.order[index] for index in order]
     found = neighbour_memories(repository, SCOPE, [seed], window=1, seeds=1)
     assert sorted(item.content for item in found) == ["turn 2 text", "turn 4 text"], (
         "the turns either side of turn 3, whatever order the repository hands them back in"
     )
+
+
+def test_a_closed_neighbour_is_dropped_when_the_caller_says_so() -> None:
+    """Truth resolution marks a replaced fact with ``valid_until``; the now view hides it and the fill must too."""
+    repository, seed = bundle()
+    closed = repository.memories["m2"]
+    closed.valid_until = START
+    closed.replaced_by_id = repository.memories["m5"].id
+    with_closed = neighbour_memories(repository, SCOPE, [seed], window=1, seeds=1)
+    assert "turn 2 text" in [item.content for item in with_closed], (
+        "with truth resolution off the closed fact is still shown, exactly as search does"
+    )
+    dropped = neighbour_memories(repository, SCOPE, [seed], window=1, seeds=1, drop_closed=True)
+    assert [item.content for item in dropped] == ["turn 4 text"], "with it on, the closed neighbour is not appended"

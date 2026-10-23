@@ -756,11 +756,12 @@ class MemoryService:
         room = assembler.max_chars - len(block)
         if room < MIN_FILL_ROOM:
             return block
-        extra = neighbour_memories(self._repository, scope, results)
+        extra = neighbour_memories(self._repository, scope, results, drop_closed=self._truth_resolution)
         if not extra:
             return block
         # The caller's items are laid out first, unchanged and in order; these only fill what they left. No search
-        # happens here, so nothing that was ranked can move: the off block is a byte prefix of this one.
+        # happens here, so nothing that was ranked can move. (With SEVERIAN_CONFLICT_NOTES or SEVERIAN_SUFFICIENCY on,
+        # a trailing note follows the appended items, so the items and their order are what stay identical.)
         results.extend(
             RetrievalResult(
                 memory=memory,
