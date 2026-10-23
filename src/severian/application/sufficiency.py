@@ -53,7 +53,6 @@ DETAIL_SLOTS = frozenset(
         "plans",
         "preferences",
         "process",
-        "projects",
         "qualifications",
         "rationale",
         "reaction",

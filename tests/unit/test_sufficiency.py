@@ -104,3 +104,22 @@ def test_matches_singular_and_plural_of_a_slot_word() -> None:
 def test_a_missing_query_means_no_note() -> None:
     assert sufficiency_note(None, TRELLO) is None
     assert sufficiency_note("   ", TRELLO) is None
+
+
+@pytest.mark.parametrize(
+    ("query", "items"),
+    [
+        # measured controls that fired before "project" left the slot list: too common a word to treat as a slot
+        (
+            "I'm going back to our previous conversation about the grant aim page on molecular subtypes. "
+            "Can you remind me what were the three objectives we outlined for the project?",
+            ["user: The three objectives were to identify subtypes, study their significance, and build biomarkers."],
+        ),
+        (
+            "What did Mel and her kids paint in their latest project in July 2023?",
+            ["user: We painted a sunset with a palm tree on the big canvas."],
+        ),
+    ],
+)
+def test_common_words_are_not_detail_slots(query: str, items: list[str]) -> None:
+    assert sufficiency_note(query, items) is None
