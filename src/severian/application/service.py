@@ -25,6 +25,7 @@ from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.emptyitems import demote_empty, drop_empty_enabled
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.factslots import asks_about_past
+from severian.application.fillbudget import fill_budget_enabled, neighbour_memories
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
@@ -174,6 +175,7 @@ class MemoryService:
         reply_trim: bool | None = None,
         conflict_notes: bool | None = None,
         drop_empty: bool | None = None,
+        fill_budget: bool | None = None,
     ) -> None:
         # Round 3 fixes, each off by default (None = read its SEVERIAN_* switch):
         # (a) SEVERIAN_REPLY_TRIM: when a context does not fit, the assistant's replies go before any user words.
@@ -183,6 +185,9 @@ class MemoryService:
         self._reply_trim = reply_trim_enabled() if reply_trim is None else reply_trim
         self._conflict_notes = conflict_notes_enabled() if conflict_notes is None else conflict_notes
         self._drop_empty = drop_empty_enabled() if drop_empty is None else drop_empty
+        # Handoff 1 (SEVERIAN_FILL_BUDGET; off by default): assembly spends the character budget the caller's own
+        # items leave empty on the turns around them, appended after those items, with no extra search.
+        self._fill_budget = fill_budget_enabled() if fill_budget is None else fill_budget
         # Handoff 1 (SEVERIAN_TRUTH_RESOLUTION; off by default): memories a newer fact closed leave the "now"
         # view and show up, dated, in "history"; a question about the past reads "history".
         self._truth_resolution = truth_resolution_enabled() if truth_resolution is None else truth_resolution
@@ -743,6 +748,19 @@ class MemoryService:
             )
         stored = [result.memory.content for result in results]
         note = conflict_note(stored, query=query) if self._conflict_notes else None
+        if self._fill_budget:
+            # SEVERIAN_FILL_BUDGET: the caller's items are laid out first, unchanged and in order; these only spend
+            # the room they leave. No search happens here, so nothing that was ranked can move.
+            results.extend(
+                RetrievalResult(
+                    memory=memory,
+                    source_observation_ids=memory.source_observation_ids,
+                    lexical_score=0.0,
+                    vector_score=0.0,
+                    fused_score=0.0,
+                )
+                for memory in neighbour_memories(self._repository, scope, results)
+            )
         return assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note)
 
     def health(self) -> HealthReport:

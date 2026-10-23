@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from severian.application.fillbudget import pool_limit
 from severian.application.sufficiency import NOTE
 from severian.application.worker import DerivationWorker
 from severian.composition import ServiceBundle, build_bundle
@@ -120,25 +119,23 @@ def test_compact_cites_spend_less_and_still_resolve(make) -> None:
     assert not (set(memory_ids) & memories), "compact: the ids in the brackets are observation ids, not memory ids"
 
 
-def test_fill_budget_adds_items_only_where_there_is_room(make) -> None:
-    probe = "ledger item reviewed"
-    assert pool_limit(10) == 10
-    provider_off = _provider(make(), max_context_chars=20_000)
-    for i in range(20):
-        provider_off.sync_turn(f"note {i}: the ledger item number {i} was reviewed.", "ok")
-    off = provider_off.prefetch(probe, derive=True, limit=10)
-    assert len([line for line in off.split("\n\n") if "source: " in line]) <= 10, "off: exactly the top limit"
+def test_fill_appends_the_turns_either_side_without_moving_the_top(make) -> None:
+    off_bundle = make()
+    save(off_bundle, A, *TURNS)
+    off = context(off_bundle, A, "sprint 1 deadline", limit=2)
 
-    provider_on = _provider(make("SEVERIAN_FILL_BUDGET"), max_context_chars=20_000)
-    for i in range(20):
-        provider_on.sync_turn(f"note {i}: the ledger item number {i} was reviewed.", "ok")
-    on = provider_on.prefetch(probe, derive=True, limit=10)
-    assert len([line for line in on.split("\n\n") if "source: " in line]) > 10, (
-        "fill: with room to spare the block keeps adding ranked items past limit"
+    on_bundle = make("SEVERIAN_FILL_BUDGET")
+    save(on_bundle, A, *TURNS)
+    on = context(on_bundle, A, "sprint 1 deadline", limit=2)
+
+    assert _without_ids(on).startswith(_without_ids(off)), (
+        "fill appends: every item the caller already had is still there, in the same place"
     )
+    assert len(on) > len(off), "and it spends the room the caller's own items left empty"
+    assert "Trello" in _without_ids(on), "the next turn of the same conversation is the text it adds"
 
 
-def test_fill_budget_leaves_a_tight_budget_alone(make) -> None:
+def test_fill_is_a_no_op_when_the_budget_is_already_full(make) -> None:
     tight = _provider(make(), max_context_chars=300)
     for i in range(20):
         tight.sync_turn(f"note {i}: the ledger item number {i} was reviewed.", "ok")
@@ -150,8 +147,33 @@ def test_fill_budget_leaves_a_tight_budget_alone(make) -> None:
     on = tight_on.prefetch("ledger item reviewed", derive=True, limit=10)
     # The two stores mint their own ids, so compare the visible text, not the uuids.
     assert _without_ids(on) == _without_ids(off), (
-        "fill: a tight budget runs out inside the first limit items, exactly as today"
+        "fill: with no room left in the budget nothing is added, exactly as today"
     )
+
+
+def test_fill_never_reads_another_profiles_conversation(make) -> None:
+    bundle = make("SEVERIAN_FILL_BUDGET")
+    save(bundle, A, "user: Alice's sprint 1 deadline is April 1, 2024.\nassistant: April 1.")
+    save(bundle, B, "user: Bob's sprint 1 deadline is June 9, 2024.\nassistant: June 9.", session="s0002")
+    block = context(bundle, A, "sprint 1 deadline")
+    assert "Alice" in block
+    assert "Bob" not in block, "fill only reads the caller's own conversations"
+
+
+def test_fill_citations_resolve_through_the_tools_path(make) -> None:
+    bundle = make("SEVERIAN_FILL_BUDGET")
+    save(bundle, A, *TURNS)
+    block = context(bundle, A, "sprint 1 deadline", limit=2)
+    assert "Trello" in block, "the appended neighbour is in the block"
+    cited = [
+        part
+        for line in re.findall(r"source: ([0-9a-f,\- ]+)", block)
+        for part in (piece.strip() for piece in line.split(","))
+        if part
+    ]
+    assert cited, "the block still names its sources"
+    for observation_id in cited:
+        assert bundle.service.get_observation(A, observation_id).id == observation_id
 
 
 def _without_ids(block: str) -> str:
