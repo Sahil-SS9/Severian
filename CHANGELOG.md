@@ -3,7 +3,10 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased]
+[Unreleased]
+
+Local build `0.3.11+h2` (the `+h2` local version keeps a wheel from this branch from being mistaken for the `0.3.11`
+release; the wrapper, manifest and provider report the same version).
 
 ### Added
 - `SEVERIAN_LINK_SEEDS` / `SEVERIAN_LINK_WEIGHT` (off, seeds 0): name links. A name in one of the best matches
