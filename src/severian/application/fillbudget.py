@@ -55,6 +55,19 @@ FILL_SEEDS = 3
 #: Bounds: ten items with five turns each side is already 100 turns of a conversation.
 MAX_WINDOW = 5
 MAX_SEEDS = 10
+#: Below this much spare room (characters) the fill does not even read: two frames and a few words cannot help.
+MIN_FILL_ROOM = 160
+
+
+def _turn_order(observation: Observation) -> tuple[int, float, str]:
+    """Conversation order: the turn number when the source carries one, else save time, then id.
+
+    The repository returns a session's observations in id order, which is not conversation order and would make
+    "the turns either side" mean nothing.
+    """
+    raw = str(observation.source.get("turn", "")).strip()
+    turn = int(raw) if raw.isdigit() else 0
+    return (turn, observation.created_at.timestamp(), observation.id)
 
 
 def fill_budget_enabled() -> bool:
@@ -114,17 +127,19 @@ def neighbour_memories(
     if not sessions:
         return []
 
-    turns: dict[str, list[str]] = {}
+    turns: dict[str, list[Observation]] = {}
     for observation in repository.list_session_observations(scope, sorted(sessions)):
         session = str(observation.source.get("session_id", "")).strip()
         if session:
-            turns.setdefault(session, []).append(observation.id)
+            turns.setdefault(session, []).append(observation)
     if not turns:
         return []
+    for observations in turns.values():
+        observations.sort(key=_turn_order)
     position = {
-        observation_id: (session, index)
-        for session, ids in turns.items()
-        for index, observation_id in enumerate(ids)
+        observation.id: (session, index)
+        for session, observations in turns.items()
+        for index, observation in enumerate(observations)
     }
 
     wanted: list[str] = []  # seed rank, then conversation order around that seed
@@ -134,10 +149,10 @@ def neighbour_memories(
             for observation_id in result.memory.source_observation_ids
             if observation_id in position
         ):
-            ids = turns[session]
+            observations = turns[session]
             low = max(0, index - window)
-            high = min(len(ids), index + window + 1)
-            wanted.extend(ids[at] for at in range(low, high) if at != index)
+            high = min(len(observations), index + window + 1)
+            wanted.extend(observations[at].id for at in range(low, high) if at != index)
     if not wanted:
         return []
 

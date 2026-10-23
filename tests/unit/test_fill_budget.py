@@ -150,3 +150,13 @@ def test_a_seed_with_no_session_adds_nothing() -> None:
     for item in repository.observations.values():
         item.source.pop("session_id", None)
     assert neighbour_memories(repository, SCOPE, [seed], window=2, seeds=3) == []
+
+
+def test_conversation_order_is_not_the_repository_order() -> None:
+    """The repository returns a session's turns in id order; the fill must read the turn number, not that order."""
+    repository, seed = bundle()
+    repository.order = list(reversed(repository.order))  # id order now runs backwards through the conversation
+    found = neighbour_memories(repository, SCOPE, [seed], window=1, seeds=1)
+    assert sorted(item.content for item in found) == ["turn 2 text", "turn 4 text"], (
+        "the turns either side of turn 3, whatever order the repository hands them back in"
+    )

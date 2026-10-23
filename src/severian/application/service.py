@@ -25,7 +25,7 @@ from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.emptyitems import demote_empty, drop_empty_enabled
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
 from severian.application.factslots import asks_about_past
-from severian.application.fillbudget import fill_budget_enabled, neighbour_memories
+from severian.application.fillbudget import MIN_FILL_ROOM, fill_budget_enabled, neighbour_memories
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
@@ -748,19 +748,29 @@ class MemoryService:
             )
         stored = [result.memory.content for result in results]
         note = conflict_note(stored, query=query) if self._conflict_notes else None
-        if self._fill_budget:
-            # SEVERIAN_FILL_BUDGET: the caller's items are laid out first, unchanged and in order; these only spend
-            # the room they leave. No search happens here, so nothing that was ranked can move.
-            results.extend(
-                RetrievalResult(
-                    memory=memory,
-                    source_observation_ids=memory.source_observation_ids,
-                    lexical_score=0.0,
-                    vector_score=0.0,
-                    fused_score=0.0,
-                )
-                for memory in neighbour_memories(self._repository, scope, results)
+        block = assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note)
+        if not self._fill_budget or not results:
+            return block
+        # SEVERIAN_FILL_BUDGET: only spend the room the caller's own items leave. When they already fill the budget
+        # (LongMemEval's items are long) nothing is read and the block is returned as built.
+        room = assembler.max_chars - len(block)
+        if room < MIN_FILL_ROOM:
+            return block
+        extra = neighbour_memories(self._repository, scope, results)
+        if not extra:
+            return block
+        # The caller's items are laid out first, unchanged and in order; these only fill what they left. No search
+        # happens here, so nothing that was ranked can move: the off block is a byte prefix of this one.
+        results.extend(
+            RetrievalResult(
+                memory=memory,
+                source_observation_ids=memory.source_observation_ids,
+                lexical_score=0.0,
+                vector_score=0.0,
+                fused_score=0.0,
             )
+            for memory in extra
+        )
         return assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note)
 
     def health(self) -> HealthReport:
