@@ -95,6 +95,10 @@ def test_matches_singular_and_plural_of_a_slot_word() -> None:
     assert sufficiency_note("What specific rule did I enforce on Airbnb lint?", TRELLO) == NOTE
     assert sufficiency_note("What specific rules did I enforce on Airbnb lint?", TRELLO) == NOTE
     assert sufficiency_note("What specific rule did I enforce?", ["user: The rule was no unused vars."]) is None
+    assert sufficiency_note("What specific rules did I enforce?", ["user: The rule was no unused vars."]) is None
+    assert sufficiency_note("What specific rule did I enforce?", ["user: The rules were posted."]) is None
+    assert sufficiency_note("What criteria did I use?", ["user: My criterion was impact."]) is None
+    assert sufficiency_note("What strategies did I use?", ["user: My strategy was to wait."]) is None
 
 
 def test_a_missing_query_means_no_note() -> None:

@@ -64,7 +64,6 @@ DETAIL_SLOTS = frozenset(
         "rules",
         "schedule",
         "sessions",
-        "specifics",
         "specifications",
         "step",
         "steps",
@@ -97,6 +96,9 @@ _VAGUE = frozenset(
 )
 _WORD = re.compile(r"[a-z0-9][a-z0-9'-]*")
 
+#: Irregular pairs where stripping a plural suffix gets the wrong stem.
+_ALIASES = {"criteria": "criterion", "criterion": "criterion"}
+
 
 def sufficiency_enabled() -> bool:
     """``SEVERIAN_SUFFICIENCY`` switches the line on. Off: the block is exactly as before."""
@@ -104,25 +106,32 @@ def sufficiency_enabled() -> bool:
 
 
 def _singular(word: str) -> str:
-    """A crude singular so ``rule``/``rules`` and ``criteria``/``criterion`` match across the pair."""
-    for suffix, strip in (("ies", "y"), ("ses", "s"), ("es", ""), ("s", "")):
-        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[: -len(suffix)] + strip
+    """A canonical form, so a question and an item match across singular/plural (``rule``/``rules``)."""
+    word = _ALIASES.get(word, word)
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("sses", "shes", "ches", "xes", "zes")) and len(word) > 4:
+        return word[:-2]
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        return word[:-1]
     return word
+
+
+#: The slot list in canonical form, so a question and an item meet on the same key.
+_SLOT_KEYS = frozenset(_singular(slot) for slot in DETAIL_SLOTS)
 
 
 def _content_words(text: str) -> list[str]:
     return [word for word in _WORD.findall(text.lower()) if word not in _STOP and len(word) > 2]
 
 
-def _item_words(items: Sequence[str]) -> set[str]:
-    """Every word the returned items hold, in both forms, so singular/plural picks up either."""
-    words: set[str] = set()
+def _item_keys(items: Sequence[str]) -> set[str]:
+    """Every word the returned items hold, canonical, so singular/plural picks up either form."""
+    keys: set[str] = set()
     for item in items:
         for word in _WORD.findall(item.lower()):
-            words.add(word)
-            words.add(_singular(word))
-    return words
+            keys.add(_singular(word))
+    return keys
 
 
 def sufficiency_note(query: str | None, items: Sequence[str]) -> str | None:
@@ -140,18 +149,20 @@ def sufficiency_note(query: str | None, items: Sequence[str]) -> str | None:
     asked = query
     for idiom in _IDIOMS:
         asked = re.sub(re.escape(idiom), " ", asked, flags=re.IGNORECASE)
-    have = _item_words(items)
-    words = _content_words(asked)
-    for word in words:
-        if word in DETAIL_SLOTS or _singular(word) in DETAIL_SLOTS:
-            if word not in have and _singular(word) not in have:
-                return NOTE
+    have = _item_keys(items)
+    for word in _content_words(asked):
+        key = _singular(word)
+        if key in _VAGUE:
+            continue
+        if key in _SLOT_KEYS and key not in have:
+            return NOTE
     marker = _SPECIFIC.search(asked)
     if marker is not None:
         for word in _content_words(asked[marker.end():])[:4]:
-            if word in _VAGUE:
+            key = _singular(word)
+            if key in _VAGUE:
                 continue
-            if word not in have and _singular(word) not in have:
+            if key not in have:
                 return NOTE
             break  # the first thing named after the marker is there, so the detail may be there too
     return None
