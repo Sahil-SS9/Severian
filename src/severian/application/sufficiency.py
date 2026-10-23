@@ -16,7 +16,8 @@ Both were measured against controls before being wired in: on the kept stores th
 abstention questions the stores hold (10 BEAM, 3 LongMemEval ``_abs``) and on 0 of 72 answerable single-session /
 single-hop questions whose evidence the re-read did find. The rest of the abstention set is attribute gaps whose
 nouns *are* present ("rules", "bugs"), which no lexical rule can see; that needs a semantic check and is left out on
-purpose rather than loosening the rule and firing on questions the items answer. Evidence: ``evidence/ctxeff/``.
+purpose rather than loosening the rule and firing on questions the items answer. Evidence:
+``SUFFICIENCY.md`` in ``~/data/benchmarks/sev-ctxeff-20261022/evidence/``.
 Off by default.
 """
 from __future__ import annotations

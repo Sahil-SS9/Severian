@@ -10,7 +10,7 @@ budget runs out inside the first ``limit`` items, so the extra candidates are ne
 
 The pool is bounded on purpose: search latency is gated at 1.10x (or 10 ms) of 0.3.11, and the over-fetch multiplies
 the work every search does. ``POOL_FACTOR`` and ``POOL_CAP`` are the only knobs, measured on the kept stores (see
-``evidence/ctxeff/SPEED.md`` in the handoff evidence directory). Off by default.
+``SPEED.md`` in ``~/data/benchmarks/sev-ctxeff-20261022/evidence/``). Off by default.
 """
 from __future__ import annotations
 
