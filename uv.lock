@@ -1269,7 +1269,7 @@ wheels = [
 
 [[package]]
 name = "severian"
-version = "0.3.11"
+version = "0.3.11+h1h2"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
