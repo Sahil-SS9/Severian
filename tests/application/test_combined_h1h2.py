@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
-from dataclasses import dataclass
 
 from severian.application.worker import DerivationWorker
 from severian.composition import build_bundle
