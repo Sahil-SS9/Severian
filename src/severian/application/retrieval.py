@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from severian.application.compactcites import frame
 from severian.application.eventtime import TimeWindow, as_utc, message_time
+from severian.application.extraction import extract_entities
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
 from severian.application.replytrim import fit_contents
@@ -53,6 +54,25 @@ def query_coverage(query: str, content: str) -> float:
     return sum(1 for token in q_tokens if token in c_tokens) / len(q_tokens)
 
 
+# Capitalised words that are never someone or something the user means: dates, sentence words.
+_NOT_NAMES = frozenset(
+    "my user assistant mon tue wed thu fri sat sun monday tuesday wednesday thursday friday saturday sunday "
+    "jan feb mar apr jun jul aug sep sept oct nov dec january february march april may june july august "
+    "september october november december today yesterday tomorrow next last".split()
+)
+_DATE_PREFIX = re.compile(r"^\[[^\]]*\]\s*")
+
+
+def link_names(content: str) -> list[str]:
+    """The names a memory mentions (people, places, firms), for name links. Dates and sentence words dropped."""
+    names: list[str] = []
+    for _kind, name in extract_entities(_DATE_PREFIX.sub("", content)):
+        words = [word for word in name.split() if word.casefold() not in _NOT_NAMES]
+        if words and " ".join(words) not in names:
+            names.append(" ".join(words))
+    return names
+
+
 @dataclass(frozen=True)
 class SearchTuning:
     """Step 2 search knobs. The defaults reproduce the pre-tuning behaviour exactly.
@@ -74,10 +94,16 @@ class SearchTuning:
     time_boost: float = 2.0
     # Step 4: weight of the "when this will be needed" cue channel in fusion. 0 = cues not searched.
     cue_weight: float = 0.0
+    # Round 2 idea 2: names in the best ``link_seeds`` matches pull in other memories naming them,
+    # scored at ``link_weight`` times the match. 0 = off.
+    link_seeds: int = 0
+    link_weight: float = 0.5
 
     def __post_init__(self) -> None:
         if self.fusion_k < 1:
             raise ValueError("fusion_k must be at least 1")
+        if self.link_seeds < 0 or self.link_weight < 0:
+            raise ValueError("link_seeds and link_weight must not be negative")
         weights = (self.lexical_weight, self.vector_weight, self.neighbour_weight, self.cue_weight)
         if min(weights) < 0 or self.time_boost < 1:
             raise ValueError("search weights must not be negative and time_boost must be at least 1")
@@ -98,6 +124,8 @@ class SearchTuning:
             neighbour_seeds=int(env.get("SEVERIAN_NEIGHBOUR_SEEDS", defaults.neighbour_seeds)),
             time_boost=float(env.get("SEVERIAN_TIME_BOOST", defaults.time_boost)),
             cue_weight=float(env.get("SEVERIAN_FUSION_CUE", defaults.cue_weight)),
+            link_seeds=int(env.get("SEVERIAN_LINK_SEEDS", defaults.link_seeds)),
+            link_weight=float(env.get("SEVERIAN_LINK_WEIGHT", defaults.link_weight)),
         )
 
 
@@ -278,7 +306,49 @@ class RetrievalService:
                 return []
         if tuning.neighbours:
             ranked = self._with_neighbours(scope, ranked, limit=limit, as_of=as_of)
+        if tuning.link_seeds:
+            ranked = self._with_links(scope, ranked, as_of=as_of)
         return ranked[:limit]
+
+    def _with_links(
+        self, scope: Scope, ranked: list[RetrievalResult], *, as_of: datetime | None = None
+    ) -> list[RetrievalResult]:
+        """Add memories naming someone the best matches name (HippoRAG-style seed -> entity -> passage hop).
+
+        One keyword search per distinct name; a linked memory scores ``link_weight`` times its
+        match, so real matches stay first, and a memory that already matched keeps its own score.
+        Off (``link_seeds=0``): the ranking is exactly as it was, and no extra search runs.
+        """
+        tuning = self.tuning
+        present = {item.memory.id for item in ranked}
+        added: list[RetrievalResult] = []
+        searched: set[str] = set()
+        for seed in ranked[: tuning.link_seeds]:
+            for name in link_names(seed.memory.content):
+                if name.casefold() in searched:
+                    continue
+                searched.add(name.casefold())
+                for hit in self.lexical.search(scope, name, limit=10):
+                    if hit.memory_id in present:
+                        continue
+                    memory = self.repository.get_memory(scope, hit.memory_id)
+                    if as_of is not None and not self._known_by(scope, memory, as_of):
+                        continue
+                    present.add(memory.id)
+                    added.append(
+                        RetrievalResult(
+                            memory=memory,
+                            source_observation_ids=list(memory.source_observation_ids),
+                            lexical_score=0.0,
+                            vector_score=0.0,
+                            fused_score=seed.fused_score * tuning.link_weight,
+                        )
+                    )
+        if not added:
+            return ranked
+        merged = [*ranked, *added]
+        merged.sort(key=lambda item: (-item.fused_score, item.memory.content, item.memory.id))
+        return merged
 
     def _known_by(self, scope: Scope, memory: Memory, as_of: datetime) -> bool:
         """True when the memory's source message was written by ``as_of`` (message time, else save time)."""

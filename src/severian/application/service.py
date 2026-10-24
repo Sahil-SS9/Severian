@@ -21,6 +21,14 @@ from typing import Any
 
 from severian.application.anticipation import MAX_REMINDERS, DueContext, anticipation_enabled, match_due
 from severian.application.conflicts import conflict_note, conflict_notes_enabled
+from severian.application.context_v2 import (
+    ContextItem,
+    ContextV2Assembler,
+    context_v2_enabled,
+    quote_of,
+    said_date,
+    state_label,
+)
 from severian.application.derivation import DerivationGateway, DerivationService
 from severian.application.emptyitems import demote_empty, drop_empty_enabled
 from severian.application.eventtime import as_utc, event_time_enabled, query_window
@@ -34,7 +42,7 @@ from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
 from severian.application.statements import assess_truth, drop_replaced
 from severian.application.truthresolution import truth_resolution_enabled
-from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled
+from severian.application.userfacts import FACT_KIND, FACTS_JOB, user_facts_enabled, user_text
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import ERASED, Memory, Observation, Scope, TaskNote, TruthState
 
@@ -717,6 +725,58 @@ class MemoryService:
             kept = [item for item in pool if assessed[item.memory.id].state is not TruthState.HISTORICAL]
         return kept[:limit], labels
 
+    def context_block(
+        self,
+        scope: Scope,
+        hits: list[SearchHitView],
+        *,
+        max_chars: int | None = None,
+    ) -> str | None:
+        """The v2 memory block for ``hits`` (``SEVERIAN_CONTEXT_FORMAT=v2``), or None when the v1
+        format is active. Fails closed on a hit outside ``scope``; the text always comes from the
+        canonical memory and its source turn, never from the passed view.
+        """
+        if any(hit.scope != scope for hit in hits):
+            raise NotFoundError("context hit is outside the requested scope")
+        if not context_v2_enabled():
+            return None
+        return ContextV2Assembler(max_chars=max_chars).assemble(self._context_items_v2(scope, hits))
+
+    def _context_items_v2(self, scope: Scope, hits: list[SearchHitView]) -> list[ContextItem]:
+        items: list[ContextItem] = []
+        for hit in hits:
+            memory = self._repository.get_memory(scope, hit.memory_id)
+            observation: Observation | None = None
+            quote = None
+            if memory.kind == FACT_KIND and memory.source_observation_ids:
+                observation = self._source_observation(scope, memory.source_observation_ids[0])
+                if observation is not None:
+                    quote = quote_of(user_text(observation.content, observation.source))
+            # The date the user said it: the memory's own label first; a fact's source turn
+            # second (facts are clean sentences and carry no label themselves); save time last.
+            said = said_date(memory.content)
+            if said is None and observation is not None:
+                said = said_date(observation.content)
+            if said is None:
+                said = said_date(memory.content, memory.created_at)
+            items.append(
+                ContextItem(
+                    content=memory.content,
+                    state=state_label(hit.truth_state),
+                    said=said,
+                    quote=quote,
+                    sources=", ".join(memory.source_observation_ids),
+                )
+            )
+        return items
+
+    def _source_observation(self, scope: Scope, observation_id: str) -> Observation | None:
+        """The raw turn a user fact came from, when it still exists (rolled-back ones do not)."""
+        try:
+            return self._repository.get_observation(scope, observation_id)
+        except NotFoundError:
+            return None
+
     def assemble_context(
         self,
         scope: Scope,
@@ -729,6 +789,10 @@ class MemoryService:
         assistant's replies are the evidence (a) and whether a disagreement is about the question (b)."""
         if any(hit.scope != scope for hit in hits):
             raise NotFoundError("context hit is outside the requested scope")
+        if context_v2_enabled():
+            # Handoff 2: the answerer-facing block (the same renderer the benchmark adapter uses). It carries
+            # each note's current/replaced state, so the trailing conflict note is not added as well.
+            return ContextV2Assembler(max_chars=max_chars).assemble(self._context_items_v2(scope, hits))
         assembler = self._context if max_chars is None else ContextAssembler(max_chars=max_chars)
         # ARCH-04: assemble from the CANONICAL Memory (fetched by id), not
         # from a reconstructed proxy — the proxy duplicated the Memory

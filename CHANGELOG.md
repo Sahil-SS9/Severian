@@ -5,8 +5,8 @@ variables; see the Configuration table in the [README](README.md).
 
 ## [Unreleased]
 
-Local build `0.3.11+ctxeff` (the `+ctxeff` local version keeps a wheel from this branch from being mistaken for the
-`0.3.11` release).
+Local build `0.3.11+h1h2` (Handoffs 1 and 2 combined for the before/after re-score; the local version keeps a wheel from
+this branch from being mistaken for the `0.3.11` release; the wrapper, manifest and provider report the same version).
 
 ### Added
 - `SEVERIAN_FILL_BUDGET` (off): assembly spends the character window the caller's own items leave empty on the turns
@@ -18,6 +18,17 @@ Local build `0.3.11+ctxeff` (the `+ctxeff` local version keeps a wheel from this
 - `SEVERIAN_COMPACT_CITES` (off): one id per item instead of two. The block cites the source observation ids in the
   bracket and drops the trailing `source:` line, saving about 45 characters per item; every cited id still resolves
   through `severian_get_observation`, `severian_correct` and `severian_forget`.
+- `SEVERIAN_LINK_SEEDS` / `SEVERIAN_LINK_WEIGHT` (off, seeds 0, **parked**: lowered multi-hop all-evidence 23.8% -> 16.7% at equal budget
+  and slowed search 1.2-1.8x; keep off): name links. A name in one of the best matches
+  ("my manager is Kiran") runs one keyword search of its own and pulls in the memories that name the same person
+  ("Kiran is allergic to sesame"), scored at `LINK_WEIGHT` times the match so real matches stay first. Targets
+  multi-hop questions. Off means the ranking and the number of searches are exactly as before.
+- `SEVERIAN_CONTEXT_FORMAT=v2` (off): the answerer-facing block. It leads with the most directly relevant note, numbers
+  each note with its state (current / also true together / earlier, replaced / change) and the date it was said, quotes
+  the user's own words for a user fact, and ends with an explicit "if none of these notes is relevant, say you don't
+  know". Off keeps the 0.3.11 block byte for byte. **Order with conflict notes** (on by default since 0.3.9): a note's
+  state label carries the conflict information on the note it belongs to, so when v2 is on the trailing conflict note
+  is not added after the don't-know rule — one voice, nothing repeated.
 
 ### Parked
 - `SEVERIAN_SUFFICIENCY` (off, **not shippable as designed**): the line fires on a missing *word*, not a missing
