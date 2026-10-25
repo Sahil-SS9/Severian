@@ -55,7 +55,8 @@ def grouped(title: str, groups: list[tuple[str, list[tuple[str, float, str]], st
         for bi, (_, value, colour) in enumerate(bars):
             h = plot_h * value / ymax
             x, y = x0 + bi * bw, top + plot_h - h
-            body.append(f"<rect x='{x + 2:.1f}' y='{y:.1f}' width='{bw - 4:.1f}' height='{h:.1f}' fill='{colour}' rx='2'/>")
+            body.append(f"<rect x='{x + 2:.1f}' y='{y:.1f}' width='{bw - 4:.1f}' height='{h:.1f}' "
+                        f"fill='{colour}' rx='2'/>")
             body.append(_text(x + bw / 2, y - 5, f"{value:.1f}", text_anchor="middle", font_size="11"))
         cx = left + gi * gw + gw / 2
         body.append(_text(cx, top + plot_h + 20, label, text_anchor="middle", font_weight="600"))
@@ -70,7 +71,9 @@ def grouped(title: str, groups: list[tuple[str, list[tuple[str, float, str]], st
     return _svg(width, height, body, title)
 
 
-def leaderboard(title: str, rows: list[tuple[str, float, bool]], *, width: int = 360, bar_h: int = 18) -> tuple[list[str], int]:
+def leaderboard(
+    title: str, rows: list[tuple[str, float, bool]], *, width: int = 360, bar_h: int = 18
+) -> tuple[list[str], int]:
     """One horizontal-bar panel (sorted high to low); returns (svg parts, panel height). Highlighted rows are ours."""
     body = [_text(width / 2, 0, title, text_anchor="middle", font_weight="600")]
     label_w, value_w = 150, 46
@@ -80,7 +83,8 @@ def leaderboard(title: str, rows: list[tuple[str, float, bool]], *, width: int =
         colour = SEV if ours else (LCMX if name == "LCM-X" else OTHER)
         weight = "600" if ours else "400"
         body.append(_text(label_w - 6, y + bar_h - 5, name, text_anchor="end", font_weight=weight))
-        body.append(f"<rect x='{label_w}' y='{y}' width='{plot_w * value / 100:.1f}' height='{bar_h}' fill='{colour}' rx='2'/>")
+        body.append(f"<rect x='{label_w}' y='{y}' width='{plot_w * value / 100:.1f}' height='{bar_h}' "
+                    f"fill='{colour}' rx='2'/>")
         body.append(_text(label_w + plot_w * value / 100 + 4, y + bar_h - 5, f"{value:.2f}", font_weight=weight))
     return body, 12 + len(rows) * (bar_h + 4)
 
