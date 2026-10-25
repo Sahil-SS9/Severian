@@ -1,6 +1,6 @@
 """Render the OmniMemEval 2026-10 benchmark charts as plain SVG (no plotting dependency).
 
-    python scripts/bench_charts.py            # reads docs/benchmarks/data/omnimemeval-2026-10.json
+    python scripts/bench_charts.py            # reads docs/benchmarks/omnimemeval/results-2026-10.json
                                               # writes docs/benchmarks/img/*.svg
 
 Every number comes from the JSON file; the charts carry no values of their own.
@@ -12,7 +12,7 @@ from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "docs" / "benchmarks" / "data" / "omnimemeval-2026-10.json"
+DATA = ROOT / "docs" / "benchmarks" / "omnimemeval" / "results-2026-10.json"
 OUT = ROOT / "docs" / "benchmarks" / "img"
 
 SEV = "#4f46e5"  # Severian
