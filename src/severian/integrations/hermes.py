@@ -53,8 +53,8 @@ _TASK_ACTIONS = ("set", "get", "list", "clear")
 _TASK_WRITES = frozenset({"set", "clear"})
 
 # The prefetch context cap. The Hermes loader builds the provider with no arguments, so the cap is read from
-# SEVERIAN_CONTEXT_CHARS (0.3.12); unset keeps the long-standing 8,000. Benchmarks (docs/benchmarks/omnimemeval-2026-10.md)
-# show the cap is the main cost/quality trade-off on stores of long messages.
+# SEVERIAN_CONTEXT_CHARS (0.3.12); unset keeps the long-standing 8,000. Benchmarks
+# (docs/benchmarks/omnimemeval-2026-10.md) show the cap is the main cost/quality trade-off on stores of long messages.
 DEFAULT_CONTEXT_CHARS = 8_000
 MIN_CONTEXT_CHARS = 1_000
 

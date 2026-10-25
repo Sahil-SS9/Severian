@@ -99,7 +99,9 @@ def test_prefetch_honours_the_configured_cap(tmp_path, monkeypatch):
         for cap in ("1000", "4000"):
             monkeypatch.setenv("SEVERIAN_CONTEXT_CHARS", cap)
             provider = SeverianMemoryProvider(service=service, gateway=PassThrough())
-            provider.initialize(session_id=f"s{cap}", tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1")
+            provider.initialize(
+                session_id=f"s{cap}", tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1"
+            )
             for i in range(6):
                 provider.sync_turn(f"{i} {LONG}", "Noted.")
             block = provider.prefetch("quarterly review Leeds office", derive=True, limit=10)
