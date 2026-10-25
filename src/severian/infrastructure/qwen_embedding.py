@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from pathlib import Path
 from typing import Any
 
@@ -69,15 +68,13 @@ class QwenEmbedding:
                 / "hub"
                 / "models--Qwen--Qwen3-Embedding-0.6B"
             )
-            if model_cache.is_dir():
-                # Cached revision is immutable and should not make a network
-                # request during service start-up.
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ["TQDM_DISABLE"] = "1"
-
             from sentence_transformers import SentenceTransformer
 
             kwargs: dict[str, object] = {"revision": self.revision}
+            if model_cache.is_dir():
+                # The cached revision is immutable: load it without a network request. Passed to
+                # the loader, not set in os.environ, so the rest of the Hermes process is unaffected.
+                kwargs["local_files_only"] = True
             if self.device is not None:
                 kwargs["device"] = self.device
             self._model = SentenceTransformer(self.model_name, **kwargs)

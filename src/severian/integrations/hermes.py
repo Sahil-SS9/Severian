@@ -190,7 +190,7 @@ def _build_default_service_from_env() -> MemoryService:
     from severian.composition import build_bundle
 
     embedding = _resolve_embedding()
-    dsn = os.environ.get("SEVERIAN_DSN", "").strip()
+    dsn = _severian_dsn()
     if dsn:
         bundle = build_bundle(backend="postgresql", dsn=dsn, embedding=embedding)
     else:
@@ -207,6 +207,22 @@ def _build_default_service_from_env() -> MemoryService:
     # Keep the bundle reachable so shutdown() can release it.
     provider_bundles.append(bundle)
     return bundle.service
+
+
+def _severian_dsn() -> str:
+    """``SEVERIAN_DSN`` through Hermes's profile-aware secret scope.
+
+    The DSN can carry a database password, and one Hermes process may serve several
+    profiles, so a bare environment read could pick up another profile's value. Hermes's
+    ``get_secret`` honours the active profile and fails closed when no scope is active under
+    multiplexing (its error propagates). A Hermes without ``agent.secret_scope`` has one
+    profile per process, so the environment is the only source there.
+    """
+    try:
+        from agent.secret_scope import get_secret  # type: ignore[import-not-found,unused-ignore]
+    except ImportError:
+        return os.environ.get("SEVERIAN_DSN", "").strip()
+    return (get_secret("SEVERIAN_DSN", "") or "").strip()
 
 
 def _default_storage_root() -> Path:

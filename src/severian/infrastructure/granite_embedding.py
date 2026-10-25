@@ -56,7 +56,6 @@ class GraniteR2Embedding:
         if self._model is not None:
             return True
         try:
-            import os
             from pathlib import Path
 
             # The model is downloaded once and cached locally. When the cache
@@ -71,18 +70,11 @@ class GraniteR2Embedding:
                 / "hub"
                 / "models--ibm-granite--granite-embedding-107m-multilingual"
             )
-            if model_cache.is_dir():
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            # Silence tqdm progress bars — model LOADING and per-query
-            # ENCODE both emit "Batches: ..." bars from sentence-transformers.
-            # Set unconditionally (not setdefault) so a caller's own
-            # TQDM_DISABLE=1 (fleet .env) can never be re-enabled here, and a
-            # standalone script that never loaded the .env still gets silence.
-            os.environ["TQDM_DISABLE"] = "1"
-
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+            # Offline when cached, passed to the loader rather than set in os.environ so the
+            # rest of the Hermes process is unaffected. Encode calls pass show_progress_bar=False.
+            self._model = SentenceTransformer(self.model_name, local_files_only=model_cache.is_dir())
             logger.info("Granite R2 embeddings loaded (dim=%s)", self.dimension)
             return True
         except Exception as exc:  # pragma: no cover - env-dependent
