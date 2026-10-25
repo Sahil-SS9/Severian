@@ -25,7 +25,7 @@ FONT = "font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'"
 BENCH = {"locomo": "LoCoMo", "lme": "LongMemEval", "beam": "BEAM 100K"}
 SEVERIAN = "Severian 0.3.11"
 DOCS = (ROOT / "README.md", ROOT / "docs" / "benchmarks" / "omnimemeval-2026-10.md")
-_BLOCK = re.compile(r"(<!-- board:(\w+) -->).*?(<!-- /board:\2 -->)", re.S)
+_BLOCK = re.compile(r"(<!-- (board|breakdown):(\w+) -->).*?(<!-- /\2:\3 -->)", re.S)
 
 
 def _svg(width: int, height: int, body: list[str], title: str) -> str:
@@ -184,12 +184,41 @@ def board_table(d: dict, key: str) -> str:
     return "\n".join("| " + " | ".join(r) + " |" for r in [cols, align, *rows])
 
 
+def breakdown_table(d: dict, key: str) -> str:
+    """A per-category breakdown table (computed by docs/benchmarks/omnimemeval/breakdowns.py), with its note."""
+    t = d["breakdowns"][key]
+    align = ["---" if c in ("Category", "Difficulty") else "---:" for c in t["columns"]]
+    lines = ["| " + " | ".join(r) + " |" for r in [t["columns"], align, *t["rows"]]]
+    return "\n".join([*lines, "", f"*{t['note']}*"])
+
+
+def render_block(d: dict, kind: str, key: str) -> str:
+    return board_table(d, key) if kind == "board" else breakdown_table(d, key)
+
+
+def category_chart(d: dict, key: str) -> str:
+    """Severian vs the best board system in each category (the name of that system under each pair)."""
+    table = d["board_tables"][key]
+    cols = table["columns"]
+    ours = dict(zip(cols[1:], d["severian_rows"][key], strict=True))
+    groups = []
+    for c in cols[2:]:
+        if c in ("Overall", "Context Tokens"):
+            continue
+        best = max(table["rows"], key=lambda r: _score(r[cols.index(c)]) or -1)
+        groups.append((c, [("Severian", _score(ours[c]) or 0.0, SEV),
+                           ("best other", _score(best[cols.index(c)]) or 0.0, OTHER)], best[0]))
+    return grouped(f"{BENCH[key]} by category: Severian vs the best other system", groups,
+                   legend=[("Severian 0.3.11 (our run)", SEV), ("best other board system (named below)", OTHER)],
+                   width=150 * len(groups) + 70)
+
+
 def refresh_docs(d: dict) -> list[Path]:
     """Rewrite every board block in the docs from the data; returns the files that changed."""
     changed = []
     for path in DOCS:
         text = path.read_text()
-        new = _BLOCK.sub(lambda m: f"{m.group(1)}\n{board_table(d, m.group(2))}\n{m.group(3)}", text)
+        new = _BLOCK.sub(lambda m: f"{m.group(1)}\n{render_block(d, m.group(2), m.group(3))}\n{m.group(4)}", text)
         if new != text:
             path.write_text(new)
             changed.append(path)
@@ -200,7 +229,8 @@ def main() -> None:
     d = json.loads(DATA.read_text())
     OUT.mkdir(parents=True, exist_ok=True)
     charts = {"h2h.svg": h2h_chart(d), "board.svg": board_chart(d), "strict.svg": strict_chart(d),
-              "settings.svg": settings_chart(d)}
+              "settings.svg": settings_chart(d), "categories-locomo.svg": category_chart(d, "locomo"),
+              "categories-lme.svg": category_chart(d, "lme")}
     for name, svg in charts.items():
         (OUT / name).write_text(svg)
         print(f"wrote {OUT / name} ({len(svg):,} bytes)")

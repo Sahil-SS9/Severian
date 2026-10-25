@@ -67,3 +67,17 @@ def test_board_rows_are_verbatim():
         plain = bc.board_table(DATA, key).replace("**", "").replace("🥇 ", "")
         for row in DATA["board_tables"][key]["rows"]:
             assert "| " + " | ".join(row) + " |" in plain, (key, row[0])
+
+
+def test_breakdown_blocks_match_the_data():
+    text = (bc.ROOT / "docs/benchmarks/omnimemeval-2026-10.md").read_text()
+    blocks = re.findall(r"<!-- breakdown:(\w+) -->\n(.*?)\n<!-- /breakdown:\1 -->", text, re.S)
+    assert {k for k, _ in blocks} == {k for k in DATA["breakdowns"] if not k.startswith("_")}
+    for key, body in blocks:
+        assert body == bc.breakdown_table(DATA, key), key
+
+
+def test_category_chart_names_the_best_system_per_category():
+    svg = bc.category_chart(DATA, "locomo")
+    ET.fromstring(svg)
+    assert svg.count(">MemOS<") == 4 and "88.7" in svg
