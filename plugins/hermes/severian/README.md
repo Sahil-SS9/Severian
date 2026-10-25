@@ -1,13 +1,13 @@
 # Severian memory plugin (for Hermes Agent)
 
-Drop-in memory provider for Hermes. Install:
+Drop-in memory provider for Hermes. Install from the plugin catalog:
 
 ```bash
-git clone https://github.com/Sahil-SS9/Severian.git
-cd Severian && uv sync
-uv run scripts/build_hermes_plugin.py "$HERMES_HOME/plugins/severian"
-hermes pm repair            # installs the pinned wheel into Hermes' managed environment
+hermes plugins install severian
 ```
+
+Or from a checkout: copy this folder to `$HERMES_HOME/plugins/severian/` and run `hermes pm repair`, which installs the
+pinned `severian` package from [PyPI](https://pypi.org/project/severian/) into Hermes' managed environment.
 
 Then set `memory: provider: severian` in `config.yaml` and restart Hermes.
 
@@ -30,4 +30,7 @@ See the repo root [README](../../README.md) for features, benchmark results and 
 - **Background worker is yours.** The plugin never spawns hidden processes; the derivation worker runs when you or
   your cron run `severian work`.
 - **No telemetry, no self-updating, no credential files.** Configuration is the `SEVERIAN_*` environment variables you
-  set; secrets such as `SEVERIAN_PG_DSN` come from your environment, never from config files the plugin reads.
+  set. The one secret, `SEVERIAN_DSN` (optional; it can hold a database password), is read through Hermes's
+  profile-aware secret scope (`agent.secret_scope.get_secret`), never from config files the plugin reads.
+- **No process-wide changes.** The optional embedding loaders pass offline mode to the model loader rather than setting
+  environment variables for the Hermes process.

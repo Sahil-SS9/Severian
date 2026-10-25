@@ -1,10 +1,11 @@
 """The Hermes plugin dir ships exactly the package version it pins.
 
 Hermes PM installs a plugin's ``[project].dependencies`` into its managed
-environment. Severian is not on a package index, so the plugin's catalog
-wrapper (``plugins/hermes/severian/pyproject.toml``) pins the wheel that
-``scripts/build_hermes_plugin.py`` places in ``wheels/``. If the pin, the
-wheel path, the manifest and the provider drift apart, the deployed plugin
+environment. The catalog wrapper (``plugins/hermes/severian/pyproject.toml``)
+pins ``severian==<version>`` from PyPI, and a catalog install copies only the
+plugin folder at the pinned commit, so the dependency must resolve from a
+package index: no local path source and no committed archive (catalog rule 17).
+If the pin, the manifest and the provider drift apart, the installed plugin
 either fails to resolve or reports a version it is not running.
 """
 
@@ -34,12 +35,18 @@ def _manifest_version() -> str:
     raise AssertionError("plugin.yaml declares no version")
 
 
-def test_wrapper_pins_the_wheel_it_ships():
+def test_wrapper_pins_the_package_version_from_an_index():
     version = _package()["version"]
     wrapper = _wrapper()
     assert wrapper["project"]["version"] == version
     assert wrapper["project"]["dependencies"] == [f"severian=={version}"]
-    assert wrapper["tool"]["uv"]["sources"]["severian"] == {"path": f"wheels/severian-{version}-py3-none-any.whl"}
+    # A path/url/git source would not exist in a catalog install of the plugin folder.
+    assert "sources" not in wrapper.get("tool", {}).get("uv", {})
+
+
+def test_plugin_folder_holds_only_reviewable_source():
+    shipped = sorted(p.relative_to(PLUGIN).as_posix() for p in PLUGIN.rglob("*") if p.is_file())
+    assert shipped == ["README.md", "__init__.py", "plugin.yaml", "pyproject.toml"]
 
 
 def test_wrapper_is_metadata_only():

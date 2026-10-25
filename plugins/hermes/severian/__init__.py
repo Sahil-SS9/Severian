@@ -9,8 +9,7 @@ it as ``$HERMES_HOME/plugins/severian/`` (or bundle it under
 
 The plugin is a thin shim: all behaviour lives in
 :mod:`severian.integrations.hermes`. Hermes PM installs the ``severian``
-package from the pinned wheel this directory's ``pyproject.toml`` declares
-(built by ``scripts/build_hermes_plugin.py``).
+package version this directory's ``pyproject.toml`` pins, from PyPI.
 """
 from __future__ import annotations
 

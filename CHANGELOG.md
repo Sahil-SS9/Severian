@@ -5,6 +5,22 @@ variables; see the Configuration table in the [README](README.md).
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-10-25
+
+Plugin-catalog review fixes (NousResearch/hermes-agent#142812). No change to memory behaviour.
+
+### Changed
+- Severian is published on PyPI. The Hermes plugin folder pins `severian==0.3.13` from the index instead of a local
+  wheel path, so a catalog install (which copies only the plugin folder) resolves its dependency. The plugin folder now
+  holds only reviewable source. Releases publish from `.github/workflows/release.yml` with trusted publishing and a
+  build attestation.
+- `SEVERIAN_DSN` is read through Hermes's profile-aware secret scope (`agent.secret_scope.get_secret`) and declared
+  under `requires_env` as an optional secret, so one Hermes process serving several profiles never picks up another
+  profile's database credentials. Under multiplexing with no active scope the read fails closed. A Hermes without the
+  secret scope falls back to the environment, as before.
+- The optional Qwen and Granite embedding loaders pass `local_files_only` to the loader instead of setting
+  `HF_HUB_OFFLINE` / `TQDM_DISABLE` for the whole Hermes process.
+
 ## [0.3.12] - 2026-10-25
 
 Every new switch is off by default; with all of them off, behaviour is byte-identical to 0.3.11 (tested). Measured on

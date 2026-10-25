@@ -37,7 +37,10 @@ uv run pytest -q
 A version lives in five places (`pyproject.toml` + `uv.lock`, `PROVIDER_VERSION` in
 `src/severian/integrations/hermes.py`, and `plugins/hermes/severian/plugin.yaml` + `pyproject.toml`);
 `tests/integrations/test_hermes_plugin_packaging.py` fails if one is missed. Add a [CHANGELOG](CHANGELOG.md) section,
-build the plugin with `scripts/build_hermes_plugin.py`, then tag `vX.Y.Z`.
+then push the tag `vX.Y.Z`: `.github/workflows/release.yml` checks the tag matches the version, builds the sdist and
+wheel from the tagged commit, attests them and publishes to PyPI by trusted publishing (no stored token). The catalog
+entry is re-pinned to the tagged commit only after the package is live. `scripts/build_hermes_plugin.py` rebuilds the
+wheel locally so its sha256 can be compared with the published one.
 
 ## Pull requests
 

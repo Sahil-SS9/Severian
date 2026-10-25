@@ -3,13 +3,16 @@
 
     python3 scripts/build_hermes_plugin.py OUTPUT_DIR [--commit REV]
 
-The wheel is built from a clean ``git archive`` of REV (default ``HEAD``),
-never from the working tree, with ``SOURCE_DATE_EPOCH`` set to the commit
-time so the same commit always yields the same wheel bytes. Writes::
+The plugin folder is exactly what a catalog install copies: the committed
+files at REV (default ``HEAD``). Its dependency, ``severian==<version>``,
+resolves from PyPI, where the release workflow publishes the wheel built from
+the tagged commit. This script also rebuilds that wheel from a clean
+``git archive`` of REV with ``SOURCE_DATE_EPOCH`` set to the commit time, and
+records its sha256 so the published wheel can be compared with this build.
+Writes::
 
-    OUTPUT_DIR/__init__.py, plugin.yaml, pyproject.toml   (as committed at REV)
-    OUTPUT_DIR/wheels/severian-<version>-py3-none-any.whl
-    OUTPUT_DIR/BUILD-INFO.json                            (commit, version, sha256)
+    OUTPUT_DIR/__init__.py, plugin.yaml, pyproject.toml, README.md  (as committed at REV)
+    OUTPUT_DIR/BUILD-INFO.json        (commit, version, sha256 of the reproducible wheel)
 
 OUTPUT_DIR must not exist: nothing is overwritten or deleted. Deploying is a
 separate, approved step: replace ``<hermes root>/plugins/severian`` with
@@ -32,7 +35,7 @@ import tomllib
 from pathlib import Path
 
 PLUGIN = "plugins/hermes/severian"
-SHIPPED = ("__init__.py", "plugin.yaml", "pyproject.toml")
+SHIPPED = ("__init__.py", "plugin.yaml", "pyproject.toml", "README.md")
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -40,13 +43,12 @@ def _git(repo: Path, *args: str) -> bytes:
 
 
 def _pinned_wheel(wrapper: dict, version: str) -> str:
-    """The wheel file name the wrapper pins; refuses any drift from VERSION."""
-    wheel = f"severian-{version}-py3-none-any.whl"
+    """The wheel file name for VERSION; refuses a wrapper that drifts from it or uses a local source."""
     if wrapper["project"].get("dependencies") != [f"severian=={version}"]:
         raise SystemExit(f"wrapper does not pin severian=={version}")
-    if wrapper.get("tool", {}).get("uv", {}).get("sources", {}).get("severian") != {"path": f"wheels/{wheel}"}:
-        raise SystemExit(f"wrapper source is not wheels/{wheel}")
-    return wheel
+    if wrapper.get("tool", {}).get("uv", {}).get("sources"):
+        raise SystemExit("wrapper must resolve severian from an index, not a local source")
+    return f"severian-{version}-py3-none-any.whl"
 
 
 def build(repo: Path, output: Path, rev: str) -> dict[str, str]:
@@ -67,16 +69,16 @@ def build(repo: Path, output: Path, rev: str) -> dict[str, str]:
     if built != [wheel]:
         raise SystemExit(f"expected exactly {wheel}, built {built}")
 
-    (output / "wheels").mkdir(parents=True)
+    output.mkdir(parents=True)
     for name in SHIPPED:
         (output / name).write_bytes(_git(repo, "show", f"{commit}:{PLUGIN}/{name}"))
-    shutil.copy2(work / "dist" / wheel, output / "wheels" / wheel)
     info = {
         "commit": commit,
         "version": version,
-        "wheel": f"wheels/{wheel}",
-        "sha256": hashlib.sha256((output / "wheels" / wheel).read_bytes()).hexdigest(),
+        "wheel": wheel,
+        "sha256": hashlib.sha256((work / "dist" / wheel).read_bytes()).hexdigest(),
     }
+    shutil.rmtree(work)
     (output / "BUILD-INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     return info
 

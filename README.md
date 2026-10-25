@@ -203,7 +203,7 @@ uv run python examples/quickstart.py
 
 | Surface | How |
 |---|---|
-| **Hermes Agent** | Drop-in memory provider: build with `scripts/build_hermes_plugin.py`, install as `$HERMES_HOME/plugins/severian/`, set `memory.provider: severian`. Tools: search, ingest, correct, forget, shared search, task progress notes. |
+| **Hermes Agent** | Drop-in memory provider: `hermes plugins install severian` (or copy `plugins/hermes/severian/` to `$HERMES_HOME/plugins/severian/`), set `memory.provider: severian`. Tools: search, ingest, correct, forget, shared search, task progress notes. |
 | **MCP** | full seven-tool surface over stdio for Claude Code, Codex, OpenCode and Claude Desktop: [docs/integrations.md](docs/integrations.md). Tools: ingest, search, get, correct, forget, task progress, shared search. |
 | **Python** | `severian.composition.build_bundle(...)`; see [examples/quickstart.py](examples/quickstart.py) |
 | **HTTP** | `uv run severian serve` (dev server); client in `severian.sdk.client` |

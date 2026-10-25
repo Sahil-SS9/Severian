@@ -1,9 +1,22 @@
 [project]
 name = "severian"
-version = "0.3.12"
-description = "Local-first canonical memory storage"
+version = "0.3.13"
+description = "Local-first long-term memory for AI agents: scoped, cited, correctable, with hybrid recall"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Sahil-SS9" }]
+keywords = ["memory", "agents", "llm", "hermes", "mcp", "retrieval"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "pydantic>=2.9,<3.0",
   "sqlalchemy>=2.0,<2.1",
@@ -36,8 +49,18 @@ build-backend = "hatchling.build"
 severian = "severian.cli.app:main"
 severian-serve = "severian.cli.app:serve"
 
+[project.urls]
+Homepage = "https://github.com/Sahil-SS9/Severian"
+Source = "https://github.com/Sahil-SS9/Severian"
+Changelog = "https://github.com/Sahil-SS9/Severian/blob/main/CHANGELOG.md"
+Benchmarks = "https://github.com/Sahil-SS9/Severian/blob/main/docs/benchmarks/omnimemeval-2026-10.md"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/severian"]
+
+[tool.hatch.build.targets.sdist]
+# The package source, its tests and the docs a user installs against; not benchmark data or web assets.
+include = ["src/severian", "tests", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml", "uv.lock"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/contract", "tests/integration", "tests/application", "tests/api", "tests/sdk", "tests/cli", "tests/benchmarks", "tests/mcp", "tests/integrations", "tests/gates", "tests/auth"]
