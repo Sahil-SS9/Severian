@@ -1,6 +1,7 @@
 """Per-category breakdowns for the Severian results page, computed from the saved per-question run files.
 
-    python breakdowns.py OUT.json      # writes {"breakdowns": {...}} ready to merge into results-2026-10.json
+    SEVERIAN_BENCH_RUN=/path/to/run python breakdowns.py OUT.json
+                                       # writes {"breakdowns": {...}} ready to merge into results-2026-10.json
 
 Each breakdown is {"title", "note", "columns", "rows"}; rows are display strings (scores to 1 dp, counts as ints).
 Nothing here calls a model: it only reads judged files, side-track files and second-marker files already on disk.
@@ -9,11 +10,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-P = Path("/home/kensei/data/benchmarks/h2h-p1")
+# The run folder: OmniMemEval checkouts (omni*/results), side tracks (tracks*/) and second-marker files (marker2/).
+P = Path(os.environ.get("SEVERIAN_BENCH_RUN", "."))
 LOCOMO_CATS = {"1": "Multi-Hop", "2": "Temporal", "3": "Open-Domain", "4": "Single-Hop",
                # the second-marker files store names (marker2_prep.py), the judged files store numbers
                "multi-hop": "Multi-Hop", "temporal": "Temporal", "open-domain": "Open-Domain",
