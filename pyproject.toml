@@ -24,7 +24,7 @@ dev = [
     "pyyaml>=6.0",
     "pip-audit>=2.7",
     "httpx2>=2.10.0",
-    "setuptools>=83.0.0",
+    "setuptools>=84.1.0",
     "ruamel-yaml==0.18.16",
 ]
 
