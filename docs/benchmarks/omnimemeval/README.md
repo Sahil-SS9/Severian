@@ -8,6 +8,7 @@ Files used for [omnimemeval-2026-10.md](../omnimemeval-2026-10.md), against Omni
 | `severian_client.py` | `scripts/client_factory/` | The Severian adapter: one store per benchmark user; search follows the Hermes prefetch path (`service.search`, then `service.assemble_context`) |
 | `test_severian_client.py` | `scripts/tests/unit/` | Adapter tests |
 | `register-severian.patch` | repo root (`git apply`) | Registers `severian` and routes it through the same `generic_text_search` LCM-X uses |
+| `results-2026-10.json` | - | Every number on the results page; `scripts/bench_charts.py` draws the charts from it |
 | `lcmx-embed-deadline.patch` | repo root (`git apply`) | Optional, LCM-X only: lets `LCMX_EMBED_TIMEOUT_S` raise the connector's fixed 300 s embedding deadline, which very long BEAM sessions missed on a busy CPU. Unset = the original call, same model, chunks and vectors |
 
 Environment (board setup): `SEVERIAN_OMNI_DB_ROOT`, `SEVERIAN_OMNI_EMBED_PATH` (local Qwen3-Embedding-0.6B),

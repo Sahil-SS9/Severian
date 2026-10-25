@@ -1,0 +1,60 @@
+{
+  "_about": "Numbers behind docs/benchmarks/omnimemeval-2026-10.md and its charts. Every value is copied from run outputs under ~/data/benchmarks/h2h-p1 (judged files, exp_report.md, token_usage_answer.json, RUN-NOTES.md). Regenerate charts with: python scripts/bench_charts.py",
+  "run": {
+    "dates": "2026-10-22 to 2026-10-25",
+    "harness": "MemTensor/OmniMemEval f7476c5502115542eca9971195bf8c5ca97b6256 (pinned) + Severian adapter",
+    "severian": "0.3.11, commit 4467853, wheel sha256 b891b2ddb09a5870fe506b0a22c25326614944904ee3550cf47c860b587bea9a",
+    "lcmx": "v0.28.1, commit 77b2b4f795fb6a4f84c55abf6d0441da4469971e (OmniMemEval lcmx adapter, fastembed BAAI/bge-small-en-v1.5)",
+    "answer_model": "openai/gpt-4.1-mini (via Nous inference API)",
+    "judge_model": "openai/gpt-4o-mini-2024-07-18 (via Nous inference API)",
+    "memory_model": "openai/gpt-4.1-mini (Severian's write-time fact step; LCM-X has none)",
+    "top_k": 20
+  },
+  "head_to_head": {
+    "locomo": {"n": 1540, "severian": 87.34, "lcmx": 79.48, "diff": 7.86, "ci": [6.04, 9.74], "sev_only": 172, "lcmx_only": 51,
+               "tokens": {"severian": 5662, "lcmx": 1660},
+               "categories": {"Single-Hop": [841, 93.10, 84.42], "Multi-Hop": [282, 80.14, 67.02], "Temporal": [321, 84.11, 80.69], "Open-Domain": [96, 68.75, 68.75]}},
+    "lme": {"n": 500, "severian": 90.60, "lcmx": 86.60, "diff": 4.00, "ci": [1.20, 6.60], "sev_only": 35, "lcmx_only": 15,
+            "tokens": {"severian": 6245, "lcmx": 5159},
+            "categories": {"SS-User": [70, 100.00, 97.14], "SS-Asst": [56, 98.21, 94.64], "SS-Pref": [30, 100.00, 93.33], "Temp. Reas": [133, 88.72, 85.71], "Multi-S": [133, 79.70, 74.44], "Know. Upd": [78, 94.87, 91.03]}},
+    "beam": {"n": 400, "severian": 71.62, "lcmx": 71.91, "diff": -0.29, "ci": [-3.16, 2.55], "sev_only": 76, "lcmx_only": 83,
+             "tokens": {"severian": 15487, "lcmx": 11944},
+             "categories": {"Abstention": [40, 82.50, 82.50], "Contradiction": [40, 80.63, 65.62], "Event ordering": [40, 25.47, 27.97], "Info extraction": [40, 90.62, 89.38], "Instruction following": [40, 88.12, 89.38], "Knowledge update": [40, 53.75, 55.63], "Multi-session": [40, 65.78, 65.74], "Preference following": [40, 88.75, 94.37], "Summarisation": [40, 75.55, 76.00], "Temporal": [40, 65.00, 72.50]}}
+  },
+  "lcmx_reproduction": {"locomo": [79.48, 78.83], "lme": [86.60, 87.00], "beam": [71.91, 71.84]},
+  "board_published": {
+    "_source": "OmniMemEval docs/user_memory/results.md at f7476c5 (Result Summary: LoCoMo, LongMemEval, BEAM 100K)",
+    "rows": {
+      "Mem0": [77.68, 56.00, 70.41], "Zep / Graphiti": [63.83, 79.80, 68.70], "Supermemory": [73.53, 66.07, 65.98],
+      "Viking": [69.33, 61.07, 70.76], "Cognee": [83.48, 51.80, 59.30], "Letta": [77.12, 77.67, 69.22],
+      "Hindsight": [81.99, 72.20, 70.22], "Memori": [41.34, 20.80, null], "EverOS": [82.75, 80.40, 58.64],
+      "MemMachine": [73.90, 63.60, 64.80], "mem9": [73.64, 78.00, 65.75], "MemOS": [88.83, 89.20, 66.87],
+      "LCM-X": [78.83, 87.00, 71.84]
+    }
+  },
+  "strict_marker": {
+    "_about": "Same answers re-marked by Claude Opus (official LongMemEval templates; BEAM per-item rubric). Fixed stratified sample of 200 questions per benchmark, same questions for both systems; LongMemEval later extended to all 500 (post-hoc, disclosed).",
+    "locomo": {"n": 200, "board": [90.5, 78.5, 12.0, 7.5, 17.0], "strict": [80.0, 67.5, 12.5, 7.0, 18.5]},
+    "lme_sample": {"n": 200, "board": [90.0, 87.5, 2.5, -2.0, 7.0], "strict": [88.5, 85.5, 3.0, -1.5, 7.5]},
+    "lme_full": {"n": 500, "board": [90.6, 86.6, 4.0, 1.2, 6.6], "strict": [88.4, 85.0, 3.4, 0.6, 6.2]},
+    "beam": {"n": 200, "board": [71.5, 71.5, 0.0, -4.2, 4.3], "strict": [60.1, 58.8, 1.4, -2.5, 5.2]},
+    "beam_abstention": {"n": 20, "board": [82.5, 80.0], "strict": [25.0, 25.0]}
+  },
+  "equal_text": {
+    "_about": "Side track: one fixed open reader (Qwen3.8-27B, reasoning low) and marker (DeepSeek-V4-Pro), each system's retrieved text cut to the same token budget. LoCoMo on CommandCode; BEAM and LongMemEval on Nous (one host per benchmark). Failed marks excluded.",
+    "locomo": {"replicate": [77.91, 65.32, 12.59, 10.60, 14.64, 1462], "eq1000": [66.50, 64.50, 2.00, 0.07, 4.01, 1397], "eq4000": [77.02, 65.52, 11.49, 9.61, 13.44, 1488], "eq8000": [77.62, 65.68, 11.95, 9.94, 13.95, 1448], "shipped": [74.00, 65.36, 8.64, 6.62, 10.60, 1481]},
+    "beam": {"replicate": [65.2, 67.3, -2.1, -5.2, 1.0, 391], "eq1000": [51.9, 53.0, -1.0, -4.7, 2.7, 386], "eq4000": [63.9, 66.0, -2.0, -5.5, 1.4, 381], "eq8000": [65.9, 67.6, -1.7, -4.6, 1.1, 388], "shipped": [59.8, 67.4, -7.6, -11.4, -3.9, 386]},
+    "lme": {"replicate": [89.9, 87.1, 2.8, 0.6, 5.2, 497]}
+  },
+  "settings": {
+    "_about": "Severian 0.3.11 on the board models: board depth (top-20, no character cap) vs Hermes shipped defaults (top-10, 8,000-character cap). Tokens = answer-prompt tokens per question.",
+    "board":   {"locomo": [87.34, 5662], "lme": [90.60, 6245], "beam": [71.62, 15487]},
+    "shipped": {"locomo": [86.17, 3005], "lme": [82.00, 2233], "beam": [63.86, 2065]}
+  },
+  "improvements": {
+    "_about": "Severian-only paired before/after on the board models. v2 = new context layout (Handoff 2). fill+compact = fill-budget + compact citations (Handoff 1).",
+    "v2_board_depth": {"lme": [90.60, 90.60, 0.00, -1.80, 1.80], "locomo": [87.34, 87.60, 0.26, -0.71, 1.30], "beam": null},
+    "fill_compact_shipped": {"lme": [82.00, 81.80, -0.20, -2.40, 2.00], "locomo": [86.17, 87.40, 1.23, 0.13, 2.34], "beam": [63.86, 64.53, 0.67, -0.91, 2.28]},
+    "cap16k_shipped": null
+  }
+}

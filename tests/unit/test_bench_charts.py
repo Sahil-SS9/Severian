@@ -11,7 +11,7 @@ spec = importlib.util.spec_from_file_location("bench_charts", ROOT / "scripts" /
 assert spec and spec.loader
 bc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bc)
-DATA = json.loads((ROOT / "docs" / "benchmarks" / "data" / "omnimemeval-2026-10.json").read_text())
+DATA = json.loads((ROOT / "docs" / "benchmarks" / "omnimemeval" / "results-2026-10.json").read_text())
 
 
 def _texts(svg: str) -> list[str]:

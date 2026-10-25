@@ -2,7 +2,7 @@
 # Severian on OmniMemEval: head-to-head results (October 2026)
 
 [Benchmarks index](README.md) · [Earlier internal round](competitor-round-2026-10.md) ·
-[Data file](data/omnimemeval-2026-10.json) · [Chart generator](../../scripts/bench_charts.py)
+[Data file](omnimemeval/results-2026-10.json) · [Chart generator](../../scripts/bench_charts.py)
 
 This page is the canonical source for Severian's OmniMemEval numbers. We ran Severian and LCM-X through
 [MemTensor/OmniMemEval](https://github.com/MemTensor/OmniMemEval), the public harness behind its
@@ -274,5 +274,5 @@ rate limits, so no failed model call reached either system.
 
 - Harness: OmniMemEval `f7476c5` plus the files in [`omnimemeval/`](omnimemeval/README.md): the Severian adapter, its
   tests, a three-line registration patch, and the optional LCM-X deadline patch, with the exact environment and commands.
-- Numbers on this page: [`data/omnimemeval-2026-10.json`](data/omnimemeval-2026-10.json); charts are generated from it
+- Numbers on this page: [`omnimemeval/results-2026-10.json`](omnimemeval/results-2026-10.json); charts are generated from it
   by [`scripts/bench_charts.py`](../../scripts/bench_charts.py) and a test fails if they drift apart.
