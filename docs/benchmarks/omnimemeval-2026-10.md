@@ -256,24 +256,24 @@ What the Hermes default limit (top-10 results, 8,000 characters) costs in each c
 **BEAM 100K**
 
 <!-- breakdown:settings_beam -->
-| Category | n | Board depth | Hermes default | Default + fill |
-| --- | ---: | ---: | ---: | ---: |
-| Abstention | 40 | 82.5 | 80.0 | 72.5 |
-| Contradiction | 40 | 80.6 | 79.1 | 77.2 |
-| Event ordering | 40 | 25.5 | 19.6 | 21.7 |
-| Info extraction | 40 | 90.6 | 82.9 | 81.5 |
-| Instruction following | 40 | 88.1 | 71.9 | 76.9 |
-| Knowledge update | 40 | 53.8 | 55.6 | 61.2 |
-| Multi-session | 40 | 65.8 | 62.9 | 66.5 |
-| Preference following | 40 | 88.8 | 85.6 | 87.5 |
-| Summarisation | 40 | 75.6 | 53.5 | 51.7 |
-| Temporal | 40 | 65.0 | 47.5 | 48.8 |
-| **Overall** | 400 | **71.6** | **63.9** | **64.5** |
+| Category | n | Board depth | Hermes default | Default + fill | 16,000 chars + fill |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Abstention | 40 | 82.5 | 80.0 | 72.5 | 85.0 |
+| Contradiction | 40 | 80.6 | 79.1 | 77.2 | 79.4 |
+| Event ordering | 40 | 25.5 | 19.6 | 21.7 | 26.4 |
+| Info extraction | 40 | 90.6 | 82.9 | 81.5 | 86.9 |
+| Instruction following | 40 | 88.1 | 71.9 | 76.9 | 85.0 |
+| Knowledge update | 40 | 53.8 | 55.6 | 61.2 | 61.9 |
+| Multi-session | 40 | 65.8 | 62.9 | 66.5 | 65.1 |
+| Preference following | 40 | 88.8 | 85.6 | 87.5 | 89.4 |
+| Summarisation | 40 | 75.6 | 53.5 | 51.7 | 60.8 |
+| Temporal | 40 | 65.0 | 47.5 | 48.8 | 55.6 |
+| **Overall** | 400 | **71.6** | **63.9** | **64.5** | **69.5** |
 
 *Severian 0.3.11 on the board models. Board depth = top-20, no cap; Hermes default = top-10, 8,000 characters; fill = SEVERIAN_FILL_BUDGET + SEVERIAN_COMPACT_CITES (0.3.12 candidate).*
 <!-- /breakdown:settings_beam -->
 
-The limit barely matters for LoCoMo's short memories. On LongMemEval it costs most in temporal reasoning (-12.8) and
+The 16,000-character column is the [higher-limit test](#higher-cap). The limit barely matters for LoCoMo's short memories. On LongMemEval it costs most in temporal reasoning (-12.8) and
 multi-session (-10.5); on BEAM, in summarisation (-22.1), instruction following (-16.2) and temporal (-17.5): the
 questions that need many memories at once.
 
@@ -554,7 +554,26 @@ default; "off" is byte-identical to 0.3.11 (tested).
   "all evidence" 23.8% → 16.7%) and ten faster-reranker variants (each lost evidence on at least one benchmark; best
   search-speed gain under 30%).
 
-<!-- A7-RESULT -->
+<a id="higher-cap"></a>
+### A higher context limit (`SEVERIAN_CONTEXT_CHARS=16000`)
+
+The same Hermes-default setting with fill + compact citations, with the limit raised from 8,000 to 16,000 characters
+(top-10 results kept), paired on the same questions:
+
+| Benchmark | 8,000 chars | 16,000 chars | Change (95% range) | Better / worse | Answer-prompt tokens per question |
+| --- | ---: | ---: | --- | ---: | ---: |
+| LongMemEval | 81.80 | 86.40 | **+4.60** (+2.00 to +7.20) | 34 / 11 | 2,179 → 3,892 |
+| BEAM 100K | 64.53 | 69.54 | **+5.00** (+2.30 to +7.75) | 107 / 49 | 2,014 → 3,862 |
+| LoCoMo | not run | | | | |
+
+- Both ranges sit above zero: the limit, not search quality, is what costs Severian at the Hermes default. 16,000
+  characters wins back about half the gap on LongMemEval (board depth 90.60) and about 70% on BEAM (71.62), for
+  roughly 1.8x the answer-prompt tokens; still about a quarter of board-depth BEAM's 15,487.
+- The gains are in the categories the limit hurt most (see the [settings table](#severians-settings-by-category)):
+  BEAM instruction following +8.1, summarisation +9.1, temporal +6.8, abstention +12.5.
+- LoCoMo was not run: its memories do not fill 8,000 characters, so a higher limit has nothing to add.
+- Every context came back non-empty and inside the limit (longest 16,022 characters: the limit plus a fixed header).
+
 
 ## Changes to the plan
 

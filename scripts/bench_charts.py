@@ -152,13 +152,15 @@ def settings_chart(d: dict) -> str:
         cap = (imp.get("cap16k_shipped") or {}).get(key)
         if cap:
             bars.append(("16k+fill", cap[1], "#0ea5e9"))
-        foot = f"tokens: {st['board'][key][1]:,} vs {st['shipped'][key][1]:,}"
+        foot = f"context tokens: board {st['board'][key][1]:,} / default {st['shipped'][key][1]:,}"
+        if imp.get("cap16k_shipped") and not cap:
+            foot += " · 16,000 not run"
         groups.append((BENCH[key], bars, foot))
     legend = [("board depth (top-20, no cap)", SEV), ("Hermes default (top-10, 8,000 chars)", OTHER),
               ("default + fill-budget", "#10b981")]
     if imp.get("cap16k_shipped"):
         legend.append(("16,000 chars + fill", "#0ea5e9"))
-    return grouped("Severian settings: what the context limit costs", groups, legend=legend, width=860)
+    return grouped("Severian settings: what the context limit costs", groups, legend=legend, width=980)
 
 
 def _score(cell: str) -> float | None:

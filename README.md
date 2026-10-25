@@ -56,7 +56,8 @@ prompts and metrics, not an official board entry. 🥇 marks the best score in e
   +9.7) and LongMemEval (+4.0, +1.2 to +6.6) and level on BEAM, and a stricter second marker (Claude Opus) agrees.
 - **Trade-offs, stated plainly.** Severian hands the answering model more text than most systems and makes model calls
   when it saves memories. Hermes ships it with a cheap 8,000-character context cap, which costs little on LoCoMo but
-  about 8 points on BEAM and LongMemEval ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
+  about 8 points on BEAM and LongMemEval; raising it to 16,000 characters wins back about 5 points on each
+  ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
 - **We found a marking flaw in BEAM** that rewards made-up answers to "the chat never said" questions. It inflates
   every system's BEAM score, ours included ([details](docs/benchmarks/omnimemeval-2026-10.md#a-marking-flaw-in-beam)).
 - **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate, a corrected fact never comes back in
