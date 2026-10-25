@@ -8,10 +8,10 @@
 # the pin, the wheel path and the versions in step with the package.
 [project]
 name = "severian-plugin"
-version = "0.3.11+h1h2"
+version = "0.3.12"
 description = "Severian memory provider for Hermes Agent, catalog wrapper"
 requires-python = ">=3.11"
-dependencies = ["severian==0.3.11+h1h2"]
+dependencies = ["severian==0.3.12"]
 
 [tool.uv.sources]
-severian = { path = "wheels/severian-0.3.11+h1h2-py3-none-any.whl" }
+severian = { path = "wheels/severian-0.3.12-py3-none-any.whl" }

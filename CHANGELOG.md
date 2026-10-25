@@ -5,11 +5,18 @@ variables; see the Configuration table in the [README](README.md).
 
 ## [Unreleased]
 
-Local build `0.3.11+h1h2` (Handoffs 1 and 2 combined for the before/after re-score; the local version keeps a wheel from
-this branch from being mistaken for the `0.3.11` release; the wrapper, manifest and provider report the same version).
+## [0.3.12] - 2026-10-25
+
+Every new switch is off by default; with all of them off, behaviour is byte-identical to 0.3.11 (tested). Measured on
+OmniMemEval with the board's models: [docs/benchmarks/omnimemeval-2026-10.md](docs/benchmarks/omnimemeval-2026-10.md).
 
 ### Added
-- `SEVERIAN_FILL_BUDGET` (off): assembly spends the character window the caller's own items leave empty on the turns
+- `SEVERIAN_CONTEXT_CHARS` (unset = 8,000, unchanged): the Hermes provider's prefetch context cap, now settable without
+  code changes (the loader builds the provider with no arguments). Whole numbers >= 1,000; a bad value logs a warning
+  and keeps 8,000 rather than leaving memory unavailable. On stores of long messages this cap is the main
+  cost/quality trade-off (OmniMemEval, Hermes default: BEAM 63.9 vs 71.6 and LongMemEval 82.0 vs 90.6 uncapped).
+- `SEVERIAN_FILL_BUDGET` (off; measured at the Hermes default: LoCoMo +1.23, 95% range +0.13 to +2.34, no change on
+  LongMemEval or BEAM): assembly spends the character window the caller's own items leave empty on the turns
   either side of them, read from the same conversations and appended after those items. It runs no search, so the
   ranking cannot move: the items and their order are unchanged, and with the switch off the block is byte-identical to
   0.3.11. Three seeds, two turns either side, both bounded; nothing is read at all when the items already fill the
@@ -23,7 +30,8 @@ this branch from being mistaken for the `0.3.11` release; the wrapper, manifest 
   ("my manager is Kiran") runs one keyword search of its own and pulls in the memories that name the same person
   ("Kiran is allergic to sesame"), scored at `LINK_WEIGHT` times the match so real matches stay first. Targets
   multi-hop questions. Off means the ranking and the number of searches are exactly as before.
-- `SEVERIAN_CONTEXT_FORMAT=v2` (off): the answerer-facing block. It leads with the most directly relevant note, numbers
+- `SEVERIAN_CONTEXT_FORMAT=v2` (off; measured: no change on LoCoMo or LongMemEval, so it stays off): the
+  answerer-facing block. It leads with the most directly relevant note, numbers
   each note with its state (current / also true together / earlier, replaced / change) and the date it was said, quotes
   the user's own words for a user fact, and ends with an explicit "if none of these notes is relevant, say you don't
   know". Off keeps the 0.3.11 block byte for byte. **Order with conflict notes** (on by default since 0.3.9): a note's
