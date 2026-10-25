@@ -52,6 +52,26 @@ _WRITE_TOOLS = frozenset({"severian_ingest", "severian_correct", "severian_forge
 _TASK_ACTIONS = ("set", "get", "list", "clear")
 _TASK_WRITES = frozenset({"set", "clear"})
 
+# The prefetch context cap. The Hermes loader builds the provider with no arguments, so the cap is read from
+# SEVERIAN_CONTEXT_CHARS (0.3.12); unset keeps the long-standing 8,000. Benchmarks (docs/benchmarks/omnimemeval-2026-10.md)
+# show the cap is the main cost/quality trade-off on stores of long messages.
+DEFAULT_CONTEXT_CHARS = 8_000
+MIN_CONTEXT_CHARS = 1_000
+
+
+def context_chars_from_env() -> int:
+    """``SEVERIAN_CONTEXT_CHARS`` as a whole number >= 1,000, else the 8,000 default (a bad value is logged, never
+    raised: a typo in the env file must not leave every profile without memory)."""
+    raw = os.environ.get("SEVERIAN_CONTEXT_CHARS", "").strip()
+    if not raw:
+        return DEFAULT_CONTEXT_CHARS
+    if raw.isdigit() and int(raw) >= MIN_CONTEXT_CHARS:
+        return int(raw)
+    logger.warning(
+        "SEVERIAN_CONTEXT_CHARS=%r is not a whole number >= %d; using %d", raw, MIN_CONTEXT_CHARS, DEFAULT_CONTEXT_CHARS
+    )
+    return DEFAULT_CONTEXT_CHARS
+
 
 def _note_entry(note: TaskNote) -> dict[str, Any]:
     return {"task": note.task, "state": note.state, "metadata": dict(note.metadata),
@@ -231,7 +251,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         service: MemoryService | None = None,
         gateway: DerivationGateway | None = None,
         *,
-        max_context_chars: int = 8_000,
+        max_context_chars: int | None = None,
         principal: Scope | None = None,
     ) -> None:
         # P1-4: the real Hermes loader instantiates providers with a
@@ -254,7 +274,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
         self._derived_scope = False
         self._writes_enabled = True
         self._platform: str | None = None
-        self._max_context_chars = max_context_chars
+        self._max_context_chars = context_chars_from_env() if max_context_chars is None else max_context_chars
         # SEC-01: construct-time principal binding. When set, the
         # provider's scope is fixed to the principal's tenant/profile;
         # initialize() and tool calls cannot switch them.
