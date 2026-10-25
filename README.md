@@ -21,37 +21,49 @@ client, a CLI, an HTTP API or plain Python.
 
 ## Results
 
-Severian on [OmniMemEval](https://github.com/MemTensor/OmniMemEval), the public harness behind its long-term-memory
-leaderboard, using the board's own answer model (`gpt-4.1-mini`), judge (`gpt-4o-mini`), prompts and metrics
-(October 2026; [full results](docs/benchmarks/omnimemeval-2026-10.md)):
+Severian on the [OmniMemEval](https://github.com/MemTensor/OmniMemEval/blob/main/docs/user_memory/results.md)
+long-term-memory leaderboard (October 2026). Every other row is OmniMemEval's own published record, copied verbatim;
+Severian's row (†) is our run through the same public harness, answer model (`gpt-4.1-mini`), judge (`gpt-4o-mini`),
+prompts and metrics, not an official board entry. 🥇 marks the best score in each column; `-` means not run.
 
-![Severian vs LCM-X on OmniMemEval](docs/benchmarks/img/h2h.svg)
+<!-- board:summary -->
+| Backend | LoCoMo | LongMemEval | BEAM 100K | BEAM 10M | PersonaMem v2 | HaluMem |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 77.68 | 56.00 | 70.41 | 43.33 | 36.76 | 73.64 |
+| Zep / Graphiti | 63.83 | 79.80 | 68.70 | 56.11 | 32.34 | 81.71 |
+| Supermemory | 73.53 | 66.07 | 65.98 | 52.49 | 39.64 | 52.61 |
+| Viking | 69.33 | 61.07 | 70.76 | 58.14 | 30.80 | 77.39 |
+| Cognee | 83.48 | 51.80 | 59.30 | 56.02 | 26.46 | 72.60 |
+| Letta | 77.12 | 77.67 | 69.22 | 52.30 | 35.12 | 85.43 |
+| Hindsight | 81.99 | 72.20 | 70.22 | **🥇 59.75** | 37.98 | 83.99 |
+| Memori | 41.34 | 20.80 | - | - | 33.16 | 49.38 |
+| EverOS | 82.75 | 80.40 | 58.64 | 47.73 | 35.94 | **🥇 88.66** |
+| MemMachine | 73.90 | 63.60 | 64.80 | 51.90 | 34.14 | 47.02 |
+| mem9 | 73.64 | 78.00 | 65.75 | 57.30 | 30.76 | 72.80 |
+| MemoryLake | 72.49 | - | - | - | - | - |
+| Backboard.io | 22.40 | - | - | - | - | - |
+| MemOS | **🥇 88.83** | 89.20 | 66.87 | 56.75 | **🥇 40.58** | 80.91 |
+| LCM-X | 78.83 | 87.00 | **🥇 71.84** | - | 33.96 | 81.68 |
+| **Severian 0.3.11** † | 87.34 | **🥇 90.60** | 71.62 | - | - | - |
+<!-- /board:summary -->
 
-| System | LoCoMo (1,540 q) | LongMemEval (500 q) | BEAM 100K (400 q) |
-|---|---:|---:|---:|
-| **Severian 0.3.11** | **87.34** | **90.60** | 71.62 |
-| LCM-X v0.28.1 | 79.48 | 86.60 | **71.91** |
-| Severian minus LCM-X (95% range) | **+7.86** (+6.04 to +9.74) | **+4.00** (+1.20 to +6.60) | -0.29 (-3.16 to +2.55), a tie |
+![OmniMemEval standings](docs/benchmarks/img/board.svg)
 
-- **Ahead on LoCoMo and LongMemEval, level on BEAM**, paired on the same questions. A stricter second marker (Claude
-  Opus, official LongMemEval templates) agrees on all three.
-- **The setup is fair to the other side:** run through the same pipeline, LCM-X scores within 0.65 points of its own
-  published board numbers.
-- **Where Severian sits on the board.** These are our own runs, not an official entry, and we compared head-to-head
-  with LCM-X only, so treat the placement as context:
-
-![OmniMemEval leaderboard context](docs/benchmarks/img/board.svg)
-
-- **Trade-offs, stated plainly.** Severian hands the answering model more text than LCM-X (3.4x on LoCoMo, ~1.2-1.3x
-  elsewhere) and makes model calls when it saves memories. Cut to the same amount of text, it stays clearly ahead on
-  LoCoMo and ties on BEAM. Hermes ships Severian with a cheap 8,000-character context cap; that costs little on LoCoMo
-  but about 8 points on BEAM and LongMemEval ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
+- **1st on LongMemEval, 2nd on LoCoMo, 2nd on BEAM 100K** (0.22 behind LCM-X). The board has no error ranges, and on
+  400 questions a gap that small is noise; Severian has not been run on BEAM 10M, PersonaMem v2 or HaluMem yet.
+- **We checked the board before building on it.** Re-running LCM-X through the same pipeline gave its published scores
+  back within 0.65 points. Compared question by question, Severian is ahead of it on LoCoMo (+7.9, 95% range +6.0 to
+  +9.7) and LongMemEval (+4.0, +1.2 to +6.6) and level on BEAM, and a stricter second marker (Claude Opus) agrees.
+- **Trade-offs, stated plainly.** Severian hands the answering model more text than most systems and makes model calls
+  when it saves memories. Hermes ships it with a cheap 8,000-character context cap, which costs little on LoCoMo but
+  about 8 points on BEAM and LongMemEval ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
 - **We found a marking flaw in BEAM** that rewards made-up answers to "the chat never said" questions. It inflates
   every system's BEAM score, ours included ([details](docs/benchmarks/omnimemeval-2026-10.md#a-marking-flaw-in-beam)).
 - **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate, a corrected fact never comes back in
   search (0.000 stale-fact rate) and no query ever returns another scope's memory (0.000 leakage).
 
-Every number, the adapter, the plan and its changes, and the limitations are in
+Per-benchmark tables for every system (LoCoMo, LongMemEval, BEAM, PersonaMem v2, HaluMem), the LCM-X validation, the
+plan and its changes, and the limitations are in
 [docs/benchmarks/omnimemeval-2026-10.md](docs/benchmarks/omnimemeval-2026-10.md). Our earlier internal round against
 Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
 [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md).

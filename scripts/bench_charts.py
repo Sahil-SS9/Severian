@@ -1,13 +1,15 @@
-"""Render the OmniMemEval 2026-10 benchmark charts as plain SVG (no plotting dependency).
+"""Render the OmniMemEval 2026-10 benchmark charts (plain SVG) and leaderboard tables (Markdown).
 
     python scripts/bench_charts.py            # reads docs/benchmarks/omnimemeval/results-2026-10.json
-                                              # writes docs/benchmarks/img/*.svg
+                                              # writes docs/benchmarks/img/*.svg and refreshes every
+                                              # <!-- board:KEY --> ... <!-- /board:KEY --> block in the docs
 
-Every number comes from the JSON file; the charts carry no values of their own.
+Every number comes from the JSON file; the charts and tables carry no values of their own.
 """
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 from pathlib import Path
 
@@ -21,6 +23,9 @@ LCMX = "#f59e0b"
 LIGHT = "#c7d2fe"
 FONT = "font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'"
 BENCH = {"locomo": "LoCoMo", "lme": "LongMemEval", "beam": "BEAM 100K"}
+SEVERIAN = "Severian 0.3.11"
+DOCS = (ROOT / "README.md", ROOT / "docs" / "benchmarks" / "omnimemeval-2026-10.md")
+_BLOCK = re.compile(r"(<!-- board:(\w+) -->).*?(<!-- /board:\2 -->)", re.S)
 
 
 def _svg(width: int, height: int, body: list[str], title: str) -> str:
@@ -156,6 +161,41 @@ def settings_chart(d: dict) -> str:
     return grouped("Severian settings: what the context limit costs", groups, legend=legend, width=860)
 
 
+def _score(cell: str) -> float | None:
+    m = re.match(r"\d[\d,]*(\.\d+)?", cell)
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def board_table(d: dict, key: str) -> str:
+    """A board table (verbatim OmniMemEval rows) plus Severian's row; the best score in each column is bold, and
+    in the summary also marked 🥇. Context-token columns are not ranked (lower is cheaper, not better)."""
+    table = d["board_tables"][key]
+    cols, rows = table["columns"], [list(r) for r in table["rows"]]
+    ours = d["severian_rows"].get(key)
+    if ours:
+        rows.append([f"**{SEVERIAN}** †", *ours])
+    ranked = [i for i, c in enumerate(cols) if c not in ("Backend", "Deployment") and "Tokens" not in c]
+    for i in ranked:
+        best = max((v for r in rows if (v := _score(r[i])) is not None), default=None)
+        for r in rows:
+            if best is not None and _score(r[i]) == best:
+                r[i] = f"**🥇 {r[i]}**" if key == "summary" else f"**{r[i]}**"
+    align = ["---" if c in ("Backend", "Deployment") else "---:" for c in cols]
+    return "\n".join("| " + " | ".join(r) + " |" for r in [cols, align, *rows])
+
+
+def refresh_docs(d: dict) -> list[Path]:
+    """Rewrite every board block in the docs from the data; returns the files that changed."""
+    changed = []
+    for path in DOCS:
+        text = path.read_text()
+        new = _BLOCK.sub(lambda m: f"{m.group(1)}\n{board_table(d, m.group(2))}\n{m.group(3)}", text)
+        if new != text:
+            path.write_text(new)
+            changed.append(path)
+    return changed
+
+
 def main() -> None:
     d = json.loads(DATA.read_text())
     OUT.mkdir(parents=True, exist_ok=True)
@@ -164,6 +204,8 @@ def main() -> None:
     for name, svg in charts.items():
         (OUT / name).write_text(svg)
         print(f"wrote {OUT / name} ({len(svg):,} bytes)")
+    for path in refresh_docs(d):
+        print(f"refreshed tables in {path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

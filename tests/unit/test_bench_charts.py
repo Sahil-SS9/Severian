@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -45,3 +46,24 @@ def test_committed_svgs_match_the_generator():
     for name, fn in (("h2h.svg", bc.h2h_chart), ("board.svg", bc.board_chart), ("strict.svg", bc.strict_chart),
                      ("settings.svg", bc.settings_chart)):
         assert (ROOT / "docs" / "benchmarks" / "img" / name).read_text() == fn(DATA), name
+
+
+def test_doc_tables_match_the_data_and_mark_each_columns_winner():
+    for path in bc.DOCS:
+        text = path.read_text()
+        blocks = re.findall(r"<!-- board:(\w+) -->\n(.*?)\n<!-- /board:\1 -->", text, re.S)
+        assert blocks, path
+        for key, body in blocks:
+            assert body == bc.board_table(DATA, key), (path.name, key)
+    summary = bc.board_table(DATA, "summary")
+    assert summary.count("🥇") >= 6  # one per benchmark column (ties may add more)
+    sev = next(line for line in summary.splitlines() if "Severian" in line)
+    assert "🥇 90.60" in sev and "🥇" not in sev.split("|")[2]  # LongMemEval win; LoCoMo is MemOS's
+
+
+def test_board_rows_are_verbatim():
+    # Published records are copied, never edited: every board row appears unchanged once highlighting is removed.
+    for key in ("summary", "locomo", "lme", "beam", "pmv2", "halumem"):
+        plain = bc.board_table(DATA, key).replace("**", "").replace("🥇 ", "")
+        for row in DATA["board_tables"][key]["rows"]:
+            assert "| " + " | ".join(row) + " |" in plain, (key, row[0])

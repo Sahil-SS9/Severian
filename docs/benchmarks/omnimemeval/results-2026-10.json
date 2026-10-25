@@ -1,60 +1,1500 @@
 {
-  "_about": "Numbers behind docs/benchmarks/omnimemeval-2026-10.md and its charts. Every value is copied from run outputs under ~/data/benchmarks/h2h-p1 (judged files, exp_report.md, token_usage_answer.json, RUN-NOTES.md). Regenerate charts with: python scripts/bench_charts.py",
-  "run": {
-    "dates": "2026-10-22 to 2026-10-25",
-    "harness": "MemTensor/OmniMemEval f7476c5502115542eca9971195bf8c5ca97b6256 (pinned) + Severian adapter",
-    "severian": "0.3.11, commit 4467853, wheel sha256 b891b2ddb09a5870fe506b0a22c25326614944904ee3550cf47c860b587bea9a",
-    "lcmx": "v0.28.1, commit 77b2b4f795fb6a4f84c55abf6d0441da4469971e (OmniMemEval lcmx adapter, fastembed BAAI/bge-small-en-v1.5)",
-    "answer_model": "openai/gpt-4.1-mini (via Nous inference API)",
-    "judge_model": "openai/gpt-4o-mini-2024-07-18 (via Nous inference API)",
-    "memory_model": "openai/gpt-4.1-mini (Severian's write-time fact step; LCM-X has none)",
-    "top_k": 20
+ "_about": "Numbers behind docs/benchmarks/omnimemeval-2026-10.md and its charts. Every value is copied from run outputs under ~/data/benchmarks/h2h-p1 (judged files, exp_report.md, token_usage_answer.json, RUN-NOTES.md). Regenerate charts with: python scripts/bench_charts.py",
+ "run": {
+  "dates": "2026-10-22 to 2026-10-25",
+  "harness": "MemTensor/OmniMemEval f7476c5502115542eca9971195bf8c5ca97b6256 (pinned) + Severian adapter",
+  "severian": "0.3.11, commit 4467853, wheel sha256 b891b2ddb09a5870fe506b0a22c25326614944904ee3550cf47c860b587bea9a",
+  "lcmx": "v0.28.1, commit 77b2b4f795fb6a4f84c55abf6d0441da4469971e (OmniMemEval lcmx adapter, fastembed BAAI/bge-small-en-v1.5)",
+  "answer_model": "openai/gpt-4.1-mini (via Nous inference API)",
+  "judge_model": "openai/gpt-4o-mini-2024-07-18 (via Nous inference API)",
+  "memory_model": "openai/gpt-4.1-mini (Severian's write-time fact step; LCM-X has none)",
+  "top_k": 20
+ },
+ "head_to_head": {
+  "locomo": {
+   "n": 1540,
+   "severian": 87.34,
+   "lcmx": 79.48,
+   "diff": 7.86,
+   "ci": [
+    6.04,
+    9.74
+   ],
+   "sev_only": 172,
+   "lcmx_only": 51,
+   "tokens": {
+    "severian": 5662,
+    "lcmx": 1660
+   },
+   "categories": {
+    "Single-Hop": [
+     841,
+     93.1,
+     84.42
+    ],
+    "Multi-Hop": [
+     282,
+     80.14,
+     67.02
+    ],
+    "Temporal": [
+     321,
+     84.11,
+     80.69
+    ],
+    "Open-Domain": [
+     96,
+     68.75,
+     68.75
+    ]
+   }
   },
-  "head_to_head": {
-    "locomo": {"n": 1540, "severian": 87.34, "lcmx": 79.48, "diff": 7.86, "ci": [6.04, 9.74], "sev_only": 172, "lcmx_only": 51,
-               "tokens": {"severian": 5662, "lcmx": 1660},
-               "categories": {"Single-Hop": [841, 93.10, 84.42], "Multi-Hop": [282, 80.14, 67.02], "Temporal": [321, 84.11, 80.69], "Open-Domain": [96, 68.75, 68.75]}},
-    "lme": {"n": 500, "severian": 90.60, "lcmx": 86.60, "diff": 4.00, "ci": [1.20, 6.60], "sev_only": 35, "lcmx_only": 15,
-            "tokens": {"severian": 6245, "lcmx": 5159},
-            "categories": {"SS-User": [70, 100.00, 97.14], "SS-Asst": [56, 98.21, 94.64], "SS-Pref": [30, 100.00, 93.33], "Temp. Reas": [133, 88.72, 85.71], "Multi-S": [133, 79.70, 74.44], "Know. Upd": [78, 94.87, 91.03]}},
-    "beam": {"n": 400, "severian": 71.62, "lcmx": 71.91, "diff": -0.29, "ci": [-3.16, 2.55], "sev_only": 76, "lcmx_only": 83,
-             "tokens": {"severian": 15487, "lcmx": 11944},
-             "categories": {"Abstention": [40, 82.50, 82.50], "Contradiction": [40, 80.63, 65.62], "Event ordering": [40, 25.47, 27.97], "Info extraction": [40, 90.62, 89.38], "Instruction following": [40, 88.12, 89.38], "Knowledge update": [40, 53.75, 55.63], "Multi-session": [40, 65.78, 65.74], "Preference following": [40, 88.75, 94.37], "Summarisation": [40, 75.55, 76.00], "Temporal": [40, 65.00, 72.50]}}
+  "lme": {
+   "n": 500,
+   "severian": 90.6,
+   "lcmx": 86.6,
+   "diff": 4.0,
+   "ci": [
+    1.2,
+    6.6
+   ],
+   "sev_only": 35,
+   "lcmx_only": 15,
+   "tokens": {
+    "severian": 6245,
+    "lcmx": 5159
+   },
+   "categories": {
+    "SS-User": [
+     70,
+     100.0,
+     97.14
+    ],
+    "SS-Asst": [
+     56,
+     98.21,
+     94.64
+    ],
+    "SS-Pref": [
+     30,
+     100.0,
+     93.33
+    ],
+    "Temp. Reas": [
+     133,
+     88.72,
+     85.71
+    ],
+    "Multi-S": [
+     133,
+     79.7,
+     74.44
+    ],
+    "Know. Upd": [
+     78,
+     94.87,
+     91.03
+    ]
+   }
   },
-  "lcmx_reproduction": {"locomo": [79.48, 78.83], "lme": [86.60, 87.00], "beam": [71.91, 71.84]},
-  "board_published": {
-    "_source": "OmniMemEval docs/user_memory/results.md at f7476c5 (Result Summary: LoCoMo, LongMemEval, BEAM 100K)",
-    "rows": {
-      "Mem0": [77.68, 56.00, 70.41], "Zep / Graphiti": [63.83, 79.80, 68.70], "Supermemory": [73.53, 66.07, 65.98],
-      "Viking": [69.33, 61.07, 70.76], "Cognee": [83.48, 51.80, 59.30], "Letta": [77.12, 77.67, 69.22],
-      "Hindsight": [81.99, 72.20, 70.22], "Memori": [41.34, 20.80, null], "EverOS": [82.75, 80.40, 58.64],
-      "MemMachine": [73.90, 63.60, 64.80], "mem9": [73.64, 78.00, 65.75], "MemOS": [88.83, 89.20, 66.87],
-      "LCM-X": [78.83, 87.00, 71.84]
-    }
-  },
-  "strict_marker": {
-    "_about": "Same answers re-marked by Claude Opus (official LongMemEval templates; BEAM per-item rubric). Fixed stratified sample of 200 questions per benchmark, same questions for both systems; LongMemEval later extended to all 500 (post-hoc, disclosed).",
-    "locomo": {"n": 200, "board": [90.5, 78.5, 12.0, 7.5, 17.0], "strict": [80.0, 67.5, 12.5, 7.0, 18.5]},
-    "lme_sample": {"n": 200, "board": [90.0, 87.5, 2.5, -2.0, 7.0], "strict": [88.5, 85.5, 3.0, -1.5, 7.5]},
-    "lme_full": {"n": 500, "board": [90.6, 86.6, 4.0, 1.2, 6.6], "strict": [88.4, 85.0, 3.4, 0.6, 6.2]},
-    "beam": {"n": 200, "board": [71.5, 71.5, 0.0, -4.2, 4.3], "strict": [60.1, 58.8, 1.4, -2.5, 5.2]},
-    "beam_abstention": {"n": 20, "board": [82.5, 80.0], "strict": [25.0, 25.0]}
-  },
-  "equal_text": {
-    "_about": "Side track: one fixed open reader (Qwen3.8-27B, reasoning low) and marker (DeepSeek-V4-Pro), each system's retrieved text cut to the same token budget. LoCoMo on CommandCode; BEAM and LongMemEval on Nous (one host per benchmark). Failed marks excluded.",
-    "locomo": {"replicate": [77.91, 65.32, 12.59, 10.60, 14.64, 1462], "eq1000": [66.50, 64.50, 2.00, 0.07, 4.01, 1397], "eq4000": [77.02, 65.52, 11.49, 9.61, 13.44, 1488], "eq8000": [77.62, 65.68, 11.95, 9.94, 13.95, 1448], "shipped": [74.00, 65.36, 8.64, 6.62, 10.60, 1481]},
-    "beam": {"replicate": [65.2, 67.3, -2.1, -5.2, 1.0, 391], "eq1000": [51.9, 53.0, -1.0, -4.7, 2.7, 386], "eq4000": [63.9, 66.0, -2.0, -5.5, 1.4, 381], "eq8000": [65.9, 67.6, -1.7, -4.6, 1.1, 388], "shipped": [59.8, 67.4, -7.6, -11.4, -3.9, 386]},
-    "lme": {"replicate": [89.9, 87.1, 2.8, 0.6, 5.2, 497]}
-  },
-  "settings": {
-    "_about": "Severian 0.3.11 on the board models: board depth (top-20, no character cap) vs Hermes shipped defaults (top-10, 8,000-character cap). Tokens = answer-prompt tokens per question.",
-    "board":   {"locomo": [87.34, 5662], "lme": [90.60, 6245], "beam": [71.62, 15487]},
-    "shipped": {"locomo": [86.17, 3005], "lme": [82.00, 2233], "beam": [63.86, 2065]}
-  },
-  "improvements": {
-    "_about": "Severian-only paired before/after on the board models. v2 = new context layout (Handoff 2). fill+compact = fill-budget + compact citations (Handoff 1).",
-    "v2_board_depth": {"lme": [90.60, 90.60, 0.00, -1.80, 1.80], "locomo": [87.34, 87.60, 0.26, -0.71, 1.30], "beam": null},
-    "fill_compact_shipped": {"lme": [82.00, 81.80, -0.20, -2.40, 2.00], "locomo": [86.17, 87.40, 1.23, 0.13, 2.34], "beam": [63.86, 64.53, 0.67, -0.91, 2.28]},
-    "cap16k_shipped": null
+  "beam": {
+   "n": 400,
+   "severian": 71.62,
+   "lcmx": 71.91,
+   "diff": -0.29,
+   "ci": [
+    -3.16,
+    2.55
+   ],
+   "sev_only": 76,
+   "lcmx_only": 83,
+   "tokens": {
+    "severian": 15487,
+    "lcmx": 11944
+   },
+   "categories": {
+    "Abstention": [
+     40,
+     82.5,
+     82.5
+    ],
+    "Contradiction": [
+     40,
+     80.63,
+     65.62
+    ],
+    "Event ordering": [
+     40,
+     25.47,
+     27.97
+    ],
+    "Info extraction": [
+     40,
+     90.62,
+     89.38
+    ],
+    "Instruction following": [
+     40,
+     88.12,
+     89.38
+    ],
+    "Knowledge update": [
+     40,
+     53.75,
+     55.63
+    ],
+    "Multi-session": [
+     40,
+     65.78,
+     65.74
+    ],
+    "Preference following": [
+     40,
+     88.75,
+     94.37
+    ],
+    "Summarisation": [
+     40,
+     75.55,
+     76.0
+    ],
+    "Temporal": [
+     40,
+     65.0,
+     72.5
+    ]
+   }
   }
+ },
+ "lcmx_reproduction": {
+  "locomo": [
+   79.48,
+   78.83
+  ],
+  "lme": [
+   86.6,
+   87.0
+  ],
+  "beam": [
+   71.91,
+   71.84
+  ]
+ },
+ "board_published": {
+  "_source": "OmniMemEval docs/user_memory/results.md at f7476c5 (Result Summary: LoCoMo, LongMemEval, BEAM 100K)",
+  "rows": {
+   "Mem0": [
+    77.68,
+    56.0,
+    70.41
+   ],
+   "Zep / Graphiti": [
+    63.83,
+    79.8,
+    68.7
+   ],
+   "Supermemory": [
+    73.53,
+    66.07,
+    65.98
+   ],
+   "Viking": [
+    69.33,
+    61.07,
+    70.76
+   ],
+   "Cognee": [
+    83.48,
+    51.8,
+    59.3
+   ],
+   "Letta": [
+    77.12,
+    77.67,
+    69.22
+   ],
+   "Hindsight": [
+    81.99,
+    72.2,
+    70.22
+   ],
+   "Memori": [
+    41.34,
+    20.8,
+    null
+   ],
+   "EverOS": [
+    82.75,
+    80.4,
+    58.64
+   ],
+   "MemMachine": [
+    73.9,
+    63.6,
+    64.8
+   ],
+   "mem9": [
+    73.64,
+    78.0,
+    65.75
+   ],
+   "MemOS": [
+    88.83,
+    89.2,
+    66.87
+   ],
+   "LCM-X": [
+    78.83,
+    87.0,
+    71.84
+   ]
+  }
+ },
+ "strict_marker": {
+  "_about": "Same answers re-marked by Claude Opus (official LongMemEval templates; BEAM per-item rubric). Fixed stratified sample of 200 questions per benchmark, same questions for both systems; LongMemEval later extended to all 500 (post-hoc, disclosed).",
+  "locomo": {
+   "n": 200,
+   "board": [
+    90.5,
+    78.5,
+    12.0,
+    7.5,
+    17.0
+   ],
+   "strict": [
+    80.0,
+    67.5,
+    12.5,
+    7.0,
+    18.5
+   ]
+  },
+  "lme_sample": {
+   "n": 200,
+   "board": [
+    90.0,
+    87.5,
+    2.5,
+    -2.0,
+    7.0
+   ],
+   "strict": [
+    88.5,
+    85.5,
+    3.0,
+    -1.5,
+    7.5
+   ]
+  },
+  "lme_full": {
+   "n": 500,
+   "board": [
+    90.6,
+    86.6,
+    4.0,
+    1.2,
+    6.6
+   ],
+   "strict": [
+    88.4,
+    85.0,
+    3.4,
+    0.6,
+    6.2
+   ]
+  },
+  "beam": {
+   "n": 200,
+   "board": [
+    71.5,
+    71.5,
+    0.0,
+    -4.2,
+    4.3
+   ],
+   "strict": [
+    60.1,
+    58.8,
+    1.4,
+    -2.5,
+    5.2
+   ]
+  },
+  "beam_abstention": {
+   "n": 20,
+   "board": [
+    82.5,
+    80.0
+   ],
+   "strict": [
+    25.0,
+    25.0
+   ]
+  }
+ },
+ "equal_text": {
+  "_about": "Side track: one fixed open reader (Qwen3.8-27B, reasoning low) and marker (DeepSeek-V4-Pro), each system's retrieved text cut to the same token budget. LoCoMo on CommandCode; BEAM and LongMemEval on Nous (one host per benchmark). Failed marks excluded.",
+  "locomo": {
+   "replicate": [
+    77.91,
+    65.32,
+    12.59,
+    10.6,
+    14.64,
+    1462
+   ],
+   "eq1000": [
+    66.5,
+    64.5,
+    2.0,
+    0.07,
+    4.01,
+    1397
+   ],
+   "eq4000": [
+    77.02,
+    65.52,
+    11.49,
+    9.61,
+    13.44,
+    1488
+   ],
+   "eq8000": [
+    77.62,
+    65.68,
+    11.95,
+    9.94,
+    13.95,
+    1448
+   ],
+   "shipped": [
+    74.0,
+    65.36,
+    8.64,
+    6.62,
+    10.6,
+    1481
+   ]
+  },
+  "beam": {
+   "replicate": [
+    65.2,
+    67.3,
+    -2.1,
+    -5.2,
+    1.0,
+    391
+   ],
+   "eq1000": [
+    51.9,
+    53.0,
+    -1.0,
+    -4.7,
+    2.7,
+    386
+   ],
+   "eq4000": [
+    63.9,
+    66.0,
+    -2.0,
+    -5.5,
+    1.4,
+    381
+   ],
+   "eq8000": [
+    65.9,
+    67.6,
+    -1.7,
+    -4.6,
+    1.1,
+    388
+   ],
+   "shipped": [
+    59.8,
+    67.4,
+    -7.6,
+    -11.4,
+    -3.9,
+    386
+   ]
+  },
+  "lme": {
+   "replicate": [
+    89.9,
+    87.1,
+    2.8,
+    0.6,
+    5.2,
+    497
+   ]
+  }
+ },
+ "settings": {
+  "_about": "Severian 0.3.11 on the board models: board depth (top-20, no character cap) vs Hermes shipped defaults (top-10, 8,000-character cap). Tokens = answer-prompt tokens per question.",
+  "board": {
+   "locomo": [
+    87.34,
+    5662
+   ],
+   "lme": [
+    90.6,
+    6245
+   ],
+   "beam": [
+    71.62,
+    15487
+   ]
+  },
+  "shipped": {
+   "locomo": [
+    86.17,
+    3005
+   ],
+   "lme": [
+    82.0,
+    2233
+   ],
+   "beam": [
+    63.86,
+    2065
+   ]
+  }
+ },
+ "improvements": {
+  "_about": "Severian-only paired before/after on the board models. v2 = new context layout (Handoff 2). fill+compact = fill-budget + compact citations (Handoff 1).",
+  "v2_board_depth": {
+   "lme": [
+    90.6,
+    90.6,
+    0.0,
+    -1.8,
+    1.8
+   ],
+   "locomo": [
+    87.34,
+    87.6,
+    0.26,
+    -0.71,
+    1.3
+   ],
+   "beam": null
+  },
+  "fill_compact_shipped": {
+   "lme": [
+    82.0,
+    81.8,
+    -0.2,
+    -2.4,
+    2.0
+   ],
+   "locomo": [
+    86.17,
+    87.4,
+    1.23,
+    0.13,
+    2.34
+   ],
+   "beam": [
+    63.86,
+    64.53,
+    0.67,
+    -0.91,
+    2.28
+   ]
+  },
+  "cap16k_shipped": null
+ },
+ "board_tables": {
+  "_source": "OmniMemEval docs/user_memory/results.md at f7476c5502115542eca9971195bf8c5ca97b6256, 'Result Summary' and each benchmark's 'Reproduced Results' table, copied verbatim (not re-run by us).",
+  "locomo": {
+   "columns": [
+    "Backend",
+    "Deployment",
+    "Single-Hop",
+    "Multi-Hop",
+    "Temporal",
+    "Open-Domain",
+    "Overall",
+    "Context Tokens"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "cloud",
+     "81.09",
+     "76.12",
+     "77.15",
+     "54.17",
+     "77.68",
+     "17,395"
+    ],
+    [
+     "Zep",
+     "cloud",
+     "65.36",
+     "68.79",
+     "55.56",
+     "63.54",
+     "63.83",
+     "1,862"
+    ],
+    [
+     "Supermemory",
+     "cloud",
+     "75.39",
+     "77.07",
+     "67.60",
+     "66.67",
+     "73.53",
+     "15,238"
+    ],
+    [
+     "Viking",
+     "cloud",
+     "78.04",
+     "73.29",
+     "48.81",
+     "50.00",
+     "69.33",
+     "5,964"
+    ],
+    [
+     "Cognee",
+     "cloud",
+     "87.99",
+     "78.84",
+     "81.83",
+     "63.19",
+     "83.48",
+     "32,532"
+    ],
+    [
+     "Letta",
+     "cloud",
+     "87.99",
+     "76.24",
+     "53.48",
+     "63.54",
+     "77.12",
+     "14,188"
+    ],
+    [
+     "Hindsight",
+     "cloud",
+     "88.98",
+     "78.84",
+     "73.52",
+     "58.33",
+     "81.99",
+     "24,683"
+    ],
+    [
+     "Memori",
+     "cloud",
+     "47.32",
+     "44.09",
+     "22.53",
+     "43.75",
+     "41.34",
+     "8,139"
+    ],
+    [
+     "EverOS",
+     "cloud",
+     "86.80",
+     "77.78",
+     "84.11",
+     "57.29",
+     "82.75",
+     "8,559"
+    ],
+    [
+     "MemMachine",
+     "local/self-hosted",
+     "83.47",
+     "53.19",
+     "71.96",
+     "57.29",
+     "73.90",
+     "2,577"
+    ],
+    [
+     "mem9",
+     "cloud",
+     "79.27",
+     "62.88",
+     "73.62",
+     "55.90",
+     "73.64",
+     "1,597"
+    ],
+    [
+     "MemoryLake",
+     "cloud",
+     "70.87",
+     "75.30",
+     "79.75",
+     "54.17",
+     "72.49",
+     "5,202"
+    ],
+    [
+     "Backboard.io",
+     "cloud",
+     "25.09",
+     "22.34",
+     "13.40",
+     "29.17",
+     "22.40",
+     "1,198"
+    ],
+    [
+     "MemOS",
+     "cloud",
+     "92.51",
+     "88.65",
+     "85.05",
+     "69.79",
+     "88.83",
+     "5,400"
+    ],
+    [
+     "LCM-X",
+     "local/self-hosted",
+     "84.30",
+     "66.31",
+     "79.75",
+     "64.58",
+     "78.83",
+     "1,659"
+    ]
+   ]
+  },
+  "lme": {
+   "columns": [
+    "Backend",
+    "Deployment",
+    "SS-User",
+    "SS-Asst",
+    "SS-Pref",
+    "Temp. Reas",
+    "Multi-S",
+    "Know. Upd",
+    "Overall",
+    "Context Tokens"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "cloud",
+     "8.57",
+     "85.71",
+     "96.67",
+     "51.13",
+     "50.38",
+     "79.49",
+     "56.00",
+     "856"
+    ],
+    [
+     "graphiti-zep",
+     "local/self-hosted",
+     "94.29",
+     "100.00",
+     "86.67",
+     "74.44",
+     "67.67",
+     "79.49",
+     "79.80",
+     "117,106"
+    ],
+    [
+     "Supermemory",
+     "cloud",
+     "87.14",
+     "41.07",
+     "65.56",
+     "68.42",
+     "60.15",
+     "71.37",
+     "66.07",
+     "6,635"
+    ],
+    [
+     "Viking",
+     "cloud",
+     "75.24",
+     "46.43",
+     "96.67",
+     "55.39",
+     "57.89",
+     "60.26",
+     "61.07",
+     "2,291"
+    ],
+    [
+     "Cognee",
+     "local/self-hosted",
+     "67.14",
+     "60.71",
+     "83.33",
+     "47.37",
+     "37.59",
+     "51.28",
+     "51.80",
+     "10,305"
+    ],
+    [
+     "Letta",
+     "cloud",
+     "95.71",
+     "98.21",
+     "76.67",
+     "69.42",
+     "65.41",
+     "82.05",
+     "77.67",
+     "49,431"
+    ],
+    [
+     "Hindsight",
+     "local/self-hosted",
+     "82.86",
+     "14.29",
+     "96.67",
+     "82.71",
+     "71.43",
+     "78.21",
+     "72.20",
+     "29,755"
+    ],
+    [
+     "Memori",
+     "cloud",
+     "84.14",
+     "1.79",
+     "23.33",
+     "3.76",
+     "18.80",
+     "6.41",
+     "20.80",
+     "2,779"
+    ],
+    [
+     "EverOS",
+     "local/self-hosted",
+     "91.43",
+     "89.29",
+     "96.67",
+     "81.95",
+     "66.17",
+     "79.49",
+     "80.40",
+     "12,379"
+    ],
+    [
+     "MemMachine",
+     "local/self-hosted",
+     "75.71",
+     "96.43",
+     "83.33",
+     "55.64",
+     "39.85",
+     "75.64",
+     "63.60",
+     "2,803"
+    ],
+    [
+     "mem9",
+     "cloud",
+     "95.71",
+     "94.64",
+     "56.67",
+     "77.44",
+     "62.41",
+     "85.90",
+     "78.00",
+     "3,805"
+    ],
+    [
+     "MemOS",
+     "cloud",
+     "100.00",
+     "100.00",
+     "100.00",
+     "89.47",
+     "78.95",
+     "84.62",
+     "89.20",
+     "4,151"
+    ],
+    [
+     "LCM-X",
+     "local/self-hosted",
+     "95.71",
+     "94.64",
+     "96.67",
+     "85.71",
+     "75.19",
+     "92.31",
+     "87.00",
+     "5,164"
+    ]
+   ]
+  },
+  "beam": {
+   "columns": [
+    "Backend",
+    "Deployment",
+    "100K Nugget Score",
+    "100K Context Tokens",
+    "10M Nugget Score",
+    "10M Context Tokens"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "cloud",
+     "70.41 +/- 36.36",
+     "1,055",
+     "43.33 +/- 41.99",
+     "1,086"
+    ],
+    [
+     "graphiti-zep",
+     "local/self-hosted",
+     "68.70 +/- 36.46",
+     "8,667",
+     "56.11 +/- 40.70",
+     "176,211"
+    ],
+    [
+     "Supermemory",
+     "cloud",
+     "65.98 +/- 37.10",
+     "6,294",
+     "52.49 +/- 40.44",
+     "6,574"
+    ],
+    [
+     "Viking",
+     "cloud",
+     "70.76 +/- 35.23",
+     "2,023",
+     "58.14 +/- 39.57",
+     "2,080"
+    ],
+    [
+     "Cognee",
+     "local/self-hosted",
+     "59.30 +/- 39.44",
+     "33,065",
+     "56.02 +/- 41.33",
+     "40,914"
+    ],
+    [
+     "Letta",
+     "cloud",
+     "69.22 +/- 36.76",
+     "82,013",
+     "52.30 +/- 41.06",
+     "49,786"
+    ],
+    [
+     "Hindsight",
+     "local/self-hosted",
+     "70.22 +/- 36.44",
+     "24,085",
+     "59.75 +/- 39.63",
+     "23,815"
+    ],
+    [
+     "EverOS",
+     "local/self-hosted",
+     "58.64 +/- 39.36",
+     "7,393",
+     "47.73 +/- 41.66",
+     "11,657"
+    ],
+    [
+     "MemMachine",
+     "local/self-hosted",
+     "64.80 +/- 37.62",
+     "5,413",
+     "51.90 +/- 40.46",
+     "5,448"
+    ],
+    [
+     "mem9",
+     "cloud",
+     "65.75 +/- 38.92",
+     "5,372",
+     "57.30 +/- 39.03",
+     "4,947"
+    ],
+    [
+     "MemOS",
+     "cloud",
+     "66.87 +/- 37.37",
+     "1,636",
+     "56.75 +/- 39.17",
+     "1,558"
+    ],
+    [
+     "LCM-X",
+     "local/self-hosted",
+     "71.84 +/- 34.86",
+     "11,926",
+     "-",
+     "-"
+    ]
+   ]
+  },
+  "pmv2": {
+   "columns": [
+    "Backend",
+    "Deployment",
+    "Anti-Stereotypical",
+    "Ask-to-Forget",
+    "Health/Medical",
+    "Neutral",
+    "Sensitive",
+    "Stereotypical",
+    "Therapy",
+    "Overall",
+    "Context Tokens"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "cloud",
+     "41.40",
+     "24.33",
+     "38.38",
+     "39.28",
+     "30.72",
+     "45.78",
+     "43.54",
+     "36.76",
+     "1,388"
+    ],
+    [
+     "graphiti-zep",
+     "local/self-hosted",
+     "28.19",
+     "29.77",
+     "28.70",
+     "31.93",
+     "30.92",
+     "37.90",
+     "42.58",
+     "32.34",
+     "3,645"
+    ],
+    [
+     "Supermemory",
+     "cloud",
+     "42.34",
+     "31.97",
+     "42.96",
+     "42.42",
+     "30.72",
+     "49.72",
+     "40.67",
+     "39.64",
+     "4,473"
+    ],
+    [
+     "Viking",
+     "cloud",
+     "31.58",
+     "25.38",
+     "29.23",
+     "29.49",
+     "33.66",
+     "36.59",
+     "34.77",
+     "30.80",
+     "1,688"
+    ],
+    [
+     "Cognee",
+     "local/self-hosted",
+     "18.83",
+     "41.13",
+     "16.90",
+     "18.65",
+     "32.88",
+     "16.51",
+     "34.93",
+     "26.46",
+     "10,189"
+    ],
+    [
+     "Letta",
+     "cloud",
+     "31.46",
+     "38.93",
+     "32.39",
+     "34.85",
+     "27.40",
+     "39.40",
+     "39.23",
+     "35.12",
+     "30,903"
+    ],
+    [
+     "Hindsight",
+     "local/self-hosted",
+     "33.57",
+     "40.65",
+     "36.62",
+     "38.11",
+     "36.01",
+     "42.78",
+     "38.12",
+     "37.98",
+     "15,926"
+    ],
+    [
+     "Memori",
+     "cloud",
+     "30.18",
+     "27.48",
+     "32.39",
+     "37.53",
+     "33.46",
+     "36.77",
+     "38.12",
+     "33.16",
+     "3,109"
+    ],
+    [
+     "EverOS",
+     "cloud",
+     "33.57",
+     "31.49",
+     "34.68",
+     "37.76",
+     "33.27",
+     "44.47",
+     "40.19",
+     "35.94",
+     "6,572"
+    ],
+    [
+     "MemMachine",
+     "local/self-hosted",
+     "28.19",
+     "45.04",
+     "32.22",
+     "28.44",
+     "29.75",
+     "32.46",
+     "38.60",
+     "34.14",
+     "1,988"
+    ],
+    [
+     "mem9",
+     "cloud",
+     "32.28",
+     "22.90",
+     "32.57",
+     "34.50",
+     "25.05",
+     "38.27",
+     "33.33",
+     "30.76",
+     "2,045"
+    ],
+    [
+     "MemOS",
+     "cloud",
+     "33.80",
+     "57.82",
+     "32.57",
+     "35.66",
+     "36.59",
+     "39.40",
+     "39.23",
+     "40.58",
+     "1,908"
+    ],
+    [
+     "LCM-X",
+     "local/self-hosted",
+     "32.98",
+     "32.82",
+     "34.15",
+     "31.59",
+     "32.68",
+     "39.21",
+     "36.84",
+     "33.96",
+     "3,534"
+    ]
+   ]
+  },
+  "halumem": {
+   "columns": [
+    "Backend",
+    "Deployment",
+    "Basic Fact",
+    "Boundary",
+    "Conflict",
+    "Generalization",
+    "Multi-Hop",
+    "Dynamic Update",
+    "Overall",
+    "Context Tokens"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "cloud",
+     "56.30",
+     "91.91",
+     "74.77",
+     "78.42",
+     "68.69",
+     "42.22",
+     "73.64",
+     "803"
+    ],
+    [
+     "graphiti-zep",
+     "local/self-hosted",
+     "69.44",
+     "89.13",
+     "88.43",
+     "84.05",
+     "79.80",
+     "62.22",
+     "81.71",
+     "5,404"
+    ],
+    [
+     "Supermemory",
+     "cloud",
+     "25.20",
+     "97.46",
+     "44.86",
+     "49.87",
+     "41.92",
+     "16.11",
+     "52.61",
+     "1,672"
+    ],
+    [
+     "Viking",
+     "cloud",
+     "57.91",
+     "92.51",
+     "80.49",
+     "84.72",
+     "74.75",
+     "47.78",
+     "77.39",
+     "3,196"
+    ],
+    [
+     "Cognee",
+     "local/self-hosted",
+     "52.41",
+     "92.51",
+     "74.64",
+     "78.28",
+     "69.70",
+     "35.56",
+     "72.60",
+     "8,981"
+    ],
+    [
+     "Letta",
+     "cloud",
+     "85.92",
+     "83.45",
+     "85.70",
+     "90.62",
+     "84.34",
+     "71.11",
+     "85.43",
+     "45,349"
+    ],
+    [
+     "Hindsight",
+     "local/self-hosted",
+     "78.42",
+     "87.45",
+     "86.61",
+     "86.19",
+     "81.31",
+     "73.89",
+     "83.99",
+     "14,798"
+    ],
+    [
+     "Memori",
+     "cloud",
+     "20.91",
+     "93.24",
+     "41.35",
+     "53.35",
+     "24.24",
+     "11.11",
+     "49.38",
+     "3,275"
+    ],
+    [
+     "EverOS",
+     "local/self-hosted",
+     "87.80",
+     "88.89",
+     "89.99",
+     "90.48",
+     "86.36",
+     "80.56",
+     "88.66",
+     "10,824"
+    ],
+    [
+     "MemMachine",
+     "local/self-hosted",
+     "20.38",
+     "97.42",
+     "34.72",
+     "45.31",
+     "26.77",
+     "11.11",
+     "47.02",
+     "1,093"
+    ],
+    [
+     "mem9",
+     "cloud",
+     "54.56",
+     "94.20",
+     "68.79",
+     "80.16",
+     "70.71",
+     "38.89",
+     "72.80",
+     "893"
+    ],
+    [
+     "MemOS",
+     "cloud",
+     "69.03",
+     "91.30",
+     "86.48",
+     "83.51",
+     "74.24",
+     "55.00",
+     "80.91",
+     "1,187"
+    ],
+    [
+     "LCM-X",
+     "local/self-hosted",
+     "73.06",
+     "89.73",
+     "85.96",
+     "82.31",
+     "78.79",
+     "62.78",
+     "81.68",
+     "1,985"
+    ]
+   ]
+  },
+  "summary": {
+   "columns": [
+    "Backend",
+    "LoCoMo",
+    "LongMemEval",
+    "BEAM 100K",
+    "BEAM 10M",
+    "PersonaMem v2",
+    "HaluMem"
+   ],
+   "rows": [
+    [
+     "Mem0",
+     "77.68",
+     "56.00",
+     "70.41",
+     "43.33",
+     "36.76",
+     "73.64"
+    ],
+    [
+     "Zep / Graphiti",
+     "63.83",
+     "79.80",
+     "68.70",
+     "56.11",
+     "32.34",
+     "81.71"
+    ],
+    [
+     "Supermemory",
+     "73.53",
+     "66.07",
+     "65.98",
+     "52.49",
+     "39.64",
+     "52.61"
+    ],
+    [
+     "Viking",
+     "69.33",
+     "61.07",
+     "70.76",
+     "58.14",
+     "30.80",
+     "77.39"
+    ],
+    [
+     "Cognee",
+     "83.48",
+     "51.80",
+     "59.30",
+     "56.02",
+     "26.46",
+     "72.60"
+    ],
+    [
+     "Letta",
+     "77.12",
+     "77.67",
+     "69.22",
+     "52.30",
+     "35.12",
+     "85.43"
+    ],
+    [
+     "Hindsight",
+     "81.99",
+     "72.20",
+     "70.22",
+     "59.75",
+     "37.98",
+     "83.99"
+    ],
+    [
+     "Memori",
+     "41.34",
+     "20.80",
+     "-",
+     "-",
+     "33.16",
+     "49.38"
+    ],
+    [
+     "EverOS",
+     "82.75",
+     "80.40",
+     "58.64",
+     "47.73",
+     "35.94",
+     "88.66"
+    ],
+    [
+     "MemMachine",
+     "73.90",
+     "63.60",
+     "64.80",
+     "51.90",
+     "34.14",
+     "47.02"
+    ],
+    [
+     "mem9",
+     "73.64",
+     "78.00",
+     "65.75",
+     "57.30",
+     "30.76",
+     "72.80"
+    ],
+    [
+     "MemoryLake",
+     "72.49",
+     "-",
+     "-",
+     "-",
+     "-",
+     "-"
+    ],
+    [
+     "Backboard.io",
+     "22.40",
+     "-",
+     "-",
+     "-",
+     "-",
+     "-"
+    ],
+    [
+     "MemOS",
+     "88.83",
+     "89.20",
+     "66.87",
+     "56.75",
+     "40.58",
+     "80.91"
+    ],
+    [
+     "LCM-X",
+     "78.83",
+     "87.00",
+     "71.84",
+     "-",
+     "33.96",
+     "81.68"
+    ]
+   ]
+  }
+ },
+ "severian_rows": {
+  "_about": "Severian 0.3.11 rows added to the board tables, from this run (board models, pipeline, top-20). '-' = not run.",
+  "summary": [
+   "87.34",
+   "90.60",
+   "71.62",
+   "-",
+   "-",
+   "-"
+  ],
+  "locomo": [
+   "local/self-hosted (self-run)",
+   "93.10",
+   "80.14",
+   "84.11",
+   "68.75",
+   "87.34",
+   "5,662"
+  ],
+  "lme": [
+   "local/self-hosted (self-run)",
+   "100.00",
+   "98.21",
+   "100.00",
+   "88.72",
+   "79.70",
+   "94.87",
+   "90.60",
+   "6,245"
+  ],
+  "beam": [
+   "local/self-hosted (self-run)",
+   "71.62 +/- 36.45",
+   "15,487",
+   "-",
+   "-"
+  ],
+  "pmv2": null,
+  "halumem": null
+ }
 }
