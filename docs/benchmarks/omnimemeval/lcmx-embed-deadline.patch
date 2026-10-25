@@ -1,0 +1,21 @@
+diff --git a/scripts/client_factory/lcmx_client.py b/scripts/client_factory/lcmx_client.py
+index 50cc870..fd08a2a 100644
+--- a/scripts/client_factory/lcmx_client.py
++++ b/scripts/client_factory/lcmx_client.py
+@@ -140,9 +140,13 @@ class LcmxClient:
+             global _EMBEDDER
+             with _EMBEDDER_LOCK:
+                 if _EMBEDDER is None:
+-                    _EMBEDDER = _LockedEmbedder(
+-                        resolve_harness_provider(self._provider_name, self._model)
+-                    )
++                    # H2H P1 (23/10/2026): LCM-X's harness embedder has a fixed 300 s per-call deadline
++                    # (resolve_harness_provider(timeout=300.0)). On our shared CPU, 265-337k-character BEAM sessions
++                    # missed it. LCMX_EMBED_TIMEOUT_S raises it; unset = the original call, unchanged.
++                    # Operational only: same model, same chunks, same vectors.
++                    t = os.environ.get("LCMX_EMBED_TIMEOUT_S")
++                    _EMBEDDER = _LockedEmbedder(resolve_harness_provider(
++                        self._provider_name, self._model, **({"timeout": float(t)} if t else {})))
+             self._embedder = _EMBEDDER
+             self._dim = self._embedder.dim
+             self._model = self._embedder.model_id

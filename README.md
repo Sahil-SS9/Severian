@@ -21,46 +21,40 @@ client, a CLI, an HTTP API or plain Python.
 
 ## Results
 
-In October 2026 we ran a head-to-head round against Mem0, Mnemosyne, Hindsight and Honcho: three public
-long-term-memory benchmarks, every system under one common rule (same answering model, top 10 memories, Opus
-marking), each row a 95% interval.
+Severian on [OmniMemEval](https://github.com/MemTensor/OmniMemEval), the public harness behind its long-term-memory
+leaderboard, using the board's own answer model (`gpt-4.1-mini`), judge (`gpt-4o-mini`), prompts and metrics
+(October 2026; [full results](docs/benchmarks/omnimemeval-2026-10.md)):
 
-| System | LoCoMo (199 q) | BEAM 100K (100 q) | LongMemEval (60 q), 5,000 chars | LongMemEval, 1,500 chars |
-|---|---|---|---|---|
-| **Severian** | **59.8%** (52.8-66.3) | **58.3%** (50.5-66.1) | **66.7%** (55.0-78.3) | 43.3% (31.7-56.7) |
-| Severian, features off | 57.8% (50.8-64.8) | 55.7% (48.0-63.7) | 53.3% (40.0-65.0) | 36.7% (25.0-48.3) |
-| Mnemosyne | 48.2% (41.2-55.3) | 47.9% (39.8-56.1) | 51.7% (38.3-63.3) | 43.3% (30.0-55.0) |
-| Mem0 | 53.3% (46.2-60.3) | 28.4% (21.0-36.0) | 46.7% (33.3-60.0) | **48.3%** (36.7-61.7) |
-| Hindsight | 43.2% (36.7-50.3) | 40.8% (33.1-48.7) | not run [e] | not run [e] |
-| Honcho | 26.1% (20.1-32.2) | 37.6% (30.1-45.4) | not run [e] | not run [e] |
+![Severian vs LCM-X on OmniMemEval](docs/benchmarks/img/h2h.svg)
 
-Severian against the best competitor on the same questions:
+| System | LoCoMo (1,540 q) | LongMemEval (500 q) | BEAM 100K (400 q) |
+|---|---:|---:|---:|
+| **Severian 0.3.11** | **87.34** | **90.60** | 71.62 |
+| LCM-X v0.28.1 | 79.48 | 86.60 | **71.91** |
+| Severian minus LCM-X (95% range) | **+7.86** (+6.04 to +9.74) | **+4.00** (+1.20 to +6.60) | -0.29 (-3.16 to +2.55), a tie |
 
-- **BEAM: +10.4 points** over Mnemosyne, a clear win.
-- **LongMemEval at 5,000 characters: +20.0 points** over Mem0, a clear win.
-- **LoCoMo: +6.5 points** over Mem0, ahead.
-- LongMemEval at 1,500 characters: level with the best (Mem0 leads overall, but within error).
+- **Ahead on LoCoMo and LongMemEval, level on BEAM**, paired on the same questions. A stricter second marker (Claude
+  Opus, official LongMemEval templates) agrees on all three.
+- **The setup is fair to the other side:** run through the same pipeline, LCM-X scores within 0.65 points of its own
+  published board numbers.
+- **Where Severian sits on the board.** These are our own runs, not an official entry, and we compared head-to-head
+  with LCM-X only, so treat the placement as context:
 
-The fine-grained category cells are the one place other systems still edge ahead, and each cell is 10 to 43
-questions, so a few answers move these numbers. Each one has a cause we verified by hand, not a guess:
+![OmniMemEval leaderboard context](docs/benchmarks/img/board.svg)
 
-| Benchmark / category | Severian | Best other | Cause we verified | Fix status |
-|---|---|---|---|---|
-| LoCoMo multi-hop | 26% | Mem0 42% | the needed evidence reaches the answering model for only 12 of 43 questions; a quarter of the ten returned slots hold no answer, while Mem0's one-line facts per person cover more | per-person fact sheets, in design |
-| BEAM abstention | 40% | Mem0 80% | Severian answers when it should say "I don't know"; in 3 of 6 misses the missing detail came from the assistant's own replies | reply trimming moves the tight-budget cases; a confident-abstention rule is open |
-| BEAM contradiction resolution | 24% | Honcho 30% | both sides of a conflict are returned (10 of 10), but nothing labels them as conflicting | shipped: conflict notes since 0.3.9, on by default |
-| BEAM knowledge update | 70% | Mnemosyne 85% | in 2 of 3 misses the old and new values share one timestamp (BEAM stamps a whole chat at 09:00) | open: better timestamps, not sorting |
-| LoCoMo open-domain | 46% | Hindsight 46% | tie | - |
-| Search speed (median) | 63 ms | Honcho 43 ms | both sit far inside the answering model's own response time | - |
-
-We publish both sides of the ledger on purpose: [docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md) has the method,
-footnotes, loss accounting and interval details, and the repository ships the harness itself.
-
-- **As good as perfect recall.** Handed only the turns the datasets label as the answer, the same answering model
-  scores 59.8% on LoCoMo and 76.7% on LongMemEval. Severian matches the first and passes the second (81.7% with no
-  size limit), because it resolves "yesterday" and "last Friday" to real dates when it saves a turn.
+- **Trade-offs, stated plainly.** Severian hands the answering model more text than LCM-X (3.4x on LoCoMo, ~1.2-1.3x
+  elsewhere) and makes model calls when it saves memories. Cut to the same amount of text, it stays clearly ahead on
+  LoCoMo and ties on BEAM. Hermes ships Severian with a cheap 8,000-character context cap; that costs little on LoCoMo
+  but about 8 points on BEAM and LongMemEval ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
+- **We found a marking flaw in BEAM** that rewards made-up answers to "the chat never said" questions. It inflates
+  every system's BEAM score, ours included ([details](docs/benchmarks/omnimemeval-2026-10.md#a-marking-flaw-in-beam)).
 - **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate, a corrected fact never comes back in
   search (0.000 stale-fact rate) and no query ever returns another scope's memory (0.000 leakage).
+
+Every number, the adapter, the plan and its changes, and the limitations are in
+[docs/benchmarks/omnimemeval-2026-10.md](docs/benchmarks/omnimemeval-2026-10.md). Our earlier internal round against
+Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
+[docs/benchmarks/competitor-round-2026-10.md](docs/benchmarks/competitor-round-2026-10.md).
 
 ## Why Severian
 
