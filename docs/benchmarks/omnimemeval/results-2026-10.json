@@ -1496,5 +1496,765 @@
   ],
   "pmv2": null,
   "halumem": null
+ },
+ "breakdowns": {
+  "settings_locomo": {
+   "title": "locomo: Severian settings by category",
+   "note": "Severian 0.3.11 on the board models. Board depth = top-20, no cap; Hermes default = top-10, 8,000 characters; fill = SEVERIAN_FILL_BUDGET + SEVERIAN_COMPACT_CITES (0.3.12 candidate).",
+   "columns": [
+    "Category",
+    "n",
+    "Board depth",
+    "Hermes default",
+    "Default + fill"
+   ],
+   "rows": [
+    [
+     "Single-Hop",
+     "841",
+     "93.1",
+     "92.0",
+     "93.8"
+    ],
+    [
+     "Multi-Hop",
+     "282",
+     "80.1",
+     "78.4",
+     "77.3"
+    ],
+    [
+     "Temporal",
+     "321",
+     "84.1",
+     "82.6",
+     "84.7"
+    ],
+    [
+     "Open-Domain",
+     "96",
+     "68.8",
+     "69.8",
+     "69.8"
+    ],
+    [
+     "**Overall**",
+     "1540",
+     "**87.3**",
+     "**86.2**",
+     "**87.4**"
+    ]
+   ]
+  },
+  "settings_lme": {
+   "title": "lme: Severian settings by category",
+   "note": "Severian 0.3.11 on the board models. Board depth = top-20, no cap; Hermes default = top-10, 8,000 characters; fill = SEVERIAN_FILL_BUDGET + SEVERIAN_COMPACT_CITES (0.3.12 candidate).",
+   "columns": [
+    "Category",
+    "n",
+    "Board depth",
+    "Hermes default",
+    "Default + fill",
+    "16,000 chars + fill"
+   ],
+   "rows": [
+    [
+     "SS-User",
+     "70",
+     "100.0",
+     "97.1",
+     "94.3",
+     "100.0"
+    ],
+    [
+     "SS-Asst",
+     "56",
+     "98.2",
+     "96.4",
+     "94.6",
+     "98.2"
+    ],
+    [
+     "SS-Pref",
+     "30",
+     "100.0",
+     "90.0",
+     "80.0",
+     "90.0"
+    ],
+    [
+     "Temp. Reas",
+     "133",
+     "88.7",
+     "75.9",
+     "76.7",
+     "81.2"
+    ],
+    [
+     "Multi-S",
+     "133",
+     "79.7",
+     "69.2",
+     "69.9",
+     "75.2"
+    ],
+    [
+     "Know. Upd",
+     "78",
+     "94.9",
+     "87.2",
+     "91.0",
+     "92.3"
+    ],
+    [
+     "**Overall**",
+     "500",
+     "**90.6**",
+     "**82.0**",
+     "**81.8**",
+     "**86.4**"
+    ]
+   ]
+  },
+  "settings_beam": {
+   "title": "beam: Severian settings by category",
+   "note": "Severian 0.3.11 on the board models. Board depth = top-20, no cap; Hermes default = top-10, 8,000 characters; fill = SEVERIAN_FILL_BUDGET + SEVERIAN_COMPACT_CITES (0.3.12 candidate).",
+   "columns": [
+    "Category",
+    "n",
+    "Board depth",
+    "Hermes default",
+    "Default + fill"
+   ],
+   "rows": [
+    [
+     "Abstention",
+     "40",
+     "82.5",
+     "80.0",
+     "72.5"
+    ],
+    [
+     "Contradiction",
+     "40",
+     "80.6",
+     "79.1",
+     "77.2"
+    ],
+    [
+     "Event ordering",
+     "40",
+     "25.5",
+     "19.6",
+     "21.7"
+    ],
+    [
+     "Info extraction",
+     "40",
+     "90.6",
+     "82.9",
+     "81.5"
+    ],
+    [
+     "Instruction following",
+     "40",
+     "88.1",
+     "71.9",
+     "76.9"
+    ],
+    [
+     "Knowledge update",
+     "40",
+     "53.8",
+     "55.6",
+     "61.2"
+    ],
+    [
+     "Multi-session",
+     "40",
+     "65.8",
+     "62.9",
+     "66.5"
+    ],
+    [
+     "Preference following",
+     "40",
+     "88.8",
+     "85.6",
+     "87.5"
+    ],
+    [
+     "Summarisation",
+     "40",
+     "75.6",
+     "53.5",
+     "51.7"
+    ],
+    [
+     "Temporal",
+     "40",
+     "65.0",
+     "47.5",
+     "48.8"
+    ],
+    [
+     "**Overall**",
+     "400",
+     "**71.6**",
+     "**63.9**",
+     "**64.5**"
+    ]
+   ]
+  },
+  "strict_locomo": {
+   "title": "locomo: board marker vs strict marker by category (200 questions)",
+   "note": "Same answers marked twice: the board's gpt-4o-mini judge, then Claude Opus with the official LongMemEval templates / BEAM per-item rubric.",
+   "columns": [
+    "Category",
+    "n",
+    "Severian, board",
+    "LCM-X, board",
+    "Severian, strict",
+    "LCM-X, strict"
+   ],
+   "rows": [
+    [
+     "Single-Hop",
+     "109",
+     "95.4",
+     "85.3",
+     "89.0",
+     "74.3"
+    ],
+    [
+     "Multi-Hop",
+     "37",
+     "83.8",
+     "59.5",
+     "54.1",
+     "37.8"
+    ],
+    [
+     "Temporal",
+     "42",
+     "88.1",
+     "78.6",
+     "85.7",
+     "78.6"
+    ],
+    [
+     "Open-Domain",
+     "12",
+     "75.0",
+     "75.0",
+     "58.3",
+     "58.3"
+    ],
+    [
+     "**Overall**",
+     "200",
+     "**90.5**",
+     "**78.5**",
+     "**80.0**",
+     "**67.5**"
+    ]
+   ]
+  },
+  "strict_lme": {
+   "title": "lme: board marker vs strict marker by category (500 questions)",
+   "note": "Same answers marked twice: the board's gpt-4o-mini judge, then Claude Opus with the official LongMemEval templates / BEAM per-item rubric.",
+   "columns": [
+    "Category",
+    "n",
+    "Severian, board",
+    "LCM-X, board",
+    "Severian, strict",
+    "LCM-X, strict"
+   ],
+   "rows": [
+    [
+     "SS-User",
+     "70",
+     "100.0",
+     "97.1",
+     "100.0",
+     "95.7"
+    ],
+    [
+     "SS-Asst",
+     "56",
+     "98.2",
+     "94.6",
+     "98.2",
+     "94.6"
+    ],
+    [
+     "SS-Pref",
+     "30",
+     "100.0",
+     "93.3",
+     "86.7",
+     "76.7"
+    ],
+    [
+     "Temp. Reas",
+     "133",
+     "88.7",
+     "85.7",
+     "84.2",
+     "83.5"
+    ],
+    [
+     "Multi-S",
+     "133",
+     "79.7",
+     "74.4",
+     "79.7",
+     "75.2"
+    ],
+    [
+     "Know. Upd",
+     "78",
+     "94.9",
+     "91.0",
+     "93.6",
+     "91.0"
+    ],
+    [
+     "**Overall**",
+     "500",
+     "**90.6**",
+     "**86.6**",
+     "**88.4**",
+     "**85.0**"
+    ]
+   ]
+  },
+  "strict_beam": {
+   "title": "beam: board marker vs strict marker by category (200 questions)",
+   "note": "Same answers marked twice: the board's gpt-4o-mini judge, then Claude Opus with the official LongMemEval templates / BEAM per-item rubric.",
+   "columns": [
+    "Category",
+    "n",
+    "Severian, board",
+    "LCM-X, board",
+    "Severian, strict",
+    "LCM-X, strict"
+   ],
+   "rows": [
+    [
+     "Abstention",
+     "20",
+     "82.5",
+     "80.0",
+     "25.0",
+     "25.0"
+    ],
+    [
+     "Contradiction",
+     "20",
+     "75.6",
+     "63.8",
+     "45.0",
+     "26.2"
+    ],
+    [
+     "Event ordering",
+     "20",
+     "23.1",
+     "19.5",
+     "33.6",
+     "30.5"
+    ],
+    [
+     "Info extraction",
+     "20",
+     "85.8",
+     "88.8",
+     "83.3",
+     "85.4"
+    ],
+    [
+     "Instruction following",
+     "20",
+     "88.8",
+     "90.0",
+     "78.8",
+     "72.5"
+    ],
+    [
+     "Knowledge update",
+     "20",
+     "65.0",
+     "62.5",
+     "67.5",
+     "62.5"
+    ],
+    [
+     "Multi-session",
+     "20",
+     "60.3",
+     "58.2",
+     "56.4",
+     "60.1"
+    ],
+    [
+     "Preference following",
+     "20",
+     "85.0",
+     "92.5",
+     "83.8",
+     "87.5"
+    ],
+    [
+     "Summarisation",
+     "20",
+     "78.6",
+     "80.6",
+     "53.1",
+     "56.7"
+    ],
+    [
+     "Temporal",
+     "20",
+     "70.0",
+     "78.8",
+     "75.0",
+     "81.2"
+    ],
+    [
+     "**Overall**",
+     "200",
+     "**71.5**",
+     "**71.5**",
+     "**60.1**",
+     "**58.8**"
+    ]
+   ]
+  },
+  "side_locomo": {
+   "title": "locomo: equal-text side track by category",
+   "note": "One fixed open reader (Qwen3.8-27B) and marker (DeepSeek-V4-Pro); each system's text cut to the same token budget (eq1000/eq4000/eq8000) or full (replicate). Failed marks excluded, pairs only.",
+   "columns": [
+    "Category",
+    "n",
+    "replicate Sev",
+    "replicate LCM-X",
+    "eq1000 Sev",
+    "eq1000 LCM-X",
+    "eq4000 Sev",
+    "eq4000 LCM-X",
+    "eq8000 Sev",
+    "eq8000 LCM-X"
+   ],
+   "rows": [
+    [
+     "Single-Hop",
+     "827",
+     "86.5",
+     "72.7",
+     "76.0",
+     "72.7",
+     "86.5",
+     "73.3",
+     "86.2",
+     "73.1"
+    ],
+    [
+     "Multi-Hop",
+     "275",
+     "55.3",
+     "34.9",
+     "37.0",
+     "34.3",
+     "50.5",
+     "34.9",
+     "54.0",
+     "35.7"
+    ],
+    [
+     "Temporal",
+     "296",
+     "83.7",
+     "78.8",
+     "74.2",
+     "74.9",
+     "83.1",
+     "76.9",
+     "81.8",
+     "76.4"
+    ],
+    [
+     "Open-Domain",
+     "93",
+     "52.7",
+     "49.5",
+     "48.9",
+     "51.1",
+     "51.6",
+     "50.5",
+     "57.1",
+     "52.7"
+    ],
+    [
+     "**Overall**",
+     "1397",
+     "**77.9**",
+     "**65.3**",
+     "**66.5**",
+     "**64.5**",
+     "**77.0**",
+     "**65.5**",
+     "**77.6**",
+     "**65.7**"
+    ]
+   ]
+  },
+  "side_beam": {
+   "title": "beam: equal-text side track by category",
+   "note": "One fixed open reader (Qwen3.8-27B) and marker (DeepSeek-V4-Pro); each system's text cut to the same token budget (eq1000/eq4000/eq8000) or full (replicate). Failed marks excluded, pairs only.",
+   "columns": [
+    "Category",
+    "n",
+    "replicate Sev",
+    "replicate LCM-X",
+    "eq1000 Sev",
+    "eq1000 LCM-X",
+    "eq4000 Sev",
+    "eq4000 LCM-X",
+    "eq8000 Sev",
+    "eq8000 LCM-X"
+   ],
+   "rows": [
+    [
+     "Abstention",
+     "40",
+     "65.0",
+     "60.0",
+     "78.8",
+     "68.8",
+     "68.8",
+     "70.0",
+     "67.5",
+     "62.5"
+    ],
+    [
+     "Contradiction",
+     "38",
+     "70.8",
+     "69.1",
+     "36.5",
+     "46.4",
+     "66.2",
+     "65.2",
+     "67.4",
+     "71.9"
+    ],
+    [
+     "Event ordering",
+     "37",
+     "13.8",
+     "19.8",
+     "17.9",
+     "16.9",
+     "21.3",
+     "21.3",
+     "24.1",
+     "20.5"
+    ],
+    [
+     "Info extraction",
+     "40",
+     "91.8",
+     "95.1",
+     "69.2",
+     "73.8",
+     "85.7",
+     "83.3",
+     "89.0",
+     "95.4"
+    ],
+    [
+     "Instruction following",
+     "40",
+     "83.8",
+     "75.6",
+     "75.6",
+     "73.8",
+     "76.9",
+     "80.6",
+     "85.0",
+     "82.5"
+    ],
+    [
+     "Knowledge update",
+     "40",
+     "70.0",
+     "81.2",
+     "46.9",
+     "45.0",
+     "66.9",
+     "62.5",
+     "72.5",
+     "66.2"
+    ],
+    [
+     "Multi-session",
+     "40",
+     "60.4",
+     "56.8",
+     "50.0",
+     "46.9",
+     "61.1",
+     "60.9",
+     "63.2",
+     "61.6"
+    ],
+    [
+     "Preference following",
+     "40",
+     "86.2",
+     "87.5",
+     "80.0",
+     "83.8",
+     "85.6",
+     "90.6",
+     "86.2",
+     "91.9"
+    ],
+    [
+     "Summarisation",
+     "38",
+     "41.8",
+     "42.8",
+     "17.6",
+     "17.4",
+     "34.1",
+     "36.7",
+     "33.3",
+     "41.8"
+    ],
+    [
+     "Temporal",
+     "40",
+     "64.4",
+     "80.6",
+     "36.9",
+     "46.9",
+     "59.4",
+     "74.4",
+     "64.4",
+     "75.6"
+    ],
+    [
+     "**Overall**",
+     "381",
+     "**65.2**",
+     "**67.3**",
+     "**51.9**",
+     "**53.0**",
+     "**63.9**",
+     "**66.0**",
+     "**65.9**",
+     "**67.6**"
+    ]
+   ]
+  },
+  "side_lme": {
+   "title": "lme: equal-text side track by category",
+   "note": "One fixed open reader (Qwen3.8-27B) and marker (DeepSeek-V4-Pro); each system's text cut to the same token budget (eq1000/eq4000/eq8000) or full (replicate). Failed marks excluded, pairs only.",
+   "columns": [
+    "Category",
+    "n",
+    "replicate Sev",
+    "replicate LCM-X"
+   ],
+   "rows": [
+    [
+     "SS-User",
+     "70",
+     "95.7",
+     "97.1"
+    ],
+    [
+     "SS-Asst",
+     "55",
+     "100.0",
+     "100.0"
+    ],
+    [
+     "SS-Pref",
+     "30",
+     "86.7",
+     "76.7"
+    ],
+    [
+     "Temp. Reas",
+     "132",
+     "88.6",
+     "87.1"
+    ],
+    [
+     "Multi-S",
+     "132",
+     "81.8",
+     "74.2"
+    ],
+    [
+     "Know. Upd",
+     "78",
+     "94.9",
+     "94.9"
+    ],
+    [
+     "**Overall**",
+     "497",
+     "**89.9**",
+     "**87.1**"
+    ]
+   ]
+  },
+  "beam_difficulty": {
+   "title": "BEAM 100K by difficulty",
+   "note": "Board models, board marker (nugget score).",
+   "columns": [
+    "Difficulty",
+    "n",
+    "Severian 0.3.11",
+    "LCM-X v0.28.1"
+   ],
+   "rows": [
+    [
+     "Clear",
+     "40",
+     "80.6",
+     "65.6"
+    ],
+    [
+     "Easy",
+     "124",
+     "62.0",
+     "66.1"
+    ],
+    [
+     "Medium",
+     "193",
+     "72.4",
+     "75.3"
+    ],
+    [
+     "Hard",
+     "42",
+     "88.3",
+     "80.1"
+    ],
+    [
+     "Unlabelled",
+     "1",
+     "50.0",
+     "50.0"
+    ]
+   ]
+  }
  }
 }
