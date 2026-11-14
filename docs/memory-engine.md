@@ -34,3 +34,23 @@ Results are scope-filtered before ranking. Hybrid ranking uses reciprocal rank f
 - No network or cloud call is made by the engine itself.
 - A derivation gateway is injected by the future model-adapter layer.
 - Job completion/lease lifecycle and deletion tombstone propagation remain part of the interface and governance phases.
+
+## Correction depth: first order only
+
+Correcting an observation cascades **one hop**. `revise_observation` supersedes the
+observation, withdraws every memory derived from it, retracts the relations whose
+lineage is that observation, and rebuilds the projection; the derivation guard
+stops the superseded head coming back. That is first order, and it is tested.
+
+Nothing links a memory to another memory, so the chain stops there. Second order
+is **not** cascaded: a plan, belief or summary built on a corrected memory stays
+active and keeps asserting the stale claim, and search returns the corrected fact
+and the stale plan side by side. `severian_correct(memory_id=…)` cascades nothing
+at all — it replaces that one memory and leaves anything derived from it untouched.
+
+This is documented rather than patched because any change is a write-path change on
+the store every profile shares, so it needs its own design and migration. Live
+exposure is small today: two `observation.revise` events ever, zero memory-path
+corrections, zero active memories with a superseded source.
+
+Tracked as W-2 in `WORKTODO.md`.

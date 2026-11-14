@@ -745,8 +745,10 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
                 "description": (
                     "Correct a remembered fact when the user says it is wrong. Give exactly one target "
                     "from a severian_search hit: observation_id (one of its source_observation_ids; the "
-                    "source is replaced by your corrected text and re-derived on the next memory pass) or "
-                    "memory_id (that memory is replaced at once). The old version is no longer recalled; "
+                    "source is replaced by your corrected text and re-derived on the next memory pass, "
+                    "which also withdraws the memories derived from that source) or "
+                    "memory_id (that memory is replaced at once; memories derived from it are NOT "
+                    "updated). The old version is no longer recalled; "
                     "the history keeps it."
                 ),
                 "parameters": schema(

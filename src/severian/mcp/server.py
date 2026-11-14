@@ -399,8 +399,10 @@ _TOOLS: tuple[ToolDefinition, ...] = (
         description=(
             "Correct a remembered fact when the user says it is wrong. Give exactly one target "
             "from a severian_search hit: observation_id (one of its source_observation_ids; the "
-            "source is replaced by your corrected text and re-derived on the next memory pass) "
-            "or memory_id (that memory is replaced at once). Cross-scope targets return an "
+            "source is replaced by your corrected text and re-derived on the next memory pass, "
+            "which also withdraws the memories derived from that source) "
+            "or memory_id (that memory is replaced at once; memories derived from it are NOT "
+            "updated). Cross-scope targets return an "
             "error without revealing existence. All scope dimensions are mandatory."
         ),
         input_schema=CorrectArgs.model_json_schema(),
