@@ -174,6 +174,42 @@ code, not a run, and that a dash means "not found", not "missing". Treat every
 item above as a lead to verify, not a verdict. Two build-time execution paths were
 noted and not triggered.
 
+## W-13 — Rebuild the memory→wiki promotion job against Severian  (REQUESTED)
+
+**Why it exists.** A daily job used to take the most reliable stored facts and copy
+the good ones into the GBrain wiki at `~/brain/`, so they became browsable notes
+instead of chat memory. It read Mnemosyne, which has been removed entirely
+(14/11/26), so the job was deleted. Sahil wants it rebuilt for Severian.
+
+**Archived original** (full definition, for reference):
+`~/.hermes/governance/archive-retired-cron/memory-promotion-daily.json`
+Schedule was `35 4 * * *`; silent when there was nothing to promote.
+
+**What the original did, and what has to change:**
+
+| original (Mnemosyne) | rebuild (Severian) | note |
+|---|---|---|
+| `mnemosyne_recall(query="*", limit=30)`, filter `importance >= 0.8` | Severian has no `importance`; it has `confidence` (default derivation writes 0.5) | **decision needed:** either map the bar to `confidence` and lower it, or promote on a different signal (user-fact memories, revised/corrected facts, usage_count). At 0.8 nothing would ever pass. |
+| one implicit store | five-part scope (tenant/profile/collection/agent/session) | **decision needed:** which scope(s) the job reads. Hermes uses `tenant_id=kensei, profile_id=default, collection_id=profile, agent_id=default, session_id=shared`. |
+| `veracity=stated or imported` | Severian kinds: `fact`, user-fact extractions, consolidated/curated kinds | map "stated" to the derivation kinds that represent a user assertion, not a synthesis |
+| read `~/brain/RESOLVER.md`, match to an existing page, skip if already covered | unchanged | keep the page-matching + dedupe logic |
+| borderline → `~/.hermes/governance/memory-promotion-review.md` (no kanban cards) | unchanged | Sahil approved this on 16/10: 13 of 13 promotion cards were never actioned |
+| `patch` the brain page, never overwrite; brain only, never the Obsidian vault | unchanged | |
+| `[SILENT]` when nothing to promote | unchanged | |
+
+**Acceptance:**
+- Runs daily, reads Severian read-only, and promotes only facts that match an
+  existing brain page and are not already there.
+- A dry-run mode prints what it would promote, with ids, without writing.
+- Tested against the live store in dry-run before it is enabled; first real run
+  reviewed by hand.
+- Nothing is written to the Obsidian vault; brain pages are patched, never
+  rewritten wholesale.
+- Borderline facts land in the review file, never as kanban cards.
+
+**Status:** not started. Requires the two decisions above before any code.
+
+
 ---
 
 ### Triage table
@@ -192,3 +228,4 @@ noted and not triggered.
 | W-10 | tests for all of the above | high | todo |
 | W-11 | strengths to keep proven | n/a | re-confirm |
 | W-12 | reviewer limits | n/a | context |
+| W-13 | rebuild memory→wiki promotion on Severian | medium | requested, 2 decisions needed |
