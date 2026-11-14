@@ -209,6 +209,23 @@ Schedule was `35 4 * * *`; silent when there was nothing to promote.
 
 **Status:** not started. Requires the two decisions above before any code.
 
+**Handoff note (Sahil, 14/11/26):** do **not** build this as part of the current
+tidy-up. It is left here deliberately for another agent to pick up from this file.
+Whoever takes it should:
+
+1. Read the archived original at the path above before writing anything — it is the
+   behavioural spec, not a starting point to redesign.
+2. Get the two open decisions answered first: the promotion signal/threshold
+   (Severian has no `importance`; its default confidence is 0.5, so the old 0.8 bar
+   promotes nothing) and which scope(s) the job reads
+   (Hermes default is tenant `kensei`, profile `default`, collection `profile`,
+   agent `default`, session `shared`).
+3. Build with a dry-run mode and prove it against the live store read-only before
+   the job is enabled. Leave the cron paused until the first real run has been
+   reviewed by hand.
+4. Update this item with the commit, the dry-run output and the enabling decision.
+
+
 
 ---
 
