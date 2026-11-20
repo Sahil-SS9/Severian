@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sqlite3
+import tempfile
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +110,8 @@ class _HashingGateway:
 
 
 cli = typer.Typer(help="Severian memory platform CLI (Phase 3 vertical slice).")
+migrate_app = typer.Typer(help="Additive, rehearsed store migrations.")
+cli.add_typer(migrate_app, name="migrate")
 
 
 def _scope_from_flags(
@@ -187,6 +193,91 @@ def ingest(
             "job_kind": view.job_kind,
         }
     )
+
+
+@migrate_app.command("message-units")
+def migrate_message_units_command(
+    database: Path = typer.Option(..., "--database", help="SQLite canonical store path."),
+    fts: Path = typer.Option(..., "--fts", help="FTS5 index database path."),
+    vectors: Path = typer.Option(..., "--vectors", help="Vector index database path."),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    confirm: bool = typer.Option(False, "--confirm", help="Apply after backup and rehearsal; default is a dry run."),
+    backup_dir: Path | None = typer.Option(None, "--backup-dir", help="Where to put the SQLite backup."),
+) -> None:
+    """Backfill message units: backup -> integrity -> rehearsal -> apply -> rebuild."""
+    from severian.application.message_units import migrate_message_units
+
+    scope = _scope_from_flags(
+        tenant=tenant,
+        profile=profile,
+        collection=collection,
+        agent=agent,
+        session=session,
+    )
+    backup: Path | None = None
+    integrity: str | None = None
+    rehearsal: dict[str, Any] | None = None
+    if confirm:
+        backup = _sqlite_backup(database, backup_dir)
+        integrity = _integrity_check(backup)
+        if integrity != "ok":
+            raise typer.BadParameter(f"backup integrity check failed: {integrity}")
+        rehearsal = _rehearse_message_units(database, fts, vectors, scope)
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors)
+    try:
+        report = migrate_message_units(bundle.repository, scope, confirm=confirm, rebuild=bundle.projection)
+    finally:
+        bundle.close()
+    payload = report.as_dict()
+    payload.update({"backup": str(backup) if backup else None, "integrity": integrity, "rehearsal": rehearsal})
+    _emit(payload)
+
+
+def _sqlite_backup(database: Path, backup_dir: Path | None) -> Path:
+    target_dir = backup_dir or database.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup = target_dir / f"{database.name}.backup-{stamp}"
+    source = sqlite3.connect(str(database))
+    target = sqlite3.connect(str(backup))
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+    return backup
+
+
+def _integrity_check(database: Path) -> str:
+    connection = sqlite3.connect(str(database))
+    try:
+        return str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+    finally:
+        connection.close()
+
+
+def _rehearse_message_units(database: Path, fts: Path, vectors: Path, scope: Scope) -> dict[str, Any]:
+    from severian.application.message_units import migrate_message_units
+
+    with tempfile.TemporaryDirectory(prefix="severian-s1-rehearsal-") as raw:
+        work = Path(raw)
+        for source, suffix in ((database, "db"), (fts, "fts"), (vectors, "vec")):
+            if source.exists():
+                shutil.copy2(source, work / f"rehearsal.{suffix}")
+        bundle = build_default_service(
+            database=work / "rehearsal.db",
+            fts=work / "rehearsal.fts",
+            vectors=work / "rehearsal.vec",
+        )
+        try:
+            report = migrate_message_units(bundle.repository, scope, confirm=True, rebuild=bundle.projection)
+        finally:
+            bundle.close()
+        return report.as_dict()
 
 
 @cli.command("search")

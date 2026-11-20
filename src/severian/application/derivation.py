@@ -15,6 +15,7 @@ from severian.application.eventtime import (
 )
 from severian.application.extraction import EntityExtractionService
 from severian.application.factanchors import grounded
+from severian.application.message_units import message_unit_memories
 from severian.application.ports import (
     CanonicalRepository,
 )
@@ -252,7 +253,7 @@ class DerivationService:
             scope,
             entities=extracted_entities,
             relations=extracted_relations,
-            memories=validated,
+            memories=[*validated, *message_unit_memories(observation, scope)],
             source_observation_id=observation.id,
             # S3: the graph is dated on the same clock as the memory path — when the source
             # message was written — so a replaced value's window ends where the new one starts.

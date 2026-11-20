@@ -36,6 +36,12 @@ from severian.application.factslots import asks_about_past
 from severian.application.fillbudget import MIN_FILL_ROOM, fill_budget_enabled, neighbour_memories
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.markers import is_marker, without_markers
+from severian.application.message_units import (
+    mark_later_units,
+    message_units_enabled,
+    order_unit_hits,
+    prefer_message_units,
+)
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.purge import PurgePlan, PurgeReport
@@ -686,6 +692,8 @@ class MemoryService:
             replacers = {mid for mid, extra in closed_labels.items() if extra.get("previous")}
             already = {item.memory.id for item in results}
             results = [item for item in pool if item.memory.id in replacers or item.memory.id in already][:limit]
+        if message_units_enabled():
+            results = prefer_message_units(results)
         views = [SearchHitView.from_result(item, **labels.get(item.memory.id, {})) for item in results]
         return views
 
@@ -782,9 +790,16 @@ class MemoryService:
             raise NotFoundError("context hit is outside the requested scope")
         if not context_v2_enabled():
             return None
-        return ContextV2Assembler(max_chars=max_chars).assemble(self._context_items_v2(scope, hits))
+        if message_units_enabled():
+            hits = order_unit_hits(hits)
+            texts = mark_later_units(hits)
+        else:
+            texts = {}
+        return ContextV2Assembler(max_chars=max_chars).assemble(self._context_items_v2(scope, hits, texts=texts))
 
-    def _context_items_v2(self, scope: Scope, hits: list[SearchHitView]) -> list[ContextItem]:
+    def _context_items_v2(
+        self, scope: Scope, hits: list[SearchHitView], *, texts: dict[str, str] | None = None
+    ) -> list[ContextItem]:
         items: list[ContextItem] = []
         for hit in hits:
             memory = self._repository.get_memory(scope, hit.memory_id)
@@ -806,7 +821,7 @@ class MemoryService:
                 said = said_date(memory.content, memory.created_at)
             items.append(
                 ContextItem(
-                    content=memory.content,
+                    content=(texts or {}).get(hit.memory_id, memory.content),
                     state=state_label(hit.truth_state),
                     said=said,
                     quote=quote,
@@ -834,10 +849,17 @@ class MemoryService:
         assistant's replies are the evidence (a) and whether a disagreement is about the question (b)."""
         if any(hit.scope != scope for hit in hits):
             raise NotFoundError("context hit is outside the requested scope")
+        if message_units_enabled():
+            hits = order_unit_hits(hits)
+            texts = mark_later_units(hits)
+        else:
+            texts = {}
         if context_v2_enabled():
             # Handoff 2: the answerer-facing block (the same renderer the benchmark adapter uses). It carries
             # each note's current/replaced state, so the trailing conflict note is not added as well.
-            return ContextV2Assembler(max_chars=max_chars).assemble(self._context_items_v2(scope, hits))
+            return ContextV2Assembler(max_chars=max_chars).assemble(
+                self._context_items_v2(scope, hits, texts=texts)
+            )
         assembler = self._context if max_chars is None else ContextAssembler(max_chars=max_chars)
         # ARCH-04: assemble from the CANONICAL Memory (fetched by id), not
         # from a reconstructed proxy — the proxy duplicated the Memory
@@ -860,7 +882,10 @@ class MemoryService:
             )
         stored = [result.memory.content for result in results]
         note = conflict_note(stored, query=query) if self._conflict_notes else None
-        block = assembler.assemble(results, query=query, trim_replies=self._reply_trim, note=note)
+        displayed = [texts.get(result.memory.id, result.memory.content) for result in results]
+        block = assembler.assemble(
+            results, contents=displayed, query=query, trim_replies=self._reply_trim, note=note
+        )
         if not self._fill_budget or not results:
             return block
         # SEVERIAN_FILL_BUDGET: only spend the room the caller's own items leave. When they already fill the budget

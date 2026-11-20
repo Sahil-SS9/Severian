@@ -127,6 +127,30 @@ def test_purge_confirm_scrubs_the_store_and_compacts_the_files(stores: dict[str,
     assert json.loads(gone.stdout)["hits"] == []
 
 
+def test_purge_confirm_scrubs_message_units(monkeypatch, stores: dict[str, Path]) -> None:
+    monkeypatch.setenv("SEVERIAN_MESSAGE_UNITS", "1")
+    runner = CliRunner()
+    observation = _seed(runner, stores)
+    scope = Scope(tenant_id="t1", profile_id="p1", collection_id="c1", agent_id="a1", session_id="s1")
+    repository = SQLiteRepository(stores["db"])
+    try:
+        units = [memory for memory in repository.list_memories(scope) if memory.kind == "message_unit"]
+        assert units and any(MARKER in memory.content for memory in units)
+    finally:
+        repository.close()
+
+    result = runner.invoke(cli, ["purge", *_flags(stores), *SCOPE_FLAGS, "--observation", observation, "--confirm"])
+
+    assert result.exit_code == 0, result.output
+    assert _marker_in(_store_bytes(stores)) == []
+    repository = SQLiteRepository(stores["db"])
+    try:
+        assert [memory for memory in repository.list_memories(scope) if memory.kind == "message_unit"] == []
+        assert "message_unit" not in repository.export_json() or MARKER not in repository.export_json()
+    finally:
+        repository.close()
+
+
 def test_purge_warnings_state_the_limits_and_never_claim_erasure_everywhere() -> None:
     from severian.cli.app import _purge_warnings
 

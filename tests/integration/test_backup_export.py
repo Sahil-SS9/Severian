@@ -6,6 +6,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
+from severian.application.message_units import message_unit_memories
 from severian.application.worker import DerivationWorker
 from severian.composition import build_bundle
 from severian.domain.models import Collection, Observation, Scope
@@ -125,6 +126,34 @@ def test_derive_shaped_store_round_trips(tmp_path):
     target.projection.rebuild(scope)
     assert _m0_top10(target, scope) == before
     assert _m0_records(target.repository.export_json()) == _m0_records(exported)
+    target.close()
+
+
+def test_message_unit_store_round_trips_and_keeps_order(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEVERIAN_MESSAGE_UNITS", "1")
+    source = build_bundle(database=tmp_path / "u.db", fts=tmp_path / "u.fts", vectors=tmp_path / "u.vec")
+    scope = _m0_scope("m0u", "m0cu")
+    source.repository.create_collection(Collection(id="m0cu", tenant_id="m0u", name="M0 units"))
+    observation = source.repository.add_observation(
+        Observation(
+            scope=scope,
+            content="[2024/03/15 (Fri)] user: deadline April 1\nassistant: noted",
+            source={"turn": 3},
+        )
+    )
+    units = message_unit_memories(observation)
+    assert len(units) == 2
+    for unit in units:
+        source.repository.add_memory(unit)
+    exported = source.repository.export_json()
+    before = [unit.content for unit in units]
+    source.close()
+
+    target = build_bundle(database=tmp_path / "ui.db", fts=tmp_path / "ui.fts", vectors=tmp_path / "ui.vec")
+    target.repository.import_json(exported)
+    target.projection.rebuild(scope)
+    imported = [memory.content for memory in target.repository.list_memories(scope) if memory.kind == "message_unit"]
+    assert imported == before
     target.close()
 
 
