@@ -37,11 +37,12 @@ board itself publishes no ranges.
 |---|---:|---:|---:|
 | 0.3.11, board depth: top-20, no cap | 87.34 | 90.60 | 71.62 |
 | 0.3.11, Hermes default: top-10, 8,000-char cap | 86.17 | 82.00 | 63.86 |
-| 16,000 chars + fill + compact, top-10 | not run | 86.4 | 69.54 |
+| 16,000 chars + fill + compact, top-10 (0.3.12 candidate switches) | not run | 86.4 | 69.54 |
 
 The Hermes-default row is the shipped setting, not the leaderboard setting.
-The 16,000-character row is the pre-registered higher-limit side test; LoCoMo
-was not run because its memories do not fill 8,000 characters.
+The 16,000-character row uses the pre-registered 0.3.12 candidate fill/compact
+switches; it is a side test, not a released configuration. LoCoMo was not run
+because its memories do not fill 8,000 characters.
 
 **Version control:** 0.3.12 and 0.3.13 are byte-identical to 0.3.11 with their
 switches off (CHANGELOG), so the results stay labelled **0.3.11**. No number is
