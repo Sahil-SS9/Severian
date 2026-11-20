@@ -95,7 +95,7 @@ def extract_archive(archive: Path, target: Path) -> Path:
     if actual != ARCHIVE_SHA256:
         raise SystemExit(f"archive sha256 mismatch: expected {ARCHIVE_SHA256}, got {actual}")
     print(f"archive sha256 OK: {actual}")
-    subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(target)], check=True)
+    subprocess.run(["tar", "--zstd", "--no-same-owner", "-xf", str(archive), "-C", str(target)], check=True)
     return _root_from_extracted(target)
 
 
@@ -229,12 +229,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     temp = None
-    if args.extracted_root:
-        root = _root_from_extracted(args.extracted_root)
-    else:
-        temp = Path(tempfile.mkdtemp(prefix="omni-recompute-", dir="/tmp"))
-        root = extract_archive(args.archive, temp)
     try:
+        if args.extracted_root:
+            root = _root_from_extracted(args.extracted_root)
+        else:
+            temp = Path(tempfile.mkdtemp(prefix="omni-recompute-", dir="/tmp"))
+            root = extract_archive(args.archive, temp)
         if args.write_manifest:
             count = write_manifest(root, args.write_manifest)
             if count <= 0:
