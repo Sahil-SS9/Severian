@@ -3,6 +3,44 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased] — 0.5.1 (S2: deterministic-first dreaming producer, with C1)
+
+Every behaviour below is behind `SEVERIAN_DREAMING`, off by default, except C1 which is a fix.
+
+### Added
+- `severian dream --mode <m> <scope flags>`: one maintenance pass over one scope, dry run by
+  default, `--confirm` to apply. Modes: consolidate, curate, retention, retention-archive,
+  contradictions.
+- The worker tick `severian work --dream-tenant T --dream-profile P` queues one `dream` job per
+  (active scope, tick mode) and runs them. Idempotent on (kind, payload); no cron is created.
+- Deterministic triage (`dreamtriage`) classifies every candidate pair as duplicate, restatement or
+  contradiction before any model is involved, and a value-bearing difference (a number, a negation,
+  a name) is never merged even at high word overlap.
+- An optional merge-summary writer (`SEVERIAN_DREAM_URL`, loopback only unless
+  `SEVERIAN_DREAM_ALLOW_REMOTE=1`): batches of eight, one retry per the busy-model rules, a failed
+  batch falls back to the deterministic text, and the pass stops calling the model past ~10% failed
+  batches.
+
+### Fixed
+- **Maintenance markers are no longer memories.** `retention_archive`, `curation_review` and the
+  `consolidated` merge summary were ordinary searchable memories at confidence 1.0, so a question
+  about the user could be answered with "Curation review: 412 memories scored". They are now never
+  returned by `search`, never rendered by `assemble_context` (either context format), and never
+  added by the fill-budget neighbour read. Not behind a switch: they should never have been
+  searchable.
+- Repeated maintenance passes converge. A curation marker used to score itself, change its own
+  counts and write another marker every pass; markers are now excluded from the passes' own input.
+- A supersede that loses a race (`ConflictError`) during a pass is skipped and logged as
+  `dreaming.skip` instead of failing the pass.
+
+### Changed
+- Curation's salience blend no longer includes a `usage_count` term. Retrieval usage tracking is
+  never on, so the term always contributed exactly 0.0 — the score is unchanged on every real
+  store, and a test pins it from both sides.
+- Every dream write now carries an audit row: `dreaming.consolidate`, `dreaming.merge`,
+  `curation.report`, `retention.archive`, and `retention.archive_plan` written before anything is
+  archived.
+
 ## [0.4.1] - 2026-11-20
 
 Maintenance release. No behaviour change.
