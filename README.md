@@ -47,6 +47,11 @@ prompts and metrics, not an official board entry. 🥇 marks the best score in e
 | **Severian 0.3.11** † | 87.34 | **🥇 90.60** | 71.62 | - | - | - |
 <!-- /board:summary -->
 
+**Configuration for the Severian row above and every Severian number below:** 0.3.11, commit `4467853`, board depth (top-20, no
+character cap), answer `gpt-4.1-mini`, judge `gpt-4o-mini-2024-07-18`. The Hermes-default comparison uses
+top-10 with an 8,000-character cap; the 16,000-character side test is labelled where it appears. 0.3.12 and
+0.3.13 are byte-identical with their switches off, so the results stay labelled 0.3.11.
+
 ![OmniMemEval standings](docs/benchmarks/img/board.svg)
 
 - **1st on LongMemEval, 2nd on LoCoMo, 2nd on BEAM 100K** (0.22 behind LCM-X). The board has no error ranges, and on
@@ -55,13 +60,14 @@ prompts and metrics, not an official board entry. 🥇 marks the best score in e
   back within 0.65 points. Compared question by question, Severian is ahead of it on LoCoMo (+7.9, 95% range +6.0 to
   +9.7) and LongMemEval (+4.0, +1.2 to +6.6) and level on BEAM, and a stricter second marker (Claude Opus) agrees.
 - **Trade-offs, stated plainly.** Severian hands the answering model more text than most systems and makes model calls
-  when it saves memories. Hermes ships it with a cheap 8,000-character context cap, which costs little on LoCoMo but
-  about 8 points on BEAM and LongMemEval; raising it to 16,000 characters wins back about 5 points on each
-  ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
+  when it saves memories. Hermes ships it at top-10 with an 8,000-character cap, which costs little on LoCoMo but
+  about 8 points on BEAM and LongMemEval; raising that to 16,000 characters with fill + compact citations wins back
+  about 5 points on each ([settings](docs/benchmarks/omnimemeval-2026-10.md#severians-own-settings)).
 - **We found a marking flaw in BEAM** that rewards made-up answers to "the chat never said" questions. It inflates
   every system's BEAM score, ours included ([details](docs/benchmarks/omnimemeval-2026-10.md#a-marking-flaw-in-beam)).
-- **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate, a corrected fact never comes back in
-  search (0.000 stale-fact rate) and no query ever returns another scope's memory (0.000 leakage).
+- **Zero leaks, zero stale facts.** On Severian's own adversarial quality gate (0.3.11, default configuration), a
+  corrected fact never comes back in search (0.000 stale-fact rate) and no query ever returns another scope's memory
+  (0.000 leakage).
 
 Per-benchmark tables for every system (LoCoMo, LongMemEval, BEAM, PersonaMem v2, HaluMem), the LCM-X validation, the
 plan and its changes, and the limitations are in

@@ -187,5 +187,5 @@ Success criteria for the comparison (this document):
 - `docs/benchmarks/manifest-v1.json` — deterministic primary manifest
 - `docs/benchmarks/evidence/<date>/` — raw per-query traces + gate eval
   + manifest SHA + commit SHA
-- `docs/benchmarks/results.md` — results framework + comparison tables
+- `docs/benchmarks/history/results-2026-08.md` — results framework + comparison tables (August 2026, historical)
 - Scale lane evidence: `docs/benchmarks/evidence/<date>/scale-*.json`

@@ -1,5 +1,5 @@
 {
- "_about": "Numbers behind docs/benchmarks/omnimemeval-2026-10.md and its charts. Every value is copied from run outputs under ~/data/benchmarks/h2h-p1 (judged files, exp_report.md, token_usage_answer.json, RUN-NOTES.md). Regenerate charts with: python scripts/bench_charts.py",
+ "_about": "Numbers behind docs/benchmarks/omnimemeval-2026-10.md and its charts. Scores, category rows and paired ranges are reproducible from the per-question archive at ~/data/benchmarks/_records/omnimemeval-2026-10/results-per-question.tar.zst (sha256 303e2486850257ad39a94315b3ceae480e5a36f92cc51803cfa29c1f928f34be); token and run metadata are read from the judged files and token_usage_answer.json. Extract the archive and run docs/benchmarks/omnimemeval/recompute-2026-10.py. Regenerate charts with: python scripts/bench_charts.py",
  "run": {
   "dates": "2026-10-22 to 2026-10-25",
   "harness": "MemTensor/OmniMemEval f7476c5502115542eca9971195bf8c5ca97b6256 (pinned) + Severian adapter",
