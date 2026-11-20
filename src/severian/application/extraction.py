@@ -215,39 +215,3 @@ class EntityExtractionService:
             source_observation_id="",
         )
 
-    def extract_and_upsert(
-        self,
-        scope: Scope,
-        observation_id: str,
-        content: str,
-    ) -> ExtractionResult:
-        """Extract entities + relations from content and upsert them.
-
-        Uses the repository's identity-deduped add_entity/add_relation:
-        repeated observations converge on the same entity rows and the
-        same typed relations (no duplicates, deterministic).
-
-        NOTE: prefer ``extract`` + ``publish_derivation`` for the derive
-        path (DATA-04 atomicity). This method remains for callers that
-        write the graph independently.
-        """
-        entity_pairs = extract_entities(content)
-        relation_triples = extract_relations(content, entity_pairs)
-
-        entity_ids: dict[str, str] = {}
-        for kind, name in entity_pairs:
-            entity = self._repository.add_entity(scope, kind, name)
-            entity_ids[name.casefold()] = entity.id
-
-        for subject, predicate, obj in relation_triples:
-            subject_id = entity_ids.get(subject.casefold())
-            object_id = entity_ids.get(obj.casefold())
-            if subject_id is None or object_id is None:
-                continue
-            self._repository.add_relation(scope, subject_id, predicate, object_id)
-
-        return ExtractionResult(
-            entities=entity_pairs,
-            relations=relation_triples,
-            source_observation_id=observation_id,
-        )
