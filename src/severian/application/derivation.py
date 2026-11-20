@@ -7,7 +7,12 @@ from typing import Protocol
 
 from severian.application.anticipation import anticipation_enabled, extract_trigger
 from severian.application.datestamps import date_stamps_enabled, dated
-from severian.application.eventtime import event_time_enabled, extract_event_span, message_time
+from severian.application.eventtime import (
+    event_time_enabled,
+    extract_event_span,
+    message_time,
+    relation_event_time_enabled,
+)
 from severian.application.extraction import EntityExtractionService
 from severian.application.factanchors import grounded
 from severian.application.ports import (
@@ -70,6 +75,7 @@ class DerivationService:
         event_time: bool | None = None,
         date_stamps: bool | None = None,
         anticipation: bool | None = None,
+        relation_event_time: bool | None = None,
         cue_generator: Callable[[str], list[str]] | None = None,
         fact_extractor: FactSource | None = None,
         truth_resolver: TruthResolver | None = None,
@@ -84,6 +90,12 @@ class DerivationService:
         # weekday, and relative dates get the real date in brackets. Event time, cues and dedupe still read
         # the text as derived, so turning this on changes only what is stored and shown.
         self._date_stamps = date_stamps_enabled() if date_stamps is None else date_stamps
+        # S3 (SEVERIAN_RELATION_EVENT_TIME; off by default): a derived relation starts at its source
+        # message's event time, and a value it replaces ends at the newer statement's event time
+        # instead of the wall clock. Off, relations keep the old shape, so stores stay comparable.
+        self._relation_event_time = (
+            relation_event_time_enabled() if relation_event_time is None else relation_event_time
+        )
         # Step 4: triggers for instructions-for-later (rules) and cues (one background model call per
         # memory). SEVERIAN_ANTICIPATION, off by default. A cue failure never fails the derive.
         self._anticipation = anticipation_enabled() if anticipation is None else anticipation
@@ -242,6 +254,11 @@ class DerivationService:
             relations=extracted_relations,
             memories=validated,
             source_observation_id=observation.id,
+            # S3: the graph is dated on the same clock as the memory path — when the source
+            # message was written — so a replaced value's window ends where the new one starts.
+            relation_valid_from=(
+                message_time(observation.source, observation.created_at) if self._relation_event_time else None
+            ),
         )
         self._resolve(scope, published)
         return published

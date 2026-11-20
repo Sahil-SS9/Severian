@@ -60,6 +60,17 @@ def event_time_enabled() -> bool:
     return os.environ.get("SEVERIAN_EVENT_TIME", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def relation_event_time_enabled() -> bool:
+    """``SEVERIAN_RELATION_EVENT_TIME`` (S3, off by default) dates relations from their source message.
+
+    On: a derived relation starts at the instant its source message was written, and a
+    single-valued value it replaces ends at the newer statement's instant, not at the wall
+    clock. Off: relations keep the old shape (no start time, ended at the wall clock), so a
+    store written by an earlier release reads exactly as it did.
+    """
+    return os.environ.get("SEVERIAN_RELATION_EVENT_TIME", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 @dataclass(frozen=True)
 class _Found:
     start: datetime  # inclusive

@@ -13,6 +13,15 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def instant(value: datetime) -> datetime:
+    """``value`` as a UTC instant, so naive and mixed-zone times can be compared.
+
+    A naive time is taken to be UTC already: a store written by hand or by an older
+    release may hold one, and comparing it with an aware instant raises TypeError.
+    """
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 # ``superseded_by_id`` of an erasure tombstone (memory or observation): the
 # marker is itself superseded, so it is never an active head, never pending
 # derivation and never projected, while history keeps it for audit.
@@ -375,11 +384,16 @@ class Relation(BaseModel):
             }
         )
 
-    def replaced_by(self, newer: Relation, *, at: datetime) -> Relation | None:
+    def replaced_by(self, newer: Relation, *, at: datetime, from_event_time: bool = False) -> Relation | None:
         """This relation ended as of ``at`` because ``newer`` gives a new value; None when unaffected.
 
         Only single-valued predicates (one current value per subject) are
         replaced: same subject and predicate, different object, still open.
+
+        ``from_event_time`` says ``at`` is the newer statement's event instant, not the wall
+        clock. Then a statement dated BEFORE this fact began is history arriving late, not a
+        replacement: nothing is ended, because hiding a current value on the strength of an
+        older statement would assert a replacement nobody made.
         """
         if (
             self.predicate not in SINGLE_VALUED_PREDICATES
@@ -390,7 +404,9 @@ class Relation(BaseModel):
             or self.valid_to is not None
         ):
             return None
-        valid_to = at if self.valid_from is None or at >= self.valid_from else self.valid_from
+        if from_event_time and self.valid_from is not None and instant(at) < instant(self.valid_from):
+            return None
+        valid_to = at if self.valid_from is None or instant(at) >= instant(self.valid_from) else self.valid_from
         return self.model_copy(update={"valid_to": valid_to})
 
     @property

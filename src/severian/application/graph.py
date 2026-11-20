@@ -32,6 +32,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from severian.application.eventtime import relation_event_time_enabled
 from severian.application.ports import CanonicalRepository
 from severian.domain.models import Entity, Memory, Relation, Scope
 
@@ -93,9 +94,20 @@ class RelatedMemory:
 class GraphRetrievalService:
     """Deterministic graph queries over the entity/relation store."""
 
-    def __init__(self, repository: CanonicalRepository, *, now: datetime | None = None) -> None:
+    def __init__(
+        self,
+        repository: CanonicalRepository,
+        *,
+        now: datetime | None = None,
+        half_open_validity: bool | None = None,
+    ) -> None:
         self._repository = repository
         self._now = now or datetime.now(UTC)
+        # S3 (SEVERIAN_RELATION_EVENT_TIME, off by default): with event-dated relations a
+        # window is half-open, [valid_from, valid_to), so the instant a value is replaced
+        # belongs to the new value only. Off, the old closed boundary is kept, so an
+        # existing store answers exactly as it did.
+        self._half_open = relation_event_time_enabled() if half_open_validity is None else half_open_validity
 
     # -- seed resolution ----------------------------------------------------
 
@@ -205,14 +217,20 @@ class GraphRetrievalService:
         """A relation is current when it is believed and its validity window is open at now.
 
         - retracted (its last source was corrected or erased) -> exclude
-        - valid_from in the future  -> not yet valid (exclude)
+        - valid_from in the future  -> not yet valid (exclude); the start is inclusive
         - valid_to in the past      -> expired (exclude)
         - open windows (None)       -> current
+
+        The end boundary follows ``SEVERIAN_RELATION_EVENT_TIME`` (S3): on, the window is
+        half-open, so a relation is gone AT ``valid_to`` — the instant its replacement starts
+        belongs to the replacement alone. Off, the older closed convention is kept.
         """
         if relation.retracted_at is not None:
             return False
         if relation.valid_from is not None and relation.valid_from > self._now:
             return False
-        if relation.valid_to is not None and relation.valid_to < self._now:
-            return False
+        if relation.valid_to is not None:
+            expired = relation.valid_to <= self._now if self._half_open else relation.valid_to < self._now
+            if expired:
+                return False
         return True

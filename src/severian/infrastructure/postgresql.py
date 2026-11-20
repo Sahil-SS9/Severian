@@ -1163,6 +1163,7 @@ class PostgreSQLBackend(TaskNoteStore):
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
         source_observation_id: str | None = None,
+        relation_valid_from: datetime | None = None,
     ) -> list[Memory]:
         """Atomically publish graph extraction + derived memories (DATA-04).
 
@@ -1234,6 +1235,7 @@ class PostgreSQLBackend(TaskNoteStore):
                     subject_id=subject_id,
                     predicate=predicate,
                     object_id=object_id,
+                    valid_from=relation_valid_from,
                     source_observation_ids=[source_observation_id] if source_observation_id else [],
                 )
                 identity_key = self._identity(
@@ -1267,7 +1269,7 @@ class PostgreSQLBackend(TaskNoteStore):
                                 "supported": supported is not current,
                             },
                         )
-                    self._end_replaced_relations(connection, scope, updated or current)
+                    self._end_replaced_relations(connection, scope, updated or current, event_at=relation_valid_from)
                     continue
                 connection.execute(
                     records.insert().values(
@@ -1280,7 +1282,7 @@ class PostgreSQLBackend(TaskNoteStore):
                         records.insert().values(**self._record_values("outbox", event, status="pending"))
                     )
                     connection.execute(records.insert().values(**self._record_values("audit", audit)))
-                self._end_replaced_relations(connection, scope, relation)
+                self._end_replaced_relations(connection, scope, relation, event_at=relation_valid_from)
             # -- memories (same as add_memories_batch) --
             existing_rows = connection.execute(
                 select(records.c.payload).where(
@@ -1590,8 +1592,15 @@ class PostgreSQLBackend(TaskNoteStore):
             )
         return retracted
 
-    def _end_replaced_relations(self, connection: Connection, scope: Scope, newer: Relation) -> None:
-        """End older open values of a single-valued predicate once ``newer`` states a new one."""
+    def _end_replaced_relations(
+        self, connection: Connection, scope: Scope, newer: Relation, *, event_at: datetime | None = None
+    ) -> None:
+        """End older open values of a single-valued predicate once ``newer`` states a new one.
+
+        ``event_at`` is the newer statement's event instant (S3, switch on): the older value ends
+        there rather than at the wall clock, and a value that started after that instant is left
+        open — an older statement is history, not a replacement.
+        """
         if newer.predicate not in SINGLE_VALUED_PREDICATES or newer.valid_to is not None:
             return
         sql = sa_text(
@@ -1608,13 +1617,15 @@ class PostgreSQLBackend(TaskNoteStore):
               AND r.id != :newer_id
             """
         )
-        stamp = now()
+        stamp = now() if event_at is None else event_at
         rows = connection.execute(
             sql,
             {**scope.model_dump(), "subject_id": newer.subject_id, "predicate": newer.predicate, "newer_id": newer.id},
         ).mappings().all()
         for row in rows:
-            ended = Relation.model_validate(row["payload"]).replaced_by(newer, at=stamp)
+            ended = Relation.model_validate(row["payload"]).replaced_by(
+                newer, at=stamp, from_event_time=event_at is not None
+            )
             if ended is not None:
                 connection.execute(
                     update(records).where(records.c.id == row["id"]).values(payload=ended.model_dump(mode="json"))

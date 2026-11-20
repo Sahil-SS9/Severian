@@ -159,12 +159,21 @@ class ScopedCanonicalPort(Protocol):
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
         source_observation_id: str | None = None,
+        relation_valid_from: datetime | None = None,
     ) -> list[Memory]:
         """Atomically publish graph extraction + derived memories.
 
         ``source_observation_id`` is recorded as relation lineage: a new
         relation starts with it; an existing identical relation gains it
         (and is reinstated if it had been retracted).
+
+        ``relation_valid_from`` is the instant a relation created in this call
+        starts — the source message's event time when
+        ``SEVERIAN_RELATION_EVENT_TIME`` is on. The caller decides it; a backend
+        only stores it, and relation identity stays free of validity. The same
+        instant is where an older value of a single-valued predicate ends, and
+        it never ends a value that began later (S3). ``None`` leaves the old
+        behaviour untouched: no start time, and ends stamped at the wall clock.
         """
         ...
     def retract_relations_for_source(self, scope: Scope, observation_id: str) -> int:

@@ -13,7 +13,7 @@ These tests assert that:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -331,11 +331,12 @@ class _FakeRepository:
         relations: list[tuple[str, str, str]],
         memories: list[Memory],
         source_observation_id: str | None = None,
+        relation_valid_from: datetime | None = None,
     ) -> list[Memory]:
         # In-memory analogue of the backend atomic publish (DATA-04).
         # The fake's add_entity/add_relation are no-op shapes (no storage),
         # so this mirrors the call pattern without graph resolution or lineage.
-        del source_observation_id
+        del source_observation_id, relation_valid_from
         for kind, name in entities:
             self.add_entity(scope, kind, name)
         for subject, predicate, obj in relations:
@@ -555,6 +556,19 @@ class _FakeRepository:
 
 def test_fake_backend_satisfies_contract() -> None:
     assert isinstance(_FakeRepository(), CanonicalRepository)
+
+
+def test_fake_backend_accepts_the_relation_start_time() -> None:
+    """S3 extends ``publish_derivation``; the alternative backend must keep the contract."""
+    repository = _FakeRepository()
+    repository.publish_derivation(
+        _scope(),
+        entities=[("person", "Alice")],
+        relations=[],
+        memories=[],
+        relation_valid_from=datetime(2026, 3, 1, 10, tzinfo=UTC),
+    )
+    assert isinstance(repository, CanonicalRepository)
 
 
 # -- scope invariant conformance -----------------------------------------
