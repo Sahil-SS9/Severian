@@ -17,7 +17,6 @@ Release candidate for the Must integrity wave. Not tagged, pushed or deployed.
 - `docs/integrations.md` gives each harness its own profile (`standalone`, `claude-code`, `codex`, `opencode`,
   `claude-desktop`) and includes the launch flags in every recipe. `docs/threat-model.md` and the README MCP
   section state the boundary plainly.
-- This release is not version-bumped here; it ships as 0.4.0 at the wave gate.
 
 ## [0.3.13] - 2026-10-25
 

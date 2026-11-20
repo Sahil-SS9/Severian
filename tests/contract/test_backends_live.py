@@ -118,6 +118,15 @@ def test_observation_idempotency_by_content(backend: Any) -> None:
     assert len(backend.list_observations(scope)) == 1
 
 
+def test_blank_scope_bypassing_pydantic_is_refused_at_storage(backend: Any) -> None:
+    scope = _unique_scope()
+    broken = scope.model_copy(update={"agent_id": ""})
+    with pytest.raises(ValueError, match="agent_id"):
+        backend.add_observation(Observation(scope=broken, content="must not land"))
+    with pytest.raises(ValueError, match="agent_id"):
+        backend.list_observations(broken)
+
+
 def test_observation_revision_is_immutable_chain(backend: Any) -> None:
     scope = _unique_scope()
     original = backend.add_observation(Observation(scope=scope, content="v1"))

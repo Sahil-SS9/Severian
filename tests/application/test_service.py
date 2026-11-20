@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from sqlalchemy import event
 
 from severian.application.derivation import DerivationService
 from severian.application.ingestion import IngestionService
@@ -95,6 +96,38 @@ def test_ingest_duplicate_returns_existing_observation(bundle):
 def test_ingest_rejects_empty_content(bundle):
     with pytest.raises(ValueError, match="empty"):
         bundle["service"].ingest_observation(_scope(), content=" \n\t", source={})
+
+
+def _job_count(repo) -> int:
+    with repo.engine.connect() as connection:
+        return int(connection.exec_driver_sql("SELECT COUNT(*) FROM records WHERE record_type = 'job'").scalar_one())
+
+
+def _fail_job_insert(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+    if statement.lstrip().lower().startswith("insert into records") and parameters[1] == "job":
+        raise RuntimeError("job insert failed")
+
+
+def test_ingest_and_derive_job_are_one_transaction(bundle):
+    """A failed derive-job insert must leave no observation behind."""
+    event.listen(bundle["repo"].engine, "before_cursor_execute", _fail_job_insert)
+    with pytest.raises(RuntimeError, match="job insert failed"):
+        bundle["service"].ingest_observation(_scope(), content="one transaction", source={})
+    event.remove(bundle["repo"].engine, "before_cursor_execute", _fail_job_insert)
+    assert bundle["repo"].list_observations(_scope()) == []
+    assert _job_count(bundle["repo"]) == 0
+
+
+def test_revision_and_derive_job_are_one_transaction(bundle):
+    """A failed derive-job insert must leave the original revision unchanged."""
+    original = bundle["service"].ingest_observation(_scope(), content="first version", source={})
+    assert _job_count(bundle["repo"]) == 1
+    event.listen(bundle["repo"].engine, "before_cursor_execute", _fail_job_insert)
+    with pytest.raises(RuntimeError, match="job insert failed"):
+        bundle["service"].revise_observation(_scope(), original.observation_id, "second version")
+    event.remove(bundle["repo"].engine, "before_cursor_execute", _fail_job_insert)
+    assert _job_count(bundle["repo"]) == 1
+    assert bundle["repo"].get_observation(_scope(), original.observation_id).content == "first version"
 
 
 def test_search_returns_scope_bounded_results(bundle):
