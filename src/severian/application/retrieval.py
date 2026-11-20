@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from severian.application.compactcites import frame
 from severian.application.eventtime import TimeWindow, as_utc, message_time
 from severian.application.extraction import extract_entities
+from severian.application.markers import is_marker
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
 from severian.application.replytrim import fit_contents
@@ -173,7 +174,8 @@ class RetrievalService:
         # `*` queries mean "list all memories" — returning every memory
         # in scope with neutral scores.
         if not stripped or stripped == "*":
-            memories = self.repository.list_memories(scope)
+            # C1: maintenance markers are records about a pass, never memories of the user.
+            memories = [memory for memory in self.repository.list_memories(scope) if not is_marker(memory)]
             return [
                 RetrievalResult(
                     memory=memory,
@@ -212,6 +214,10 @@ class RetrievalService:
         ranked: list[RetrievalResult] = []
         for memory_id in ids:
             memory = self.repository.get_memory(scope, memory_id)
+            if is_marker(memory):
+                # C1: a marker is never a search result, so it must not consume a rank position
+                # or a result slot either.
+                continue
             lexical_rank = next(
                 (position for position, hit in enumerate(lexical_hits, start=1) if hit.memory_id == memory_id),
                 None,
@@ -422,6 +428,9 @@ class RetrievalService:
                 window_ids.update(neighbour_id for _order, neighbour_id in turns[low:high])
         memories_by_observation: dict[str, list[Memory]] = {}
         for memory in self.repository.list_memories_for_observations(scope, sorted(window_ids)):
+            if is_marker(memory):
+                # C1: the neighbour read is a direct repository read, so it applies the same rule.
+                continue
             for observation_id in memory.source_observation_ids:
                 memories_by_observation.setdefault(observation_id, []).append(memory)
         present = {item.memory.id for item in ranked}

@@ -35,6 +35,7 @@ from severian.application.eventtime import as_utc, event_time_enabled, query_win
 from severian.application.factslots import asks_about_past
 from severian.application.fillbudget import MIN_FILL_ROOM, fill_budget_enabled, neighbour_memories
 from severian.application.ingestion import IngestionResult, IngestionService
+from severian.application.markers import is_marker, without_markers
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.purge import PurgePlan, PurgeReport
@@ -787,6 +788,9 @@ class MemoryService:
         items: list[ContextItem] = []
         for hit in hits:
             memory = self._repository.get_memory(scope, hit.memory_id)
+            if is_marker(memory):
+                # C1: a maintenance marker is never rendered as the user's memory.
+                continue
             observation: Observation | None = None
             quote = None
             if memory.kind == FACT_KIND and memory.source_observation_ids:
@@ -842,6 +846,9 @@ class MemoryService:
         results: list[RetrievalResult] = []
         for hit in hits:
             memory = self._repository.get_memory(scope, hit.memory_id)
+            if is_marker(memory):
+                # C1: a marker handed in by id is dropped, exactly as search would have dropped it.
+                continue
             results.append(
                 RetrievalResult(
                     memory=memory,
@@ -861,7 +868,9 @@ class MemoryService:
         room = assembler.max_chars - len(block)
         if room < MIN_FILL_ROOM:
             return block
-        extra = neighbour_memories(self._repository, scope, results, drop_closed=self._truth_resolution)
+        extra = without_markers(
+            neighbour_memories(self._repository, scope, results, drop_closed=self._truth_resolution)
+        )
         if not extra:
             return block
         # The caller's items are laid out first, unchanged and in order; these only fill what they left. No search
