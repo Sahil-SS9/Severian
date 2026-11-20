@@ -126,7 +126,16 @@ def test_the_derive_drain_still_takes_dream_jobs_with_the_switch_off(bundle: Ser
     assert worker.drain(gateway=bundle.gateway).processed == 1
 
 
-def test_the_dream_pass_runs_a_queued_job(bundle: ServiceBundle) -> None:
+def test_the_dream_pass_refuses_while_the_switch_is_off(bundle: ServiceBundle, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The switch is a boundary in the library too, not only in the CLI."""
+    monkeypatch.delenv("SEVERIAN_DREAMING", raising=False)
+    worker = DerivationWorker(bundle.repository, bundle.derivation, bundle.projection)
+    with pytest.raises(RuntimeError, match="SEVERIAN_DREAMING"):
+        worker.dream_pass()
+
+
+def test_the_dream_pass_runs_a_queued_job(bundle: ServiceBundle, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEVERIAN_DREAMING", "1")
     duplicate_pair(bundle)
     bundle.repository.enqueue_job(SCOPE, DREAM_JOB, {"mode": "consolidate"})
     worker = DerivationWorker(bundle.repository, bundle.derivation, bundle.projection)
@@ -135,8 +144,9 @@ def test_the_dream_pass_runs_a_queued_job(bundle: ServiceBundle) -> None:
     assert {memory.kind for memory in bundle.repository.list_memories(SCOPE)} >= {"consolidated"}
 
 
-def test_the_dream_pass_projects_what_it_wrote(bundle: ServiceBundle) -> None:
+def test_the_dream_pass_projects_what_it_wrote(bundle: ServiceBundle, monkeypatch: pytest.MonkeyPatch) -> None:
     """A marker is hidden from search by ``markers``, not by leaving the projection stale."""
+    monkeypatch.setenv("SEVERIAN_DREAMING", "1")
     duplicate_pair(bundle)
     bundle.repository.enqueue_job(SCOPE, DREAM_JOB, {"mode": "curate"})
     worker = DerivationWorker(bundle.repository, bundle.derivation, bundle.projection)
@@ -144,7 +154,8 @@ def test_the_dream_pass_projects_what_it_wrote(bundle: ServiceBundle) -> None:
     assert bundle.repository.pending_outbox() == []
 
 
-def test_the_dream_tick_queues_and_runs_in_one_pass(bundle: ServiceBundle) -> None:
+def test_the_dream_tick_queues_and_runs_in_one_pass(bundle: ServiceBundle, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEVERIAN_DREAMING", "1")
     duplicate_pair(bundle)
     worker = DerivationWorker(bundle.repository, bundle.derivation, bundle.projection)
     queued, summary = worker.dream_tick(tenant_id=SCOPE.tenant_id, profile_id=SCOPE.profile_id)

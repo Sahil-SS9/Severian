@@ -38,7 +38,13 @@ from severian.application.dreaming import (
     CurationService,
     RetentionPolicyService,
 )
-from severian.application.dreamqueue import DREAM_JOB, DreamProducer, QueueResult, dream_background_kinds
+from severian.application.dreamqueue import (
+    DREAM_JOB,
+    DreamProducer,
+    QueueResult,
+    dream_background_kinds,
+    dreaming_enabled,
+)
 from severian.application.dreamwriter import DreamWriter
 from severian.application.episodes import EpisodeService
 from severian.application.markers import MARKER_KINDS
@@ -356,6 +362,10 @@ class DerivationWorker:
         A failed job is completed ``failed`` with its reason and does not stop the pass; the lease
         machinery decides when a reaped retry is due.
         """
+        if not dreaming_enabled():
+            # The CLI gates this too; the library method refuses on its own so the switch is a real
+            # boundary rather than a convention every caller has to remember.
+            raise RuntimeError("the dreaming pass is off: set SEVERIAN_DREAMING=1 to run dream jobs")
         processed = failed = 0
         touched: dict[str, Scope] = {}
         while max_jobs is None or (processed + failed) < max_jobs:
