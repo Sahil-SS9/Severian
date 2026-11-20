@@ -62,14 +62,34 @@ principal-bound scope are now implemented for the HTTP API.
 
 **Still required (not yet implemented):**
 - browser sessions using secure cookies and CSRF protection;
-- destructive operations requiring explicit confirmation + audit events;
 - rate limiting (acceptable for local-first; add before network exposure).
+
+**Delivered for one operation (M1):** destructive operations requiring explicit
+confirmation + audit events — `severian purge` is dry-run by default, acts only with
+`--confirm`, and writes one append-only audit row per target id. Every other
+destructive path (erasure, supersede, close, retraction) already writes its own audit
+rows (M2). No other destructive operation has a confirmation gate yet.
 
 See `docs/operator-runbook.md` for the current deployment posture.
 
 ## Data lifecycle
 
 Retention, expiry, legal hold, deletion and export operate on canonical IDs. Deletion states are explicit: requested, canonical-deleted, projections-purged and verified. Physical purging must not be claimed until canonical storage, every index and backup policy have been checked.
+
+**Purge, as implemented (M1, 20/11/2026 — reverses the earlier "not offered" position on owner direction).** `severian purge --observation <id>` (dry run by default, `--confirm` to act) scrubs the observation's whole revision chain, every memory derived from it, the relations that lose their last support and the entity names nothing else supports. The states it actually reaches:
+
+| State | Reached by purge? | What it means |
+|---|---|---|
+| requested | yes — the audit row (`observation.purge` et al.) is the request record | ids and counts only, never content |
+| canonical-deleted *(purged)* | yes — text replaced by the fixed `[purged]` marker, digests recomputed over it, `identity_key` released, never an active head again | the row still exists as an audit skeleton: ids, scope, kinds, timestamps, revision links |
+| projections-purged | yes — the derived memories are dropped from the FTS and vector indexes and the scope is rebuilt | on SQLite the index files are checkpointed and `VACUUM`ed afterwards |
+| verified | yes — the acceptance test scans every SQLite store file (canonical, FTS, vector, and their `-wal`/`-shm` sidecars) for the marker bytes after checkpoint + `VACUUM` | the claim is per store file, not global |
+
+**Not reached, and never claimed:**
+
+- **Backup policy.** Purge cannot reach copies outside the store: `~/.hermes/backups/severian-*`, `~/backups/severian-*`, snapshot files produced by `severian export`, PostgreSQL base backups, or any copy the operator made. Deleting or rewriting those is a separate operator action.
+- **PostgreSQL on-disk history.** The scrubbing UPDATE writes new row versions; the old ones remain as dead tuples until a `VACUUM`. An ordinary `VACUUM` does not rewrite pages in place — only `VACUUM FULL` rewrites the heap — and WAL archives may still hold old images. `severian purge` prints the operator command and does not run it.
+- **A whole-host claim.** "Physically purged" is therefore never asserted. The accurate statement is "removed from this store and its index files, with the backups and the PostgreSQL caveats listed here".
 
 ## Phase 2 isolation gate
 

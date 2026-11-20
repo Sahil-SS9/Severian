@@ -460,6 +460,96 @@ class _FakeRepository:
     def backup(self, destination: Path) -> None:  # pragma: no cover - interface parity
         pass
 
+    # -- M1: atomic erase and purge (minimal in-memory parity) ---------------
+    # The value objects are imported where they are used so this conformance file
+    # still collects against a tree where the M1 port members do not exist yet.
+
+    def erase_observation_cascade(self, scope: Scope, observation_id: str, *, reason: str = "erased") -> Any:
+        """Same cascade the real backends run, applied in place (no transaction to lose)."""
+        from severian.application.purge import EraseOutcome
+
+        original = self.get_observation(scope, observation_id)
+        if original.superseded_by_id is not None:
+            raise ConflictError("observation is already superseded")
+        tombstone = original.model_copy(
+            update={
+                "id": Observation(scope=scope, content="x").id,
+                "content": f"[{reason}]",
+                "revision_of_id": original.id,
+                "superseded_by_id": ERASED,
+            }
+        )
+        self._observations[self._key(scope, tombstone.id)] = tombstone
+        self._observations[self._key(scope, original.id)] = original.model_copy(
+            update={"superseded_by_id": tombstone.id}
+        )
+        erased: list[str] = []
+        for (record_id, *dimensions), memory in list(self._memories.items()):
+            if tuple(dimensions) != tuple(scope.model_dump().values()):
+                continue
+            if memory.superseded_by_id is None and observation_id in memory.source_observation_ids:
+                memory_tombstone = memory.model_copy(
+                    update={
+                        "id": Memory(
+                            scope=scope,
+                            kind=memory.kind,
+                            content="x",
+                            source_observation_ids=memory.source_observation_ids,
+                            model_id=memory.model_id,
+                            prompt_version=memory.prompt_version,
+                            confidence=0.0,
+                        ).id,
+                        "content": f"[{reason}]",
+                        "confidence": 0.0,
+                        "prompt_version": f"{memory.prompt_version}:erased",
+                        "revision_of_id": memory.id,
+                        "superseded_by_id": ERASED,
+                    }
+                )
+                self._memories[self._key(scope, memory_tombstone.id)] = memory_tombstone
+                self._memories[(record_id, *dimensions)] = memory.model_copy(
+                    update={"superseded_by_id": memory_tombstone.id}
+                )
+                erased.append(memory.id)
+        return EraseOutcome(
+            observation_id=observation_id,
+            tombstone_id=tombstone.id,
+            memory_ids=tuple(erased),
+            relations_retracted=0,
+        )
+
+    def plan_purge(self, scope: Scope, observation_id: str) -> Any:
+        from severian.application.purge import plan_purge
+
+        return plan_purge(
+            observation_id=observation_id,
+            observations=self.list_observations_history(scope),
+            memories=self.list_memories_history(scope),
+            relations=self.list_relations(scope),
+            entities=self.list_entities(scope),
+        )
+
+    def purge_observation(self, scope: Scope, observation_id: str) -> Any:
+        from severian.application.purge import PurgeReport, scrub_memory, scrub_observation
+
+        plan = self.plan_purge(scope, observation_id)
+        for target in plan.observation_ids:
+            key = self._key(scope, target)
+            self._observations[key] = scrub_observation(self._observations[key])
+        for target in plan.memory_ids:
+            key = self._key(scope, target)
+            self._memories[key] = scrub_memory(self._memories[key])
+        return PurgeReport(
+            plan=plan,
+            observations=len(plan.observation_ids),
+            memories=len(plan.memory_ids),
+            relations=len(plan.relation_ids),
+            relations_retracted=len(plan.relation_ids),
+            entities=len(plan.entity_ids),
+            audit_rows=0,
+            cancelled_jobs=0,
+        )
+
 
 def test_fake_backend_satisfies_contract() -> None:
     assert isinstance(_FakeRepository(), CanonicalRepository)

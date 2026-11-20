@@ -1296,3 +1296,401 @@ def test_audit_rows_stay_append_only(backend) -> None:
     assert len(after) > len(first)
     assert [row.action for row in backend.list_audit(scope) if "audit." in row.action] == []
 
+
+# -- M1: purge and atomic erase, on both backends -----------------------------
+
+_M1_MARKER = "ZQX-PURGE-MARKER-9F3A"
+_M1_SECRET = f"The pantry code is {_M1_MARKER} for the north shelf"
+
+
+def _inject_audit_failure(monkeypatch: pytest.MonkeyPatch, backend: Any, action: str) -> None:
+    """Make the audit insert for ``action`` raise inside its transaction.
+
+    The same injection point works on both backends: every audited mutation goes
+    through ``_insert_audit_in_transaction``. SQLite declares it a classmethod (the call
+    arrives with ``self`` first); PostgreSQL declares it a staticmethod (the class name
+    is the call site), so the replacement is installed accordingly.
+    """
+    cls = type(backend)
+    original = cls._insert_audit_in_transaction
+
+    if isinstance(backend, PostgreSQLBackend):
+
+        def boom(connection, scope, action_name, target_id, metadata):  # type: ignore[no-untyped-def]
+            if action_name == action:
+                raise RuntimeError("injected crash")
+            return original(connection, scope, action_name, target_id, metadata)
+
+        monkeypatch.setattr(cls, "_insert_audit_in_transaction", staticmethod(boom))
+        return
+
+    def boom_method(self, connection, scope, action_name, target_id, metadata):  # type: ignore[no-untyped-def]
+        if action_name == action:
+            raise RuntimeError("injected crash")
+        return original(connection, scope, action_name, target_id, metadata)
+
+    monkeypatch.setattr(cls, "_insert_audit_in_transaction", boom_method)
+
+
+def test_restating_after_an_erasure_is_a_new_observation(backend, tmp_path) -> None:
+    """M1 owner decision (a) / MG-2: the erased head must not satisfy the content dedupe."""
+    scope = _unique_scope()
+    first, _job = backend.add_observation_and_enqueue(Observation(scope=scope, content=_M1_SECRET))
+    backend.revise_observation(scope, first.id, "[erased]", tombstone=True)
+
+    second, _second_job = backend.add_observation_and_enqueue(Observation(scope=scope, content=_M1_SECRET))
+
+    assert second.id != first.id, "the re-statement was silently deduped onto the erased observation"
+    assert backend.get_observation(scope, first.id).superseded_by_id is not None
+    active = [row.id for row in backend.list_observations(scope) if row.superseded_by_id is None]
+    assert active == [second.id]
+
+
+def test_the_erasure_cascade_is_one_transaction(backend, monkeypatch: pytest.MonkeyPatch) -> None:
+    """MG-3: a failure anywhere in the cascade must leave canonical state consistent."""
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    memory = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="pantry code stored",
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+            confidence=0.9,
+        )
+    )
+
+    _inject_audit_failure(monkeypatch, backend, "memory.supersede")
+    with pytest.raises(RuntimeError, match="injected crash"):
+        backend.erase_observation_cascade(scope, observation.id)
+    monkeypatch.undo()
+
+    stored_observation = backend.get_observation(scope, observation.id)
+    stored_memory = backend.get_memory(scope, memory.id)
+    assert not (stored_observation.superseded_by_id is not None and stored_memory.superseded_by_id is None), (
+        "the source was erased while its derived memory stayed active"
+    )
+    assert [row.id for row in backend.list_memories_history(scope)] == [memory.id], (
+        "a half-written tombstone was left behind"
+    )
+
+
+def test_purge_plan_lists_the_chain_memories_relations_and_entities(backend) -> None:
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    memory = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="pantry code stored",
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+            confidence=0.9,
+        )
+    )
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("org", "Acme")],
+        relations=[("Alice", "works_at", "Acme")],
+        memories=[],
+        source_observation_id=observation.id,
+    )
+    relation = next(row for row in backend.list_relations(scope) if row.source_observation_ids)
+    entity_ids = {row.id for row in backend.list_entities(scope)}
+
+    plan = backend.plan_purge(scope, observation.id)
+
+    assert plan.observation_ids == (observation.id,)
+    assert plan.memory_ids == (memory.id,)
+    assert plan.relation_ids == (relation.id,)
+    assert set(plan.entity_ids) == entity_ids
+    assert plan.counts == {"observation": 1, "memory": 1, "relation": 1, "entity": 2}
+
+
+def test_purge_scrubs_the_marker_and_releases_the_identity(backend, tmp_path) -> None:
+    from severian.domain.models import PURGE_MARKER
+
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="pantry code stored",
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+            confidence=0.9,
+        )
+    )
+
+    report = backend.purge_observation(scope, observation.id)
+
+    assert report.observations == 1 and report.memories == 1
+    stored = backend.get_observation(scope, observation.id)
+    assert stored.content == PURGE_MARKER and stored.raw_content == PURGE_MARKER
+    assert stored.purged is True and stored.superseded_by_id is not None
+    assert _M1_MARKER not in backend.export_json()
+    assert [row.target_id for row in backend.list_audit(scope) if row.action == "observation.purge"] == [
+        observation.id
+    ]
+
+    # The identity is released: the same text ingested again is new evidence, on both backends.
+    again, _job = backend.add_observation_and_enqueue(Observation(scope=scope, content=_M1_SECRET))
+    assert again.id != observation.id
+    assert backend.get_observation(scope, observation.id).purged is True
+
+    _audit_round_trip(backend, scope, tmp_path, "m1-purge")
+
+
+def test_purge_refuses_while_a_derivation_job_is_running(backend) -> None:
+    """Fail closed: a running derive could republish from the marker, so the purge stops."""
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    backend.enqueue_job(scope, "derive", {"observation_id": observation.id})
+    claimed = backend.claim_job("m1-worker", 300, kind="derive")
+    assert claimed.payload["observation_id"] == observation.id
+
+    with pytest.raises(ConflictError):
+        backend.purge_observation(scope, observation.id)
+    assert backend.get_observation(scope, observation.id).purged is False
+    backend.complete_job(claimed.id, "done")
+
+
+
+# -- M1 correction: F1 provenance, F2 legacy identity release, F6 task notes ---
+
+
+def _graph(backend: Any, scope: Scope, observation_id: str) -> tuple[Any, set[str]]:
+    """One relation and its two entity endpoints, supported by ``observation_id``."""
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("org", "Acme")],
+        relations=[("Alice", "works_at", "Acme")],
+        memories=[],
+        source_observation_id=observation_id,
+    )
+    relation = next(row for row in backend.list_relations(scope) if row.retracted_at is None)
+    return relation, {row.id for row in backend.list_entities(scope)}
+
+
+def test_erasing_first_then_purging_reaches_the_retracted_relation_and_its_entities(backend) -> None:
+    """F1: erase drops the citation, so the purge has to reach the relation by its history.
+
+    Both backends share one planner, so this is the parity pin for the operator's most
+    likely order (erase, then purge): the relation is a purge target, both unsupported
+    entity names are scrubbed, and the audit says so on each backend.
+    """
+    from severian.domain.models import PURGE_MARKER
+
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="pantry code stored",
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+            confidence=0.9,
+        )
+    )
+    relation, entity_ids = _graph(backend, scope, observation.id)
+
+    backend.erase_observation_cascade(scope, observation.id)
+    erased = backend.get_relation(scope, relation.id)
+    assert erased.retracted_at is not None and erased.source_observation_ids == []
+
+    plan = backend.plan_purge(scope, observation.id)
+    assert plan.relation_ids == (relation.id,), "the purge cannot see the relation the erase retracted"
+    assert set(plan.entity_ids) == entity_ids
+
+    report = backend.purge_observation(scope, observation.id)
+
+    assert report.relations == 1 and report.entities == 2
+    assert {row.name for row in backend.list_entities(scope)} == {PURGE_MARKER}
+    exported = backend.export_json()
+    assert "Alice" not in exported and "Acme" not in exported
+    purged_entities = sorted(row.target_id for row in backend.list_audit(scope) if row.action == "entity.purge")
+    assert purged_entities == sorted(entity_ids), "an entity was scrubbed without an audit row"
+    assert [row.target_id for row in backend.list_audit(scope) if row.action == "relation.purge"] == [relation.id]
+
+
+def _make_the_erased_row_legacy(
+    backend: Any, scope: Scope, observation_id: str, content: str, source: dict[str, str]
+) -> str:
+    """Put a pre-M1 erased row's identity key back, as a 0.3.13 store has it.
+
+    The M1 cascade releases the key; a store erased before M1 kept it, alongside a
+    tombstoned payload. This is the exact shape the active-only dedupe cannot find and
+    the unique index still enforces. The key is rebuilt with the SAME parts the ingest
+    uses (content digest, plus the source identity when the source carries one), or the
+    row would simply not collide and the test would prove nothing.
+    """
+    import hashlib
+
+    from sqlalchemy import text
+
+    from severian.domain.models import source_identity
+
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    parts: tuple[object, ...] = (digest,)
+    identity = source_identity(source)
+    if identity:
+        parts = (digest, identity)
+    key = backend._identity(*parts)
+    with backend.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE records SET identity_key = :key WHERE id = :id AND record_type = 'observation'"),
+            {"key": key, "id": observation_id},
+        )
+    return key
+
+
+def _restate(backend: Any, path: str, scope: Scope, source: dict[str, str]) -> Any:
+    """Re-state the text through one of the three supported observation ingest paths."""
+    observation = Observation(scope=scope, content=_M1_SECRET, source=source)
+    if path == "add_observation":
+        return backend.add_observation(observation)
+    if path == "add_observation_and_enqueue":
+        stored, _job = backend.add_observation_and_enqueue(observation)
+        return stored
+    [(stored, _job)] = backend.add_observations_and_enqueue_batch([observation])
+    return stored
+
+
+@pytest.mark.parametrize("path", ["add_observation", "add_observation_and_enqueue", "batch"])
+@pytest.mark.parametrize("source", [{}, {"uri": "note://legacy-erase"}], ids=["no-source", "source-identity"])
+def test_a_legacy_erased_row_never_blocks_a_restatement(backend, path: str, source: dict[str, str], tmp_path) -> None:
+    """F2: every ingest path, both backends, both identity shapes.
+
+    A store written before M1 holds erased rows whose identity key was never released.
+    Re-stating the forgotten text must store a NEW observation - not raise out of the
+    ingest, and not resurrect the old row. The legacy row is otherwise untouched.
+    """
+    from sqlalchemy import text
+
+    scope = _unique_scope()
+    first = backend.add_observation(Observation(scope=scope, content=_M1_SECRET, source=source))
+    backend.revise_observation(scope, first.id, "[erased]", tombstone=True)
+    key = _make_the_erased_row_legacy(backend, scope, first.id, _M1_SECRET, source)
+    assert key
+
+    stored = _restate(backend, path, scope, source)
+
+    assert stored.id != first.id, "the restatement was not stored as new evidence"
+    legacy = backend.get_observation(scope, first.id)
+    assert legacy.superseded_by_id is not None, "the legacy row was resurrected"
+    assert legacy.content == _M1_SECRET, "the legacy row lost its historical text"
+    assert [row.id for row in backend.list_observations(scope) if row.superseded_by_id is None] == [stored.id]
+    with backend.engine.connect() as connection:
+        released = connection.execute(
+            text("SELECT identity_key FROM records WHERE id = :id"), {"id": first.id}
+        ).scalar_one()
+    assert released is None, "the blocking identity key was not released"
+
+    if path != "batch":
+        _audit_round_trip(backend, scope, tmp_path, f"legacy-release-{path}-{len(source)}")
+
+
+def test_releasing_a_stale_identity_key_never_reaches_another_scope(backend) -> None:
+    """F2 guard: the release is scoped. Another scope's legacy row keeps its key."""
+    from sqlalchemy import text
+
+    ours = _unique_scope()
+    theirs = _unique_scope(profile_id="p-other", session_id="s-other")
+    other = backend.add_observation(Observation(scope=theirs, content=_M1_SECRET))
+    backend.revise_observation(theirs, other.id, "[erased]", tombstone=True)
+    other_key = _make_the_erased_row_legacy(backend, theirs, other.id, _M1_SECRET, {})
+
+    stored, _job = backend.add_observation_and_enqueue(Observation(scope=ours, content=_M1_SECRET))
+
+    assert stored.scope.session_id == ours.session_id
+    with backend.engine.connect() as connection:
+        still_there = connection.execute(
+            text("SELECT identity_key FROM records WHERE id = :id"), {"id": other.id}
+        ).scalar_one()
+    assert still_there == other_key, "a release crossed a scope boundary"
+
+
+def test_a_task_note_holding_the_target_text_survives_a_purge(backend) -> None:
+    """F6: task notes are out of scope by design - pin it on both backends.
+
+    Deliberate out-of-scope data, so this is NOT evidence for an "every file is clean"
+    claim (the raw-byte purge tests use stores with no task-note copy of the text). What
+    it pins is that the purge cannot reach a note: the rows are identical afterwards.
+    """
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content=_M1_SECRET))
+    backend.set_task_note(scope, "pantry-audit", f"check the {_M1_MARKER} shelf label", {})
+    backend.set_task_note(scope, "pantry-audit", f"{_M1_MARKER} verified, next: reorder", {})
+    current, history = backend.get_task_note(scope, "pantry-audit")
+    assert current is not None and history, "precondition: a current note and its history"
+    before = [note.model_dump(mode="json") for note in [current, *history]]
+
+    backend.purge_observation(scope, observation.id)
+
+    current_after, history_after = backend.get_task_note(scope, "pantry-audit")
+    assert current_after is not None
+    after = [note.model_dump(mode="json") for note in [current_after, *history_after]]
+    assert after == before, "the purge reached a task note"
+
+
+def test_a_relation_reinstated_from_the_same_source_exports_and_imports_cleanly(backend, tmp_path) -> None:
+    """M1 R1: retract then republish the SAME source, then export/import round trip.
+
+    The operator path the parent confirmed: publish a derivation, retract its source,
+    republish the identical derivation from that same observation. The relation must
+    come back as current support with no withdrawn copy of that id left behind, or the
+    candidate's own strict validator refuses the export and the store cannot be
+    re-imported (M0/M1 contract).
+    """
+    from severian.infrastructure.snapshot import validate_snapshot
+
+    scope = _unique_scope()
+    source = backend.add_observation(Observation(scope=scope, content="Quanco owns Zed Quanley"))
+    entities = [("organisation", "Quanco"), ("person", "Zed Quanley")]
+    relations = [("Quanco", "owns", "Zed Quanley")]
+
+    def publish() -> None:
+        backend.publish_derivation(
+            scope,
+            entities=entities,
+            relations=relations,
+            memories=[],
+            source_observation_id=source.id,
+        )
+
+    def only_relation():
+        found = [rel for rel in backend.list_relations(scope) if rel.predicate == "owns"]
+        assert len(found) == 1, f"expected one derived relation, found {len(found)}"
+        return found[0]
+
+    publish()
+    backend.retract_relations_for_source(scope, source.id)
+    withdrawn = only_relation()
+    assert withdrawn.source_observation_ids == []
+    assert withdrawn.retracted_for_ids == [source.id]
+
+    # Same observation supports the same relation again.
+    publish()
+    reinstated = only_relation()
+    assert reinstated.source_observation_ids == [source.id]
+    assert reinstated.retracted_at is None
+    assert reinstated.retracted_for_ids == [], (
+        "a reinstated support is still named as withdrawn history: "
+        f"{reinstated.retracted_for_ids}"
+    )
+    assert not set(reinstated.source_observation_ids) & set(reinstated.retracted_for_ids)
+
+    # The store must export records its own validator accepts, and import them again.
+    document = json.loads(backend.export_json())
+    validate_snapshot(document["records"])
+    backend.import_json(json.dumps(document, sort_keys=True))
+    after_import = only_relation()
+    assert after_import.source_observation_ids == [source.id]
+    assert after_import.retracted_for_ids == []

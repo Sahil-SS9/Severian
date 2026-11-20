@@ -50,6 +50,7 @@ class ServiceBundle:
     projection: Any
     derivation: Any
     backend: str = "sqlite"
+    stores: tuple[Path, ...] = ()
 
     def close(self) -> None:
         self.vector.close()
@@ -57,6 +58,21 @@ class ServiceBundle:
         close = getattr(self.repository, "close", None)
         if close is not None:
             close()
+
+    def compact(self) -> list[Any]:
+        """Checkpoint and VACUUM the SQLite stores this bundle owns (M1).
+
+        Only meaningful on the SQLite backend: the canonical store, the FTS5 index and the
+        vector index are files there, and a purge's freed pages survive in them until they
+        are rewritten. On PostgreSQL there is nothing local to compact — the canonical rows
+        live in the server, whose dead tuples need an operator-run ``VACUUM`` — so this
+        returns an empty list and the CLI prints the command instead of running it.
+        """
+        if self.backend != "sqlite":
+            return []
+        from severian.infrastructure.compact import compact_sqlite_stores
+
+        return compact_sqlite_stores(self.stores)
 
 
 class _HashingGateway:
@@ -175,7 +191,9 @@ def _build_sqlite(
     from severian.infrastructure.embedding_resolver import resolve_embedding
 
     vector = LocalVectorIndex(vectors, embedding or resolve_embedding("hash"))
-    return _compose(repository=repository, lexical=lexical, vector=vector, gateway=gateway, backend="sqlite")
+    bundle = _compose(repository=repository, lexical=lexical, vector=vector, gateway=gateway, backend="sqlite")
+    bundle.stores = (Path(database), Path(fts), Path(vectors))
+    return bundle
 
 
 def _build_postgresql(

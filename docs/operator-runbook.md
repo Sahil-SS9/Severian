@@ -238,15 +238,53 @@ Severian is designed **local-first**. The current posture:
   mandatory on every request; cross-scope reads return 404 / empty
   results and never leak existence. Blank scope dimensions are rejected
   at the schema and the storage layer.
-- **Deletion semantics (OPS-02, implemented at the service layer).**
-  Observations and memories are immutable; there is NO hard-delete
-  endpoint in this release. Erasure is tombstone-based: the service
-  `erase_memory` / `erase_observation` mark records superseded by a
-  synthetic `[reason]` tombstone so they disappear from active reads and
-  search, while history retains the record + tombstone for audit. This
-  satisfies regulated "data stops being returned" deletion without
-  compromising the immutable audit trail. Hard delete / physical purge
-  is deliberately NOT offered.
+- **Deletion semantics (OPS-02, implemented at the service layer; reversed for
+  purge on owner direction 20/11/2026 — M1).** Observations and memories are
+  immutable. Two deletion states exist, and they are different things:
+  - **Erasure** (`erase_memory` / `erase_observation`) is tombstone-based: the
+    service marks records superseded by a synthetic `[reason]` tombstone so they
+    disappear from active reads and search, while history retains the record +
+    tombstone for audit. This satisfies regulated "data stops being returned"
+    deletion without compromising the immutable audit trail. **Erasure is not
+    physical removal:** the text stays in the canonical row, in the export and in
+    both histories. Erasing an observation is now ONE transaction (the tombstone,
+    every derived memory's tombstone and the relation retractions), so a crash can
+    never leave a derived memory active under an erased source, and the erasure
+    releases the observation's dedupe identity so re-stating the same fact later
+    is stored as new evidence instead of being silently swallowed.
+  - **Purge** (`severian purge --observation <id>`) is the real removal, and it is
+    an explicit operator action: dry run by default, `--confirm` to carry it out.
+    It scrubs the observation's **whole revision chain** (root, corrections and the
+    erasure tombstone), every memory derived from it (revisions and tombstones
+    included), the relations that lose their last support, and the entity names
+    nothing else supports. Every scrubbed text field becomes the fixed marker
+    `[purged]`, `content_hash`/`raw_hash` are recomputed over that marker,
+    `identity_key` is set to `NULL`, the payload metadata that could carry text is
+    emptied (`source`, `attachments`, `cues`, `trigger`), and the record can never
+    be an active head again. One append-only audit row per target id
+    (`observation.purge`, `memory.purge`, `relation.purge`, `entity.purge`), with ids
+    and counts and no content. Pending derivation for the chain is cancelled in the
+    same transaction; a **running** derivation job for the chain refuses the purge
+    (`ConflictError`) — stop the worker and retry. Task notes are **not** in the
+    purge (they are working state, not canonical memory) and there is no flag for
+    them.
+  - **What a purge cannot do — say this to the user, do not round it up:**
+    - copies outside the store are unreachable: `~/.hermes/backups/severian-*`,
+      `~/backups/severian-*`, exported snapshot files, PostgreSQL base backups, or
+      anything else copied elsewhere. `severian purge` never touches them;
+    - on SQLite the CLI checkpoints and `VACUUM`s the canonical, FTS and vector files
+      after the purge, which drops the freed pages from the files (their `-wal`/
+      `-shm` sidecars are truncated with them);
+    - on PostgreSQL the old row versions stay on disk as dead tuples until they are
+      vacuumed. An ordinary `VACUUM` does not rewrite pages in place; only
+      `VACUUM FULL` rewrites the heap, and WAL archives may still hold old images.
+      The CLI **prints** the operator command and does **not** run it:
+      `psql "$SEVERIAN_PG_DSN" -c 'VACUUM (FULL, ANALYZE) records;'`.
+    - therefore: never claim "physically purged everywhere". The honest claim is
+      "removed from this store and its index files".
+  - Purging is service + CLI only. There is **no MCP tool** for it: exposing a
+    destructive operation to model-chosen callers is a separate decision under the
+    MCP-parity rules.
 
 - **Dead-letter inspection/recovery (OPS-07, implemented).** Jobs that
   exhaust their retry budget are marked `dead_letter`. Inspect them with

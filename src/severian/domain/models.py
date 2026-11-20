@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -16,6 +17,12 @@ def now() -> datetime:
 # marker is itself superseded, so it is never an active head, never pending
 # derivation and never projected, while history keeps it for audit.
 ERASED = ":erased"
+# The fixed text a purge writes over every scrubbed field (M1). Fixed on purpose:
+# the content/raw digests are recomputed over it, so they are fixed too and carry
+# no residue of the removed text — not its length, not its shape. ``Observation``,
+# ``Memory`` and ``Entity`` carry ``purged=True`` and ``identity_key = NULL`` once a
+# purge has scrubbed them.
+PURGE_MARKER = "[purged]"
 # Predicates that hold one current value per subject: a newer value ends the
 # older one (kept in history with valid_to). Everything else accumulates.
 SINGLE_VALUED_PREDICATES = frozenset({"works_at", "located_in", "based_in"})
@@ -133,6 +140,12 @@ class Observation(BaseModel):
     attachments: list[Attachment] = Field(default_factory=list)
     revision_of_id: str | None = None
     superseded_by_id: str | None = None
+    # M1: set by a purge once every text field of this row has been replaced by
+    # ``PURGE_MARKER`` and its identity key released. A purged row is never an
+    # active head; the flag (not the sentinel) is what distinguishes "purged" from
+    # merely "erased", and the snapshot validator relaxes its text/identity checks
+    # only when it is true.
+    purged: bool = False
     created_at: datetime = Field(default_factory=now)
 
     @field_validator("content_hash", "raw_hash")
@@ -198,34 +211,59 @@ class Memory(BaseModel):
     # the optional retrieval decay. Deterministic; incremented via
     # ``record_memory_usage``.
     usage_count: int = 0
+    # M1: scrubbed by a purge (see ``Observation.purged``). A purged memory is never
+    # active, carries ``PURGE_MARKER`` as its text, and has no cues or trigger.
+    purged: bool = False
+
+
+class RevisionedRecord(Protocol):
+    """What :func:`revision_family` needs: an id, its parent and when it was written.
+
+    Both canonical revision chains use this shape — observations (root → revisions →
+    erasure tombstone) and memories (root → corrections → tombstones) — so one walk
+    serves both and neither backend reimplements it.
+    """
+
+    id: str
+    revision_of_id: str | None
+    created_at: datetime
+
+
+RevisionedT = TypeVar("RevisionedT", bound=RevisionedRecord)
+
+
+def revision_family(items: Mapping[str, RevisionedT], record_id: str) -> list[RevisionedT]:
+    """Every record in ``record_id``'s revision family, oldest first.
+
+    The family is everything linked by ``revision_of_id``: walk back to the root, then
+    collect all descendants. Following ``superseded_by_id`` instead loses any head that
+    rollback demoted (its forward pointer is cleared), and an erasure tombstone stays
+    listed for audit. Cycle-safe. Raises ``KeyError`` when ``record_id`` is not in
+    ``items``.
+    """
+    root = items[record_id]
+    visited: set[str] = set()
+    while root.revision_of_id is not None and root.revision_of_id in items and root.id not in visited:
+        visited.add(root.id)
+        root = items[root.revision_of_id]
+    children: dict[str, list[RevisionedT]] = {}
+    for record in items.values():
+        if record.revision_of_id is not None:
+            children.setdefault(record.revision_of_id, []).append(record)
+    family: dict[str, RevisionedT] = {}
+    stack = [root]
+    while stack:
+        record = stack.pop()
+        if record.id in family:
+            continue
+        family[record.id] = record
+        stack.extend(children.get(record.id, []))
+    return sorted(family.values(), key=lambda record: (record.created_at, record.id))
 
 
 def revision_lineage(memories: dict[str, Memory], memory_id: str) -> list[Memory]:
-    """Every memory in ``memory_id``'s revision family, oldest first.
-
-    The family is everything linked by ``revision_of_id``: walk back to the
-    root, then collect all descendants. Following ``superseded_by_id`` instead
-    loses any head that rollback demoted (its forward pointer is cleared), and
-    an erasure tombstone stays listed for audit. Cycle-safe.
-    """
-    root = memories[memory_id]
-    visited: set[str] = set()
-    while root.revision_of_id is not None and root.revision_of_id in memories and root.id not in visited:
-        visited.add(root.id)
-        root = memories[root.revision_of_id]
-    children: dict[str, list[Memory]] = {}
-    for memory in memories.values():
-        if memory.revision_of_id is not None:
-            children.setdefault(memory.revision_of_id, []).append(memory)
-    family: dict[str, Memory] = {}
-    stack = [root]
-    while stack:
-        memory = stack.pop()
-        if memory.id in family:
-            continue
-        family[memory.id] = memory
-        stack.extend(children.get(memory.id, []))
-    return sorted(family.values(), key=lambda memory: (memory.created_at, memory.id))
+    """Every memory in ``memory_id``'s revision family, oldest first (see :func:`revision_family`)."""
+    return revision_family(memories, memory_id)
 
 
 class Entity(BaseModel):
@@ -233,6 +271,9 @@ class Entity(BaseModel):
     scope: Scope
     kind: str
     name: str
+    # M1: set by a purge when nothing else supports the entity any more; ``name``
+    # becomes ``PURGE_MARKER`` and the identity key is released.
+    purged: bool = False
     created_at: datetime = Field(default_factory=now)
 
 
@@ -266,6 +307,13 @@ class Relation(BaseModel):
     # current graph; history keeps it. Manually added relations have no
     # lineage and are never retracted by source corrections.
     source_observation_ids: list[str] = Field(default_factory=list)
+    # M1 correction (F1): the supports this relation has LOST - an erasure or a revision
+    # withdrew them. NOT support: ``source_observation_ids`` alone answers "what supports
+    # this now", and ``retracted_at`` alone says whether it is in the graph. This is
+    # attributable history, so a purge of one of those observations can still reach the
+    # relation and the entity names it alone carried - which it could not if the withdrawn
+    # id simply vanished when the relation was retracted.
+    retracted_for_ids: list[str] = Field(default_factory=list)
     retracted_at: datetime | None = None
     created_at: datetime = Field(default_factory=now)
 
@@ -278,22 +326,54 @@ class Relation(BaseModel):
         """
         if observation_id is None:
             return None
+        # M1 R1: reinstating a support must also drop it from the withdrawn history.
+        # Leaving it in both lists names one observation as current AND withdrawn
+        # support, which the strict snapshot validator refuses - the store would then
+        # export records it cannot import again. The filter only removes this id, so
+        # every other support and every other history entry keeps its order.
+        remaining_history = [source for source in self.retracted_for_ids if source != observation_id]
         if self.retracted_at is not None:
-            return self.model_copy(update={"source_observation_ids": [observation_id], "retracted_at": None})
+            return self.model_copy(
+                update={
+                    "source_observation_ids": [observation_id],
+                    "retracted_for_ids": remaining_history,
+                    "retracted_at": None,
+                }
+            )
         if not self.source_observation_ids or observation_id in self.source_observation_ids:
             return None
-        return self.model_copy(update={"source_observation_ids": [*self.source_observation_ids, observation_id]})
+        return self.model_copy(
+            update={
+                "source_observation_ids": [*self.source_observation_ids, observation_id],
+                "retracted_for_ids": remaining_history,
+            }
+        )
 
     def unsupported_by(self, observation_id: str, *, at: datetime) -> Relation | None:
         """This relation without ``observation_id`` in its lineage; None when it never cited it.
 
-        Losing its last support retracts it as of ``at``.
+        Losing its last support retracts it as of ``at``. The withdrawn id moves to
+        ``retracted_for_ids``: it stops being support immediately (so support counting and
+        retraction are unchanged), but the relation keeps an attributable record that this
+        observation once supported it, which is what a later purge of that observation needs
+        to reach the relation and its otherwise unsupported entity names (M1 F1).
         """
         if observation_id not in self.source_observation_ids:
             return None
         lineage = [source for source in self.source_observation_ids if source != observation_id]
         retracted_at = self.retracted_at if lineage else (self.retracted_at or at)
-        return self.model_copy(update={"source_observation_ids": lineage, "retracted_at": retracted_at})
+        history = (
+            self.retracted_for_ids
+            if observation_id in self.retracted_for_ids
+            else [*self.retracted_for_ids, observation_id]
+        )
+        return self.model_copy(
+            update={
+                "source_observation_ids": lineage,
+                "retracted_for_ids": history,
+                "retracted_at": retracted_at,
+            }
+        )
 
     def replaced_by(self, newer: Relation, *, at: datetime) -> Relation | None:
         """This relation ended as of ``at`` because ``newer`` gives a new value; None when unaffected.

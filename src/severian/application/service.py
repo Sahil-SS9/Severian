@@ -37,6 +37,7 @@ from severian.application.fillbudget import MIN_FILL_ROOM, fill_budget_enabled, 
 from severian.application.ingestion import IngestionResult, IngestionService
 from severian.application.ports import CanonicalRepository, LexicalIndex, TaskNoteRepository
 from severian.application.projections import ProjectionCoordinator
+from severian.application.purge import PurgePlan, PurgeReport
 from severian.application.replytrim import reply_trim_enabled
 from severian.application.rerank import Reranker, rerank_pool, reranked
 from severian.application.retrieval import ContextAssembler, RetrievalResult, RetrievalService
@@ -383,20 +384,60 @@ class MemoryService:
         path, and graph facts lose it as a source (retracted when it was
         their last). Search stops returning facts whose only source was
         erased; history keeps the records for audit.
+
+        MG-3: the whole cascade is ONE repository transaction (M1), so a crash can
+        never leave a derived memory active under a source that is already gone.
+        The projection is updated after the commit: each erased memory is dropped
+        from the indexes explicitly (the rebuild below can be skipped when the
+        active-set digest happens to match a previous one), then the scope rebuild
+        reconciles everything else.
         """
-        original = self._repository.get_observation(scope, observation_id)
-        if original.superseded_by_id is not None:
-            raise ConflictError("observation is already superseded")
-        self._repository.revise_observation(scope, observation_id, f"[{reason}]", tombstone=True)
-        for memory in self._repository.list_memories(scope):
-            if (
-                memory.superseded_by_id is None
-                and observation_id in memory.source_observation_ids
-            ):
-                self.erase_memory(scope, memory.id, reason=reason)
-        self._repository.retract_relations_for_source(scope, observation_id)
+        outcome = self._repository.erase_observation_cascade(scope, observation_id, reason=reason)
+        self._drop_from_projection(scope, outcome.memory_ids)
         self._projection.rebuild(scope)
         return self._repository.get_observation(scope, observation_id)
+
+    def _drop_from_projection(self, scope: Scope, memory_ids: tuple[str, ...]) -> None:
+        """Delete the given memory ids from the indexes, falling back to a rebuild.
+
+        ``ProjectionCoordinator.rebuild`` skips when the active-set digest matches the
+        last one it saw, so a removal that leaves the active set unchanged would other-
+        wise never reach the indexes. Erasure of a memory changes that set only if
+        nothing else had been indexed since — deleting the ids explicitly is what makes
+        "erased" mean "not returned by search", whichever way the digest lands.
+        """
+        if not memory_ids:
+            return
+        try:
+            for memory_id in memory_ids:
+                self._projection.remove_memory(memory_id)
+        except Exception:  # noqa: BLE001 — a failed targeted delete falls back to a full rebuild
+            self._projection.rebuild(scope)
+
+    def preview_purge(self, scope: Scope, observation_id: str) -> PurgePlan:
+        """List every record a purge of ``observation_id`` would scrub. Writes nothing.
+
+        Ids and counts only, never content: this is what the operator sees before
+        ``--confirm``.
+        """
+        return self._repository.plan_purge(scope, observation_id)
+
+    def purge_observation(self, scope: Scope, observation_id: str) -> PurgeReport:
+        """Remove an observation's text from the store for good (M1).
+
+        Scrubs, in one repository transaction, the whole observation revision family,
+        every memory derived from it, the relations that cited it and the entity names
+        nothing else supports; also cancels pending derivation for the chain so a queued
+        job cannot republish from the removal marker. The projection is updated after the
+        commit (the purged memories are dropped explicitly, then the scope is rebuilt),
+        and compaction (checkpoint + VACUUM) is the caller's next step — see
+        ``ServiceBundle.compact`` and ``docs/operator-runbook.md`` for what that can and
+        cannot claim.
+        """
+        report = self._repository.purge_observation(scope, observation_id)
+        self._drop_from_projection(scope, report.plan.memory_ids)
+        self._projection.rebuild(scope)
+        return report
 
     # -- reads ----------------------------------------------------------
 

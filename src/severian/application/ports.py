@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from severian.application.purge import EraseOutcome, PurgePlan, PurgeReport
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import (
     AuditEvent,
@@ -173,6 +174,57 @@ class ScopedCanonicalPort(Protocol):
         (``retracted_at`` set) and leaves the current graph; history keeps
         it. Relations without lineage (added manually) are untouched.
         Returns the number of relations retracted.
+        """
+        ...
+
+    def erase_observation_cascade(
+        self, scope: Scope, observation_id: str, *, reason: str = "erased"
+    ) -> EraseOutcome:
+        """Erase one observation and everything derived from it in ONE transaction (M1, MG-3).
+
+        The whole cascade the old service path ran across four transactions: the erasure
+        tombstone for the observation, one tombstone per ACTIVE memory derived from it, and
+        the retraction of the relations that lose it as their last support. Because it is
+        one transaction, a crash can never leave a derived memory active after the source
+        that produced it was erased. Outbox and audit rows are the ones the old path wrote
+        (``observation.revised``, each tombstone's ``memory.created``, ``memory.supersede``,
+        ``relation.unsupport``/``relation.retract``) plus one ``observation.erase`` summary.
+
+        Raises ``ConflictError`` when the observation is already superseded (a second
+        erasure changes nothing) and ``NotFoundError`` when it is not in this scope.
+        """
+        ...
+
+    def plan_purge(self, scope: Scope, observation_id: str) -> PurgePlan:
+        """Read-only dry run: every record id a purge of ``observation_id`` would scrub.
+
+        One scope is loaded and the shared planner decides; nothing is written. Ids and
+        counts only, never content. ``NotFoundError`` when the id is not in this scope.
+        """
+        ...
+
+    def purge_observation(self, scope: Scope, observation_id: str) -> PurgeReport:
+        """Remove an observation's text from the store for good, in ONE transaction (M1).
+
+        Erases the observation if it is still active and scrubs, in the same transaction:
+        the whole observation revision family (root → revisions → erasure tombstone), every
+        memory derived from it (revisions and tombstones included), the relations that cited
+        it (lineage shortened; retracted when nothing supports them any more) and the entity
+        names nothing else supports. Every scrubbed row carries ``PURGE_MARKER``, digests
+        recomputed over that marker, released identity keys, and is never an active head;
+        observations lose their ``source``/``attachments`` and memories their cues/trigger.
+
+        Pending derivation for the chain is cancelled in the same transaction (a queued job
+        must not re-derive from the marker); a RUNNING job for the chain refuses the purge
+        with ``ConflictError`` ("stop the worker first"), matching ``cancel_pending_jobs``.
+
+        The projection rebuild happens in the service after this commits (projections are
+        derived and converge). Audit rows ``observation.purge`` / ``memory.purge`` /
+        ``relation.purge`` / ``entity.purge`` are written per target id, with ids and counts
+        and no content, through the audit-only helper.
+
+        This is not physical erasure of every copy: backups and snapshots outside the store
+        are unreachable from here (see ``docs/operator-runbook.md``).
         """
         ...
     def get_memory(self, scope: Scope, memory_id: str) -> Memory: ...

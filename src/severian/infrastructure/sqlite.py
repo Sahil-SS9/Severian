@@ -14,6 +14,16 @@ from sqlalchemy import JSON, Column, Index, MetaData, String, Table, create_engi
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
+from severian.application.purge import (
+    EraseOutcome,
+    PurgePlan,
+    PurgeReport,
+    drop_purged_support,
+    plan_purge,
+    scrub_entity,
+    scrub_memory,
+    scrub_observation,
+)
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import (
     ERASED,
@@ -216,6 +226,70 @@ class SQLiteRepository(TaskNoteStore):
         return [getattr(records.c, key) == value for key, value in scope.model_dump().items()]
 
     @staticmethod
+    def _active_observation_only() -> Any:
+        """Dedupe predicate: only an ACTIVE observation answers a content re-ingest (M1, MG-2).
+
+        The observation identity lookup used to match a tombstoned (erased) or purged row, so
+        re-stating a forgotten fact returned the dead record and silently dropped the new
+        statement. A row whose ``superseded_by_id`` is set is not current evidence; the same
+        text ingested again is a new observation that derives and becomes findable. Purged
+        rows also release their identity key, so this is the second of two guards, not a
+        substitute for the first.
+        """
+        return func.json_extract(records.c.payload, "$.superseded_by_id").is_(None)
+
+    def _release_stale_observation_identity(
+        self, connection: Connection, scope: Scope, identity_key: str
+    ) -> Observation | None:
+        """Release the identity key a NON-ACTIVE row still holds; return an active holder.
+
+        A store written before M1 erased observations the old way: the payload was
+        tombstoned and the identity key was left in place. The dedupe lookup above is
+        active-only (MG-2), so re-stating that forgotten text is new evidence - and then
+        collides on the partial unique index against a row the lookup cannot see, which
+        used to raise straight out of the ingest (M1 F2). Releasing that one key is what
+        lets the restatement be stored.
+
+        Runs on the caller's write transaction, under the full five-dimension scope and the
+        identity key itself, so it can never release a key another scope or a live statement
+        needs. An ACTIVE holder is returned untouched: it is a genuine dedupe hit. A purged
+        row that still holds a key is corrupt state, not legacy, and fails closed.
+        """
+        rows = connection.execute(
+            select(records.c.id, records.c.payload).where(
+                records.c.record_type == "observation",
+                *self._scope_predicates(scope),
+                records.c.identity_key == identity_key,
+            )
+        ).mappings().all()
+        for row in rows:
+            stored = Observation.model_validate(row["payload"])
+            if stored.superseded_by_id is None:
+                return stored
+            if stored.purged:
+                raise ConflictError("a purged observation still holds its identity key")
+            released = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == row["id"],
+                    records.c.record_type == "observation",
+                    *self._scope_predicates(scope),
+                    records.c.identity_key == identity_key,
+                )
+                .values(identity_key=None)
+            )
+            if released.rowcount != 1:
+                continue  # another writer released it first: nothing left to undo
+            self._insert_audit_in_transaction(
+                connection,
+                scope,
+                "observation.identity_release",
+                row["id"],
+                {"reason": "a non-active record held the identity key of re-ingested evidence"},
+            )
+        return None
+
+    @staticmethod
     def _require_scope(scope: Scope) -> Scope:
         """Fail closed on blank scope before touching storage.
 
@@ -315,23 +389,33 @@ class SQLiteRepository(TaskNoteStore):
             records.c.record_type == "observation",
             *self._scope_predicates(candidate.scope),
             records.c.identity_key == identity_key,
+            self._active_observation_only(),
         )
         with self.engine.connect() as connection:
             existing = connection.execute(query).scalar_one_or_none()
         if existing is not None:
             return Observation.model_validate(existing)
+        values = self._record_values("observation", candidate, content_hash=digest, identity_key=identity_key)
         try:
-            return self._insert(
-                "observation",
-                candidate,
-                content_hash=digest,
-                identity_key=identity_key,
-                emit_events=True,
-            )
+            with self.engine.begin() as connection:
+                # F2: a row erased by a pre-M1 build still holds this key; release it in
+                # this same transaction, before the insert can collide with it.
+                if (held := self._release_stale_observation_identity(
+                    connection, candidate.scope, identity_key
+                )) is not None:
+                    return held
+                connection.execute(records.insert().values(**values))
+                if (events := self._event_models("observation", candidate)) is not None:
+                    event, audit = events
+                    connection.execute(
+                        records.insert().values(**self._record_values("outbox", event, status="pending"))
+                    )
+                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
         except IntegrityError:
             with self.engine.connect() as connection:
                 existing = connection.execute(query).scalar_one()
             return Observation.model_validate(existing)
+        return candidate
 
     def get_observation(self, scope: Scope, observation_id: str) -> Observation:
         return self._get("observation", observation_id, Observation, scope=scope)
@@ -361,6 +445,38 @@ class SQLiteRepository(TaskNoteStore):
         job_identity = self._identity(job_kind, job_payload)
         return candidate, observation_identity, job, job_identity, digest
 
+    def _stored_pair(
+        self, stored: Observation, job_kind: str, also_queue: Sequence[str]
+    ) -> tuple[Observation, Job]:
+        """The stored observation and its derive job, queueing the job if it is missing.
+
+        Shared by a re-ingest (the same evidence again) and by the rare race where another
+        writer commits that evidence between our lookup and our insert: both must return one
+        observation and one job, never a second pair.
+        """
+        for kind in also_queue:  # the turn is already committed; queueing is idempotent per kind
+            self.enqueue_job(stored.scope, kind, {"observation_id": stored.id})
+        job_payload = {"observation_id": stored.id}
+        job_identity = self._identity(job_kind, job_payload)
+        job_query = select(records.c.payload).where(
+            records.c.record_type == "job",
+            *self._scope_predicates(stored.scope),
+            records.c.identity_key == job_identity,
+        )
+        with self.engine.connect() as connection:
+            existing_job = connection.execute(job_query).scalar_one_or_none()
+        if existing_job is not None:
+            return stored, Job.model_validate(existing_job)
+        job = Job(scope=stored.scope, kind=job_kind, payload=job_payload)
+        try:
+            return stored, self._insert("job", job, identity_key=job_identity, status="pending")
+        except IntegrityError:
+            with self.engine.connect() as connection:
+                existing_job = connection.execute(job_query).scalar_one_or_none()
+            if existing_job is None:
+                raise ConflictError("job identity conflict") from None
+            return stored, Job.model_validate(existing_job)
+
     def add_observation_and_enqueue(
         self, observation: Observation, job_kind: str = "derive", *, also_queue: Sequence[str] = ()
     ) -> tuple[Observation, Job]:
@@ -380,67 +496,65 @@ class SQLiteRepository(TaskNoteStore):
             records.c.record_type == "observation",
             *self._scope_predicates(candidate.scope),
             records.c.identity_key == observation_identity,
+            self._active_observation_only(),
         )
         with self.engine.connect() as connection:
             existing_obs = connection.execute(observation_query).scalar_one_or_none()
         if existing_obs is not None:
-            # Re-ingest of the same evidence: return the stored
-            # observation and its existing derive job (enqueueing it
-            # again if a previous atomic write somehow lost it).
-            stored = Observation.model_validate(existing_obs)
-            for kind in also_queue:  # the turn is already committed; queueing is idempotent per kind
-                self.enqueue_job(stored.scope, kind, {"observation_id": stored.id})
-            job_payload = {"observation_id": stored.id}
-            job_identity = self._identity(job_kind, job_payload)
-            job_query = select(records.c.payload).where(
-                records.c.record_type == "job",
-                *self._scope_predicates(stored.scope),
-                records.c.identity_key == job_identity,
-            )
-            with self.engine.connect() as connection:
-                existing_job = connection.execute(job_query).scalar_one_or_none()
-            if existing_job is not None:
-                return stored, Job.model_validate(existing_job)
-            job = Job(scope=stored.scope, kind=job_kind, payload=job_payload)
-            try:
-                return stored, self._insert("job", job, identity_key=job_identity, status="pending")
-            except IntegrityError:
-                with self.engine.connect() as connection:
-                    existing_job = connection.execute(job_query).scalar_one_or_none()
-                if existing_job is None:
-                    raise ConflictError("job identity conflict") from None
-                return stored, Job.model_validate(existing_job)
+            return self._stored_pair(Observation.model_validate(existing_obs), job_kind, also_queue)
 
         job = Job(scope=candidate.scope, kind=job_kind, payload=job_payload)
-        with self.engine.begin() as connection:
-            connection.execute(
-                records.insert().values(
-                    **self._record_values(
-                        "observation",
-                        candidate,
-                        content_hash=digest,
-                        identity_key=observation_identity,
-                    )
+        held: Observation | None = None
+        try:
+            with self.engine.begin() as connection:
+                # F2: release the key a pre-M1 erasure left behind, in this same
+                # transaction, so the insert below cannot collide with a hidden row.
+                held = self._release_stale_observation_identity(
+                    connection, candidate.scope, observation_identity
                 )
-            )
-            if (events := self._event_models("observation", candidate)) is not None:
-                event, audit = events
-                connection.execute(records.insert().values(**self._record_values("outbox", event, status="pending")))
-                connection.execute(records.insert().values(**self._record_values("audit", audit)))
-            connection.execute(
-                records.insert().values(
-                    **self._record_values("job", job, identity_key=job_identity, status="pending")
-                )
-            )
-            for kind in also_queue:  # same transaction: no saved turn without its extra jobs
-                extra = Job(scope=candidate.scope, kind=kind, payload={"observation_id": candidate.id})
-                connection.execute(
-                    records.insert().values(
-                        **self._record_values(
-                            "job", extra, identity_key=self._identity(kind, extra.payload), status="pending"
+                if held is None:
+                    connection.execute(
+                        records.insert().values(
+                            **self._record_values(
+                                "observation",
+                                candidate,
+                                content_hash=digest,
+                                identity_key=observation_identity,
+                            )
                         )
                     )
-                )
+                    if (events := self._event_models("observation", candidate)) is not None:
+                        event, audit = events
+                        connection.execute(
+                            records.insert().values(**self._record_values("outbox", event, status="pending"))
+                        )
+                        connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                    connection.execute(
+                        records.insert().values(
+                            **self._record_values("job", job, identity_key=job_identity, status="pending")
+                        )
+                    )
+                    for kind in also_queue:  # same transaction: no saved turn without its extra jobs
+                        extra = Job(scope=candidate.scope, kind=kind, payload={"observation_id": candidate.id})
+                        connection.execute(
+                            records.insert().values(
+                                **self._record_values(
+                                    "job",
+                                    extra,
+                                    identity_key=self._identity(kind, extra.payload),
+                                    status="pending",
+                                )
+                            )
+                        )
+        except IntegrityError:
+            # A concurrent writer committed the same evidence first: return its pair.
+            with self.engine.connect() as connection:
+                raced = connection.execute(observation_query).scalar_one_or_none()
+            if raced is None:
+                raise ConflictError("observation identity conflict") from None
+            held = Observation.model_validate(raced)
+        if held is not None:
+            return self._stored_pair(held, job_kind, also_queue)
         return candidate, job
 
     def add_observations_and_enqueue_batch(
@@ -462,6 +576,7 @@ class SQLiteRepository(TaskNoteStore):
                 records.c.record_type == "observation",
                 *self._scope_predicates(candidate.scope),
                 records.c.identity_key == observation_identity,
+                self._active_observation_only(),
             )
             with self.engine.connect() as connection:
                 existing_obs = connection.execute(observation_query).scalar_one_or_none()
@@ -469,57 +584,57 @@ class SQLiteRepository(TaskNoteStore):
                 fresh.append((candidate, observation_identity, job, job_identity, digest))
                 continue
             # Re-ingest: return the stored observation + its derive job.
-            stored = Observation.model_validate(existing_obs)
-            job_payload = {"observation_id": stored.id}
-            job_identity2 = self._identity(job_kind, job_payload)
-            job_query = select(records.c.payload).where(
-                records.c.record_type == "job",
-                *self._scope_predicates(stored.scope),
-                records.c.identity_key == job_identity2,
-            )
-            with self.engine.connect() as connection:
-                existing_job = connection.execute(job_query).scalar_one_or_none()
-            if existing_job is not None:
-                results.append((stored, Job.model_validate(existing_job)))
-                continue
-            job2 = Job(scope=stored.scope, kind=job_kind, payload=job_payload)
-            try:
-                results.append((stored, self._insert("job", job2, identity_key=job_identity2, status="pending")))
-            except IntegrityError:
-                with self.engine.connect() as connection:
-                    existing_job = connection.execute(job_query).scalar_one_or_none()
-                if existing_job is None:
-                    raise ConflictError("job identity conflict") from None
-                results.append((stored, Job.model_validate(existing_job)))
+            results.append(self._stored_pair(Observation.model_validate(existing_obs), job_kind, ()))
 
         if not fresh:
             return results
-        with self.engine.begin() as connection:
-            for candidate, observation_identity, job, job_identity, digest in fresh:
-                connection.execute(
-                    records.insert().values(
-                        **self._record_values(
-                            "observation",
-                            candidate,
-                            content_hash=digest,
-                            identity_key=observation_identity,
+        raced: list[Observation] = []
+        try:
+            with self.engine.begin() as connection:
+                inserted: set[str] = set()
+                for candidate, observation_identity, job, job_identity, digest in fresh:
+                    # The same evidence twice in one batch is a conflict, not a silent dedupe:
+                    # the batch commits as a whole or not at all (P0-4).
+                    if observation_identity in inserted:
+                        raise ConflictError(
+                            "observation identity conflict: the same evidence appears twice in one batch"
                         )
+                    # F2: same release as the single path, inside this batch transaction.
+                    held = self._release_stale_observation_identity(
+                        connection, candidate.scope, observation_identity
                     )
-                )
-                if (events := self._event_models("observation", candidate)) is not None:
-                    event, audit = events
+                    if held is not None:
+                        raced.append(held)
+                        continue
                     connection.execute(
                         records.insert().values(
-                            **self._record_values("outbox", event, status="pending")
+                            **self._record_values(
+                                "observation",
+                                candidate,
+                                content_hash=digest,
+                                identity_key=observation_identity,
+                            )
                         )
                     )
-                    connection.execute(records.insert().values(**self._record_values("audit", audit)))
-                connection.execute(
-                    records.insert().values(
-                        **self._record_values("job", job, identity_key=job_identity, status="pending")
+                    if (events := self._event_models("observation", candidate)) is not None:
+                        event, audit = events
+                        connection.execute(
+                            records.insert().values(
+                                **self._record_values("outbox", event, status="pending")
+                            )
+                        )
+                        connection.execute(records.insert().values(**self._record_values("audit", audit)))
+                    connection.execute(
+                        records.insert().values(
+                            **self._record_values("job", job, identity_key=job_identity, status="pending")
+                        )
                     )
-                )
-                results.append((candidate, job))
+                    results.append((candidate, job))
+                    inserted.add(observation_identity)
+        except IntegrityError:
+            raise ConflictError("observation identity conflict") from None
+        for stored in raced:
+            results.append(self._stored_pair(stored, job_kind, ()))
         return results
 
     def list_observations(self, scope: Scope) -> list[Observation]:
@@ -631,7 +746,7 @@ class SQLiteRepository(TaskNoteStore):
                     *self._scope_predicates(scope),
                     func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
                 )
-                .values(payload=changed.model_dump(mode="json"))
+                .values(payload=changed.model_dump(mode="json"), identity_key=None)
             )
             if result.rowcount != 1:
                 raise ConflictError("observation revision conflict")
@@ -1312,6 +1427,15 @@ class SQLiteRepository(TaskNoteStore):
         per affected relation, in the same transaction.
         """
         self._require_scope(scope)
+        with self.engine.begin() as connection:
+            return self._retract_relations_in_transaction(connection, scope, observation_id)
+
+    def _retract_relations_in_transaction(self, connection: Connection, scope: Scope, observation_id: str) -> int:
+        """The body of :meth:`retract_relations_for_source`, on the caller's transaction.
+
+        Shared with the atomic erasure cascade (M1), so both paths write the same rows,
+        the same audit entries and the same retraction rule.
+        """
         sql = text(
             """
             SELECT r.id, r.payload FROM records r
@@ -1329,26 +1453,25 @@ class SQLiteRepository(TaskNoteStore):
         )
         stamp = now()
         retracted = 0
-        with self.engine.begin() as connection:
-            rows = connection.execute(sql, {**scope.model_dump(), "observation_id": observation_id}).mappings().all()
-            for row in rows:
-                relation = Relation.model_validate(json.loads(row["payload"]))
-                changed = relation.unsupported_by(observation_id, at=stamp)
-                if changed is None:
-                    continue
-                became_retracted = relation.retracted_at is None and changed.retracted_at is not None
-                if became_retracted:
-                    retracted += 1
-                connection.execute(
-                    update(records).where(records.c.id == row["id"]).values(payload=changed.model_dump(mode="json"))
-                )
-                self._insert_audit_in_transaction(
-                    connection,
-                    scope,
-                    "relation.retract" if became_retracted else "relation.unsupport",
-                    row["id"],
-                    {"observation_id": observation_id, "retracted": became_retracted},
-                )
+        rows = connection.execute(sql, {**scope.model_dump(), "observation_id": observation_id}).mappings().all()
+        for row in rows:
+            relation = Relation.model_validate(json.loads(row["payload"]))
+            changed = relation.unsupported_by(observation_id, at=stamp)
+            if changed is None:
+                continue
+            became_retracted = relation.retracted_at is None and changed.retracted_at is not None
+            if became_retracted:
+                retracted += 1
+            connection.execute(
+                update(records).where(records.c.id == row["id"]).values(payload=changed.model_dump(mode="json"))
+            )
+            self._insert_audit_in_transaction(
+                connection,
+                scope,
+                "relation.retract" if became_retracted else "relation.unsupport",
+                row["id"],
+                {"observation_id": observation_id, "retracted": became_retracted},
+            )
         return retracted
 
     def _end_replaced_relations(self, connection: Connection, scope: Scope, newer: Relation) -> None:
@@ -1387,6 +1510,346 @@ class SQLiteRepository(TaskNoteStore):
                     row["id"],
                     {"replaced_by_id": newer.id, "valid_to": ended.valid_to},
                 )
+
+    # -- M1: atomic erasure and purge -------------------------------------
+
+    def _load_scope_rows(self, connection: Connection, scope: Scope, kind: str, model: type[T]) -> list[T]:
+        """Every row of ``kind`` in this scope, parsed, on the caller's transaction."""
+        rows = connection.execute(
+            select(records.c.payload).where(records.c.record_type == kind, *self._scope_predicates(scope))
+        ).scalars()
+        return [model.model_validate(value) for value in rows]  # type: ignore[attr-defined]
+
+    def erase_observation_cascade(
+        self, scope: Scope, observation_id: str, *, reason: str = "erased"
+    ) -> EraseOutcome:
+        """Erase an observation and everything derived from it in ONE transaction (MG-3).
+
+        The four transactions the old service path used (tombstone, per-memory tombstone,
+        supersede link, relation retraction) become one. The outbox and audit rows the old
+        path wrote are reproduced exactly, plus one ``observation.erase`` summary; nothing
+        is written if any step fails, so a crash can no longer leave a derived memory active
+        under an erased source.
+        """
+        self._require_scope(scope)
+        with self.engine.begin() as connection:
+            original = self._get_in_transaction(connection, "observation", observation_id, Observation, scope=scope)
+            if original.superseded_by_id is not None:
+                raise ConflictError("observation is already superseded")
+            marker = f"[{reason}]"
+            digest = hashlib.sha256(marker.encode()).hexdigest()
+            tombstone = Observation(
+                scope=scope,
+                content=marker,
+                content_hash=digest,
+                source=original.source,
+                revision_of_id=original.id,
+                superseded_by_id=ERASED,
+            )
+            changed = original.model_copy(update={"superseded_by_id": tombstone.id})
+            result = connection.execute(
+                update(records)
+                .where(
+                    records.c.id == original.id,
+                    records.c.record_type == "observation",
+                    *self._scope_predicates(scope),
+                    func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+                )
+                .values(payload=changed.model_dump(mode="json"), identity_key=None)
+            )
+            if result.rowcount != 1:
+                raise ConflictError("observation erasure conflict")
+            connection.execute(
+                records.insert().values(
+                    **self._record_values(
+                        "observation",
+                        tombstone,
+                        content_hash=digest,
+                        identity_key=self._identity("revision", original.id, tombstone.id),
+                    )
+                )
+            )
+            # MG-2: the erased row also releases its content identity key (on the UPDATE
+            # above), so the same text can be ingested again as NEW evidence instead of
+            # colliding with a row that is no longer current evidence.
+            self._insert_events_in_transaction(connection, "observation", tombstone, operation="revise")
+            erased_memory_ids: list[str] = []
+            for memory in self._load_scope_rows(connection, scope, "memory", Memory):
+                if memory.superseded_by_id is not None or observation_id not in memory.source_observation_ids:
+                    continue
+                erased_memory_ids.append(
+                    self._tombstone_memory_in_transaction(connection, scope, memory, reason=reason, marker=marker)
+                )
+            retracted = self._retract_relations_in_transaction(connection, scope, observation_id)
+            self._insert_audit_in_transaction(
+                connection,
+                scope,
+                "observation.erase",
+                observation_id,
+                {
+                    "tombstone_id": tombstone.id,
+                    "memories_erased": len(erased_memory_ids),
+                    "relations_retracted": retracted,
+                },
+            )
+        return EraseOutcome(
+            observation_id=observation_id,
+            tombstone_id=tombstone.id,
+            memory_ids=tuple(erased_memory_ids),
+            relations_retracted=retracted,
+        )
+
+    def _tombstone_memory_in_transaction(
+        self, connection: Connection, scope: Scope, memory: Memory, *, reason: str, marker: str
+    ) -> str:
+        """Tombstone one memory on the caller's transaction; returns the memory id erased.
+
+        Same shape as ``erase_memory`` in the service: a revision whose own
+        ``superseded_by_id`` is the ``:erased`` sentinel (never active, never projected,
+        kept for audit), then the original is superseded by it. The tombstone's identity
+        is deduped exactly like ``add_memory`` so two memories derived from one source
+        cannot collide on the unique index.
+        """
+        tombstone = Memory(
+            scope=scope,
+            kind=memory.kind,
+            content=marker,
+            source_observation_ids=memory.source_observation_ids,
+            model_id=memory.model_id,
+            prompt_version=f"{memory.prompt_version}:erased",
+            confidence=0.0,
+            revision_of_id=memory.id,
+            superseded_by_id=ERASED,
+        )
+        identity_key = self._identity(
+            tombstone.kind,
+            tombstone.content,
+            tombstone.source_observation_ids,
+            tombstone.model_id,
+            tombstone.prompt_version,
+        )
+        existing = connection.execute(
+            select(records.c.id).where(
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                records.c.identity_key == identity_key,
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            connection.execute(
+                records.insert().values(
+                    **self._record_values("memory", tombstone, identity_key=identity_key)
+                )
+            )
+            if (events := self._event_models("memory", tombstone)) is not None:
+                event, audit = events
+                connection.execute(
+                    records.insert().values(**self._record_values("outbox", event, status="pending"))
+                )
+                connection.execute(records.insert().values(**self._record_values("audit", audit)))
+            tombstone_id = tombstone.id
+        else:
+            tombstone_id = str(existing)
+        connection.execute(
+            update(records)
+            .where(
+                records.c.id == memory.id,
+                records.c.record_type == "memory",
+                *self._scope_predicates(scope),
+                func.json_extract(records.c.payload, "$.superseded_by_id").is_(None),
+            )
+            .values(payload=func.json_set(records.c.payload, "$.superseded_by_id", tombstone_id))
+        )
+        self._insert_audit_in_transaction(
+            connection, scope, "memory.supersede", memory.id, {"replacement_id": tombstone_id}
+        )
+        return memory.id
+
+    def _get_in_transaction(
+        self, connection: Connection, kind: str, record_id: str, model: type[T], *, scope: Scope
+    ) -> T:
+        """One scoped record, read on the caller's transaction (never a stale outside read)."""
+        row = connection.execute(
+            select(records.c.payload).where(
+                records.c.id == record_id,
+                records.c.record_type == kind,
+                *self._scope_predicates(scope),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise NotFoundError(f"{kind} not found")
+        return model.model_validate(row)  # type: ignore[attr-defined,no-any-return]
+
+    def _scope_plan(self, connection: Connection, scope: Scope, observation_id: str) -> PurgePlan:
+        """The shared purge plan, computed from rows read inside the caller's transaction."""
+        return plan_purge(
+            observation_id=observation_id,
+            observations=self._load_scope_rows(connection, scope, "observation", Observation),
+            memories=self._load_scope_rows(connection, scope, "memory", Memory),
+            relations=self._load_scope_rows(connection, scope, "relation", Relation),
+            entities=self._load_scope_rows(connection, scope, "entity", Entity),
+        )
+
+    def plan_purge(self, scope: Scope, observation_id: str) -> PurgePlan:
+        """Read-only plan for a purge: ids and counts, no writes, no content."""
+        self._require_scope(scope)
+        with self.engine.connect() as connection:
+            return self._scope_plan(connection, scope, observation_id)
+
+    def purge_observation(self, scope: Scope, observation_id: str) -> PurgeReport:
+        """Scrub an observation chain, its derived memories, relations and entities in ONE transaction.
+
+        ``PRAGMA secure_delete=ON`` is set on this connection first, so the pages the
+        scrubbing UPDATEs free are zeroed as they are freed rather than left holding the
+        old text until something rewrites the file. The checkpoint + VACUUM that follows a
+        confirmed purge is a separate, operator-visible step (``ServiceBundle.compact``).
+        """
+        self._require_scope(scope)
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA secure_delete=ON")
+            plan = self._scope_plan(connection, scope, observation_id)
+            chain = set(plan.observation_ids)
+            observations = 0
+            memories = 0
+            relations = 0
+            retracted = 0
+            entities = 0
+            audit_rows = 0
+            stamp = now()
+
+            for observation_row in self._load_scope_rows(connection, scope, "observation", Observation):
+                if observation_row.id not in chain:
+                    continue
+                scrubbed = scrub_observation(observation_row)
+                if scrubbed == observation_row:
+                    continue  # already purged: nothing to write, nothing to audit
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == observation_row.id, records.c.record_type == "observation")
+                    .values(
+                        payload=scrubbed.model_dump(mode="json"),
+                        content_hash=scrubbed.content_hash,
+                        identity_key=None,
+                    )
+                )
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "observation.purge",
+                    observation_row.id,
+                    {"chain_size": len(plan.observation_ids), "purged": True},
+                )
+                observations += 1
+                audit_rows += 1
+
+            for memory_row in self._load_scope_rows(connection, scope, "memory", Memory):
+                if memory_row.id not in plan.memory_ids:
+                    continue
+                scrubbed_memory = scrub_memory(memory_row)
+                if scrubbed_memory == memory_row:
+                    continue
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == memory_row.id, records.c.record_type == "memory")
+                    .values(payload=scrubbed_memory.model_dump(mode="json"), identity_key=None)
+                )
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "memory.purge",
+                    memory_row.id,
+                    {"chain_size": len(plan.observation_ids)},
+                )
+                memories += 1
+                audit_rows += 1
+
+            for relation_row in self._load_scope_rows(connection, scope, "relation", Relation):
+                if relation_row.id not in plan.relation_ids:
+                    continue
+                changed = drop_purged_support(relation_row, purged_ids=chain, at=stamp)
+                if changed == relation_row:
+                    continue
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == relation_row.id, records.c.record_type == "relation")
+                    .values(payload=changed.model_dump(mode="json"))
+                )
+                became_retracted = relation_row.retracted_at is None and changed.retracted_at is not None
+                retracted += int(became_retracted)
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "relation.purge",
+                    relation_row.id,
+                    {
+                        "purged_sources": len(relation_row.source_observation_ids)
+                        - len(changed.source_observation_ids),
+                        "retracted": became_retracted,
+                    },
+                )
+                relations += 1
+                audit_rows += 1
+
+            for entity_row in self._load_scope_rows(connection, scope, "entity", Entity):
+                if entity_row.id not in plan.entity_ids:
+                    continue
+                scrubbed_entity = scrub_entity(entity_row)
+                if scrubbed_entity == entity_row:
+                    continue
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == entity_row.id, records.c.record_type == "entity")
+                    .values(payload=scrubbed_entity.model_dump(mode="json"), identity_key=None)
+                )
+                self._insert_audit_in_transaction(
+                    connection, scope, "entity.purge", entity_row.id, {"purged": True}
+                )
+                entities += 1
+                audit_rows += 1
+
+            cancelled = self._cancel_jobs_for_in_transaction(connection, scope, chain)
+
+        return PurgeReport(
+            plan=plan,
+            observations=observations,
+            memories=memories,
+            relations=relations,
+            relations_retracted=retracted,
+            entities=entities,
+            audit_rows=audit_rows,
+            cancelled_jobs=cancelled,
+        )
+
+    def _cancel_jobs_for_in_transaction(self, connection: Connection, scope: Scope, chain: set[str]) -> int:
+        """Cancel pending jobs that name a purged observation; refuse while one is running.
+
+        A queued derive job would otherwise run after the purge and publish a memory from
+        the removal marker. A RUNNING job for the chain is the same hazard one step later,
+        so it refuses the purge exactly as ``cancel_pending_jobs`` does: stop the worker,
+        then retry.
+        """
+        rows = connection.execute(
+            select(records.c.id, records.c.status, records.c.payload).where(
+                records.c.record_type == "job",
+                *self._scope_predicates(scope),
+                records.c.status.in_(("pending", "running")),
+                func.json_extract(records.c.payload, "$.payload.observation_id").in_(sorted(chain)),
+            )
+        ).mappings().all()
+        if any(row["status"] == "running" for row in rows):
+            raise ConflictError("a derivation job for this observation is running; stop the worker first")
+        cancelled = 0
+        for row in rows:
+            job = Job.model_validate(row["payload"]).model_copy(
+                update={"status": "cancelled", "last_error": "cancelled by purge"}
+            )
+            result = connection.execute(
+                update(records)
+                .where(records.c.id == row["id"], records.c.status == "pending")
+                .values(status="cancelled", payload=job.model_dump(mode="json"))
+            )
+            cancelled += int(result.rowcount)
+        return cancelled
 
     def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
         """Mark one active memory as superseded by a replacement head.

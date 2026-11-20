@@ -45,9 +45,16 @@ if the text stays*.
 fact that something was removed; document the current behaviour honestly in the
 meantime.
 
-**Disposition 20/11:** MUST — plan M1. Claim re-proved in code 20/11
-(`revise_observation` only sets `superseded_by_id`). Explicit operator purge
-recommended (plan Q2); erasure's audited tombstone semantics unchanged.
+**Disposition 20/11:** MUST — plan M1 / REV A1, MG-2, MG-3, MG-7 (W-10 tests).
+BUILT and independently reviewed 20/11 on `fix/must-integrity-2026-11-20`:
+explicit service + CLI purge, atomic erase, fresh restatement after forget,
+strict purge-aware snapshot round trips and truthful physical-cleanup status.
+Task notes remain out; external backups and PG reclaim are not performed.
+Full SQLite: 1617 passed / 119 skipped; full disposable PG: 1716 / 20;
+ruff and mypy clean. Local-only; no live-store access or deployment.
+Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M1-KENSEI-ACCEPTANCE.md`.
+Original claim and RED receipts are preserved there. Wave gate (§3.9) pending;
+M3 has not started.
 
 ## W-2 — Correction is first order only  (HIGH — matches local finding t_54fb0317)
 
@@ -454,7 +461,7 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 
 | id | item | severity | disposition 20/11 | plan ref |
 |----|------|----------|-------------------|----------|
-| W-1 | erasure keeps text | high | MUST — approved | M1 |
+| W-1 | erasure keeps text | high | MUST M1 — BUILT + independent review PASS 20/11; local-only, wave gate pending | M1 / REV A1, MG-2, MG-3, MG-7 |
 | W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
 | W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M2 / REV A2, MG-4 |
 | W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer | M4 + S2 |

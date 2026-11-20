@@ -636,6 +636,183 @@ def rollback(
         bundle.close()
 
 
+@cli.command("purge")
+def purge(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    observation: str = typer.Option(..., "--observation", help="Observation id whose whole revision chain to purge."),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Carry the purge out. Without it this is a dry run: the plan is printed and nothing is written.",
+    ),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Remove an observation's text from this store, for good (M1).
+
+    Dry run by default: it lists every record id it would scrub, by type, and never prints
+    content. ``--confirm`` scrubs the observation's whole revision chain, every memory
+    derived from it (revisions and tombstones included), the relations that lose their last
+    support and the entity names nothing else supports, then rebuilds the projection and
+    compacts the SQLite stores (checkpoint + VACUUM).
+
+    This is not a claim of physical erasure everywhere: backups and snapshots outside the
+    store cannot be reached from here, and on PostgreSQL the old row versions stay on disk
+    as dead tuples until an operator runs VACUUM. See ``docs/operator-runbook.md``.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
+        plan = bundle.service.preview_purge(scope, observation)
+        payload: dict[str, Any] = {
+            "confirmed": False,
+            "plan": plan.to_dict(),
+            "applied": None,
+            "warnings": _purge_warnings(bundle.backend),
+            "operator_commands": _purge_operator_commands(bundle.backend),
+            "compacted": [],
+            "compaction_complete": False,
+        }
+        if not confirm:
+            _emit(payload)
+            return
+        try:
+            report = bundle.service.purge_observation(scope, observation)
+        except Exception as exc:
+            # Nothing was committed: this is a failed purge, not a partial one.
+            # M1 R3: the reason only - the handler below adds "cannot purge: " once,
+            # so the operator never reads the prefix twice.
+            raise typer.BadParameter(str(exc)) from exc
+        # The purge is committed. Everything below is physical cleanup, which can fail on
+        # its own and must be reported, never asserted (M1 F3): a busy or failing store is a
+        # warning after a committed purge, not a failed command.
+        try:
+            compacted = [result.__dict__ for result in bundle.compact()]
+            compaction_error: str | None = None
+        except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
+            compacted = []
+            compaction_error = f"{type(exc).__name__}: {exc}"
+        complete = compaction_error is None and all(entry.get("checkpointed") and entry.get("vacuumed")
+                                                     and entry.get("final_checkpointed")
+                                                     for entry in compacted) and bool(compacted)
+        payload.update(
+            {
+                "confirmed": True,
+                "applied": {
+                    "observations": report.observations,
+                    "memories": report.memories,
+                    "relations": report.relations,
+                    "relations_retracted": report.relations_retracted,
+                    "entities": report.entities,
+                    "audit_rows": report.audit_rows,
+                    "cancelled_jobs": report.cancelled_jobs,
+                },
+                "compacted": compacted,
+                "compaction_complete": complete,
+                "warnings": [
+                    *_purge_warnings(bundle.backend),
+                    *_compaction_warnings(compacted, error=compaction_error, backend=bundle.backend),
+                ],
+            }
+        )
+        _emit(payload)
+    except Exception as exc:
+        raise typer.BadParameter(f"cannot purge: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+def _purge_warnings(backend: str) -> list[str]:
+    """The limits a purge must state, per backend. Never a "purged everywhere" claim.
+
+    These are true before AND after the command runs, so they belong to the dry run too.
+    What the compaction actually did is not one of them: see :func:`_compaction_warnings`,
+    which speaks only from the per-store results (M1 F3).
+    """
+    common = [
+        "Purge removes the text from this store only. Copies kept outside it cannot be "
+        "reached: backups (for example ~/.hermes/backups/severian-*, ~/backups/severian-*) "
+        "and snapshot files stay as they are.",
+        "Deleting or rewriting those copies is an operator decision; this command never "
+        "touches them.",
+    ]
+    if backend != "sqlite":
+        return [
+            *common,
+            "PostgreSQL keeps the old row versions on disk as dead tuples until they are "
+            "vacuumed. An ordinary VACUUM rewrites nothing in place; only VACUUM FULL "
+            "rewrites the heap, and even then the WAL archives may still hold old images.",
+        ]
+    return common
+
+
+def _compaction_warnings(
+    compacted: list[dict[str, Any]], *, error: str | None, backend: str
+) -> list[str]:
+    """One truthful line per store whose physical cleanup did not finish, with the retry.
+
+    Built from the ``CompactionResult`` fields, never from hope: a busy checkpoint, a
+    failed VACUUM or a failing checkpoint after it is named with its file and its step.
+    "The purge itself is committed" is stated separately, because those two outcomes are
+    different things and an operator has to be able to tell them apart (M1 F3).
+    """
+    if backend != "sqlite":
+        return []
+    if error is not None:
+        return [
+            "The purge is committed: the text is gone from the canonical store. Physical "
+            f"cleanup of the store files did NOT run ({error}).",
+            "Re-run the compaction when the stores are idle (or delete and re-copy the store "
+            "files from a compacted backup) before claiming the freed pages are gone.",
+        ]
+    incomplete = [entry for entry in compacted if not (
+        entry.get("checkpointed") and entry.get("vacuumed") and entry.get("final_checkpointed")
+    )]
+    if not incomplete:
+        if compacted:
+            return [
+                "The canonical, FTS and vector SQLite files were checkpointed and VACUUMed "
+                "after the purge; their -wal/-shm sidecars are truncated with them."
+            ]
+        return ["No SQLite store file was compacted, so the freed pages stay in the files."]
+    lines = [
+        "The purge is committed: the text is gone from the canonical store, the export and "
+        "the histories. Physical cleanup is INCOMPLETE for "
+        f"{len(incomplete)} of {len(compacted)} store files."
+    ]
+    for entry in incomplete:
+        steps = []
+        if not entry.get("checkpointed"):
+            steps.append("checkpoint")
+        if not entry.get("vacuumed"):
+            steps.append("VACUUM")
+        if entry.get("final_checkpointed") is not True:
+            steps.append("checkpoint-after-VACUUM")
+        reason = entry.get("error") or "did not complete"
+        lines.append(
+            f"{entry.get('path')}: {', '.join(steps)} did not complete ({reason}). Retry when "
+            "the store is idle (stop the worker and any open reader), then re-run the "
+            "compaction."
+        )
+    return lines
+
+
+def _purge_operator_commands(backend: str) -> list[str]:
+    """Commands the operator may run afterwards. Printed, never executed by the CLI."""
+    if backend == "sqlite":
+        return []
+    return [
+        "psql \"$SEVERIAN_PG_DSN\" -c 'VACUUM (FULL, ANALYZE) records;'",
+        "# then, at the filesystem level, the operator's own WAL-archive retention policy",
+    ]
+
+
 @cli.command("facts-rollback")
 def facts_rollback(
     database: Path = typer.Option(..., "--database"),

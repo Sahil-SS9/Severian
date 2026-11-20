@@ -21,6 +21,16 @@ revalidates every record semantically before any write:
    ``superseded_by_id`` point at existing records of the same kind).
 5. Validate status values and collection/tenant coherence.
 
+**Purged rows (M1).** ``observation``, ``memory`` and ``entity`` payloads carry a
+``purged`` boolean. The validator relaxes exactly three things, and only when it is
+true: the text fields must equal the fixed removal marker (their digests are still
+recomputed and compared), the payload metadata that could hold text (``source``,
+``attachments``, ``cues``, ``trigger``) must be empty, and ``identity_key`` must be
+``NULL``. A ``NULL`` identity key on a record that is *not* purged is rejected — that
+is what stops "purged" from becoming a generic way to opt out of dedupe and of this
+check. A snapshot written before M1 has no ``purged`` key; that single missing key is
+tolerated (its model default is ``False``) and nothing else is.
+
 All checks run before the write transaction opens. Any mismatch raises
 ``ValueError``; the caller's transaction never starts.
 
@@ -39,6 +49,7 @@ from pydantic import ValidationError
 
 from severian.domain.models import (
     ERASED,
+    PURGE_MARKER,
     AuditEvent,
     Collection,
     Entity,
@@ -68,6 +79,46 @@ RECORD_MODELS: dict[str, type[Any]] = {
 JOB_STATUSES = {"pending", "running", "done", "failed", "dead_letter"}
 OUTBOX_STATUSES = {"pending", "acked"}
 TASK_NOTE_STATUSES = {"current", "replaced", "cleared"}
+
+# Record kinds that carry the M1 ``purged`` flag. Only for these is a missing key
+# tolerated (a snapshot written before M1 predates the field), and only for a row whose
+# flag is true are the text/identity checks relaxed.
+_PURGE_AWARE_KINDS = frozenset({"observation", "memory", "entity"})
+# M1 correction (F1): ``Relation.retracted_for_ids`` is a later payload key, so a snapshot
+# written before it has none. Its absence means "no evidence of a withdrawn support" - the
+# empty default - and is the only missing key tolerated on a relation.
+RELATION_PROVENANCE_KEY = "retracted_for_ids"
+# Payload metadata that can carry text: a purged row must have emptied it.
+_PURGE_EMPTY_FIELDS: dict[str, tuple[tuple[str, Any], ...]] = {
+    "observation": (("source", {}), ("attachments", [])),
+    "memory": (("cues", []), ("trigger", None)),
+}
+
+
+def _purged_problem(kind: str, payload: dict[str, Any], key: str | None) -> str | None:
+    """Why a row claiming ``purged`` is not actually scrubbed, or ``None`` when it is.
+
+    The flag is never a bypass: a purged row must carry the fixed removal marker in every
+    text field (so its digests are the marker's digests), must have emptied the payload
+    metadata that could hold text, must have released its identity key, and must not be an
+    active head. Everything else about the record is validated exactly as before.
+    """
+    if kind == "entity":
+        if payload.get("name") != PURGE_MARKER:
+            return "purged record must carry the removal marker as its name"
+    else:
+        text_fields = ("content", "raw_content") if kind == "observation" else ("content",)
+        for field in text_fields:
+            if payload.get(field) != PURGE_MARKER:
+                return "purged record must carry the removal marker, not text"
+    for field, empty in _PURGE_EMPTY_FIELDS.get(kind, ()):
+        if payload.get(field) != empty:
+            return f"purged record must not keep its {field}"
+    if key is not None:
+        return "purged record must release its identity key"
+    if kind != "entity" and payload.get("superseded_by_id") is None:
+        return "purged record must never be an active head (superseded_by_id is set)"
+    return None
 
 
 def _canonical_json(value: Any) -> str:
@@ -194,6 +245,13 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
     payload = item.get("payload")
     if not isinstance(payload, dict):
         raise ValueError(f"record {index}: payload is not an object")
+    # A snapshot written before M1 has no ``purged`` key at all. Its absence means
+    # ``False``, so the one tolerated missing key is inserted before the round-trip
+    # comparison; every other missing or extra key still fails closed.
+    if kind in _PURGE_AWARE_KINDS and "purged" not in payload:
+        payload = {**payload, "purged": False}
+    if kind == "relation" and RELATION_PROVENANCE_KEY not in payload:
+        payload = {**payload, RELATION_PROVENANCE_KEY: []}
     try:
         parsed = model.model_validate(payload)
     except ValidationError as exc:
@@ -237,6 +295,11 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
     # retired version could masquerade as current, since the note lookup is by
     # key, not status). All other kinds use the single write-path scheme.
     key = item.get("identity_key")
+    purged = bool(payload.get("purged")) if kind in _PURGE_AWARE_KINDS else False
+    if purged:
+        problem = _purged_problem(kind, payload, key)
+        if problem is not None:
+            raise ValueError(f"record {index}: {problem}")
     if kind == "relation":
         if key is not None and key not in _relation_identities(payload):
             raise ValueError(f"record {index}: payload metadata identity mismatch")
@@ -246,10 +309,16 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
                 raise ValueError(f"record {index}: payload metadata identity mismatch")
         elif key is not None:
             raise ValueError(f"record {index}: payload metadata identity mismatch")
-    else:
+    elif not purged:
         expected_identity = _recompute_identity(kind, payload)
-        if key is not None and expected_identity is not None:
-            if key != expected_identity:
+        if expected_identity is not None and key != expected_identity:
+            # A NULL key is legitimate only on a record that is not current evidence: a
+            # purged row (checked above) or one that has been superseded/erased, whose key
+            # the erasure path releases so the same text can be ingested again as new
+            # evidence (M1 owner decision (a)). On an ACTIVE record it would silently opt
+            # out of dedupe and out of this check, which is the bypass M1 closes.
+            superseded = kind != "entity" and payload.get("superseded_by_id") is not None
+            if key is not None or not superseded:
                 raise ValueError(f"record {index}: payload metadata identity mismatch")
 
     # Status values.
@@ -341,4 +410,25 @@ def validate_snapshot(incoming: list[dict[str, Any]]) -> None:
                 if _record_scope(endpoint_record) != _record_scope(item):
                     raise ValueError(
                         f"record {record_id}: relation endpoint {endpoint} is in a different scope"
+                    )
+            # M1 correction (F1): withdrawn-support provenance is what lets a purge reach a
+            # relation an erasure already retracted. It is only believable when it names a
+            # real observation in this relation's own scope, and a support cannot be current
+            # and withdrawn at once - forged provenance would otherwise widen what a later
+            # purge scrubs.
+            for source_id in payload.get(RELATION_PROVENANCE_KEY, []):
+                if str(source_id) in payload.get("source_observation_ids", []):
+                    raise ValueError(
+                        f"record {record_id}: {RELATION_PROVENANCE_KEY} names a record that is "
+                        "both a support and a withdrawn support"
+                    )
+                source_record = by_id.get(str(source_id))
+                if source_record is None or str(source_record["record_type"]) != "observation":
+                    raise ValueError(
+                        f"record {record_id}: {RELATION_PROVENANCE_KEY} references a non-observation"
+                    )
+                if _record_scope(source_record) != _record_scope(item):
+                    raise ValueError(
+                        f"record {record_id}: {RELATION_PROVENANCE_KEY} names an observation "
+                        "in a different scope"
                     )
