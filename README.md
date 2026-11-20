@@ -204,10 +204,13 @@ uv run python examples/quickstart.py
 | Surface | How |
 |---|---|
 | **Hermes Agent** | Drop-in memory provider: `hermes plugins install severian` (or copy `plugins/hermes/severian/` to `$HERMES_HOME/plugins/severian/`), set `memory.provider: severian`. Tools: search, ingest, correct, forget, shared search, task progress notes. |
-| **MCP** | full seven-tool surface over stdio for Claude Code, Codex, OpenCode and Claude Desktop: [docs/integrations.md](docs/integrations.md). Tools: ingest, search, get, correct, forget, task progress, shared search. |
+| **MCP** | full seven-tool surface over stdio for Claude Code, Codex, OpenCode and Claude Desktop: [docs/integrations.md](docs/integrations.md). Tools: ingest, search, get, correct, forget, task progress, shared search. Launch is fail-closed: pin `--tenant-id`/`--profile-id` (or the `SEVERIAN_MCP_*` pair), or pass `--trusted-single-tenant` on a trusted single-user host. |
 | **Python** | `severian.composition.build_bundle(...)`; see [examples/quickstart.py](examples/quickstart.py) |
 | **HTTP** | `uv run severian serve` (dev server); client in `severian.sdk.client` |
 | **CLI** | `severian ingest / search / work / export / import / audit / rebuild-vectors / ...` (`--help` lists all) |
+
+The MCP launch binding pins **tenant and profile only**; `collection_id`, `agent_id` and `session_id` stay
+caller-chosen for each tool call. Give every harness its own profile in [docs/integrations.md](docs/integrations.md).
 
 ## Configuration
 

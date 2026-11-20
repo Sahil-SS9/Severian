@@ -85,6 +85,27 @@ class MCPScope(BaseModel):
         )
 
 
+class MCPPrincipal(BaseModel):
+    """Launch-time tenant/profile principal for the stdio MCP boundary.
+
+    Only the two security-sensitive dimensions are pinned. Collection,
+    agent and session stay caller-chosen by design, so a principal must not
+    invent placeholder values for them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    profile_id: str
+
+    @field_validator("tenant_id", "profile_id")
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("principal dimensions must not be empty")
+        return value
+
+
 # -- tool argument models --------------------------------------------------
 
 
@@ -496,7 +517,7 @@ class SeverianMCPServer:
         self,
         service: MemoryService,
         gateway: DerivationGateway | None = None,
-        principal: Scope | None = None,
+        principal: Scope | MCPPrincipal | None = None,
     ) -> None:
         self._service = service
         self._gateway = gateway
@@ -924,6 +945,7 @@ class _ScopeError(Exception):
 __all__ = [
     "GetObservationArgs",
     "IngestArgs",
+    "MCPPrincipal",
     "MCPScope",
     "PROTOCOL_VERSION",
     "SearchArgs",

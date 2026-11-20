@@ -51,11 +51,16 @@ principal-bound scope are now implemented for the HTTP API.
   without authentication.
 - **SDK credential support.** ``SeverianClient`` accepts ``api_key`` and
   sends ``Authorization: Bearer`` on every request.
-- **MCP construct-time binding.** ``SeverianMCPServer`` optionally accepts
-  a principal :class:`Scope` at construction. When bound, tool args cannot
-  switch tenant/profile — the principal's security-sensitive dimensions
-  override them. (stdio MCP cannot do interactive auth; capability binding
-  means the server's scope is fixed at construction.)
+- **MCP launch-time binding (fail closed).** The stdio entry point
+  (`python -m severian.mcp`) refuses to start unless it can pin a
+  tenant/profile principal from `--tenant-id`/`--profile-id` or
+  `SEVERIAN_MCP_TENANT_ID`/`SEVERIAN_MCP_PROFILE_ID`, or unless the operator
+  explicitly passes `--trusted-single-tenant`. The refusal names those exact
+  flags. Tool arguments cannot switch the bound tenant/profile; a mismatch is
+  a scope error. Only tenant and profile are pinned — `collection_id`,
+  `agent_id` and `session_id` remain caller-chosen, so this is not an agent or
+  session isolation boundary. The opt-out is trusted-context only and is not
+  a way to run a shared or untrusted stdio server.
 - **Hermes construct-time binding.** ``SeverianMemoryProvider`` optionally
   accepts a principal :class:`Scope` at construction. When bound,
   ``initialize()`` and tool calls cannot switch tenant/profile.

@@ -23,7 +23,7 @@ from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.sqlite import SQLiteRepository
 from severian.infrastructure.vector import HashEmbedding, LocalVectorIndex
-from severian.mcp.server import SeverianMCPServer
+from severian.mcp.server import MCPPrincipal, SeverianMCPServer
 
 
 @dataclass
@@ -154,6 +154,27 @@ def test_mcp_with_principal_rejects_cross_profile_args(principal_server):
         )
     )
     assert response["result"]["isError"] is True
+
+
+def test_mcp_two_field_launch_principal_rejects_cross_tenant_args(tmp_path: Path):
+    """The stdio entry point binds a two-field MCPPrincipal, not a placeholder Scope."""
+    service, repo, fts, vector = _build_service(tmp_path)
+    srv = SeverianMCPServer(
+        service=service,
+        gateway=FakeGateway(),
+        principal=MCPPrincipal(tenant_id="t1", profile_id="p1"),
+    )
+    _init_handshake(srv)
+    response = srv.handle_message(
+        _tools_call("severian_ingest_observation", {**_scope_args(tenant_id="evil"), "content": "x"})
+    )
+    assert response is not None
+    assert response["result"]["isError"] is True
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert "scope" in payload["error"].lower() or "principal" in payload["error"].lower()
+    fts.close()
+    vector.close()
+    repo.close()
 
 
 def test_mcp_with_principal_search_rejects_cross_tenant(principal_server):

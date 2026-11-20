@@ -160,6 +160,11 @@ single-tenant/trusted-context only.
 **Disposition 20/11:** MUST — plan M3. Re-proved 20/11: `mcp/server.py:495`
 accepts `principal` (SEC-01) but `mcp/__main__.py` never passes it. Fail-closed
 launch with explicit trusted-single-tenant opt-out recommended (plan Q1).
+**Built 20/11:** launch requires `--tenant-id`/`--profile-id` or
+`SEVERIAN_MCP_TENANT_ID`/`SEVERIAN_MCP_PROFILE_ID`, or explicit
+`--trusted-single-tenant`; tenant/profile are pinned, collection/agent/session
+remain caller-chosen. RED/GREEN live stdio evidence in the programme folder;
+full M3 gate pending independent controller run.
 
 ## W-6 — Relation validity is record time, not event time  (MEDIUM)
 
@@ -465,7 +470,7 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 | W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
 | W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M2 / REV A2, MG-4 |
 | W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer | M4 + S2 |
-| W-5 | MCP scope chosen by model | medium | MUST — approved | M3 |
+| W-5 | MCP scope chosen by model | medium | MUST M3 — BUILT 20/11; fail-closed launch, independent gate pending | M3 |
 | W-6 | relation validity is record time | medium | SHOULD | S3 |
 | W-7 | bookkeeping in the index | low | COULD — captured, not scheduled | C1 |
 | W-8 | benchmark evidence not reproducible | medium | MUST — approved (paid re-run rides with S1 gate) | M5 |

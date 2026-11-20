@@ -5,6 +5,18 @@ variables; see the Configuration table in the [README](README.md).
 
 ## [Unreleased]
 
+### Breaking
+- **MCP stdio launches now fail closed.** `python -m severian.mcp` refuses to start unless tenant/profile are
+  pinned with `--tenant-id` and `--profile-id` or with `SEVERIAN_MCP_TENANT_ID` and
+  `SEVERIAN_MCP_PROFILE_ID`. Existing bare launches must add those flags or explicitly pass
+  `--trusted-single-tenant` for a trusted single-user host; the opt-out prints a warning and leaves scope
+  selection to tool callers. The refusal message names every flag. Binding pins **tenant and profile only**;
+  `collection_id`, `agent_id` and `session_id` remain caller-chosen.
+- `docs/integrations.md` gives each harness its own profile (`standalone`, `claude-code`, `codex`, `opencode`,
+  `claude-desktop`) and includes the launch flags in every recipe. `docs/threat-model.md` and the README MCP
+  section state the boundary plainly.
+- This release is not version-bumped here; it ships as 0.4.0 at the wave gate.
+
 ## [0.3.13] - 2026-10-25
 
 Plugin-catalog review fixes (NousResearch/hermes-agent#142812). No change to memory behaviour.
@@ -66,8 +78,8 @@ OmniMemEval with the board's models: [docs/benchmarks/omnimemeval-2026-10.md](do
 ### Added
 - The MCP server now exposes the full seven-tool surface (`severian_correct`, `severian_forget`,
   `severian_task_progress`, `severian_search_shared` alongside ingest/search/get), so Claude Code, Codex,
-  OpenCode and Claude Desktop get feature parity with the Hermes provider. All new tools carry the same
-  principal binding, explicit-scope rule and error mapping as the existing three.
+  OpenCode and Claude Desktop get feature parity with the Hermes provider. All new tools can carry the same
+  principal binding as the existing three; the stdio entry point was unbound until 0.4.0.
 - `docs/integrations.md`: MCP recipes per harness, with the verification status of each stated honestly
   (all protocol-verified over live stdio; harness end-to-end runs marked where pending).
 
