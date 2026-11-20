@@ -3,9 +3,20 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.4.1] - 2026-11-20
+
+Maintenance release. No behaviour change.
+
+### Fixed
+- CI: the cross-backend snapshot round-trip test now creates its PostgreSQL target database when the server lacks
+  it, so the live-PG lane passes on fresh servers (it failed on CI in 0.4.0).
+
+### Security
+- Bumped `msgpack` 1.2.1 -> 1.2.4 in the lockfile (CVE-2026-114613).
+
 ## [0.4.0] - 2026-11-20
 
-Release candidate for the Must integrity wave. Not tagged, pushed or deployed.
+Must integrity wave. Released on GitHub as v0.4.0.
 
 ### Breaking
 - **MCP stdio launches now fail closed.** `python -m severian.mcp` refuses to start unless tenant/profile are
