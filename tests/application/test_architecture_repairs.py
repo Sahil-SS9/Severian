@@ -22,6 +22,7 @@ from severian.application.dreaming import (
     ConsolidationService,
     ContradictionScanService,
     detect_contradictions,
+    triage,
 )
 from severian.application.projections import ProjectionCoordinator
 from severian.application.retrieval import RetrievalService
@@ -173,7 +174,7 @@ def test_detect_contradictions_helper_matches_consolidation() -> None:
         memories = repo.list_memories(scope)
 
         standalone = ContradictionScanService(repo).scan(scope)
-        consolidated = ConsolidationService(repo)._find_contradictions(memories)
+        consolidated = ConsolidationService(repo)._find_contradictions(triage(memories))
         shared = detect_contradictions(memories)
 
         standalone_ids = {(c.memory_a_id, c.memory_b_id) for c in standalone}

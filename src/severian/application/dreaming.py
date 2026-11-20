@@ -27,14 +27,16 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from severian.application.dreamtriage import NEGATIONS, PairVerdict, Triage, classify_pair, proper_tokens
+from severian.application.dreamwriter import DreamWriter
 from severian.application.ports import CanonicalRepository
-from severian.domain.errors import NotFoundError
+from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Memory, Scope
 from severian.domain.text import STOPWORDS
 
@@ -46,6 +48,10 @@ _DUPLICATE_JACCARD = 0.8
 # Contradiction flag: both directions of overlap above this are a strong
 # signal the memories disagree about the same surface.
 _CONTRADICTION_JACCARD = 0.6
+
+# Rounds one consolidation pass may take to reach a fixed point. Each round strictly reduces the
+# number of active memories (every group supersedes at least one), so this is a stop, not a search.
+MAX_CONSOLIDATION_ROUNDS = 5
 
 # Salience half-life (hours): a memory's recency weight halves after this
 # much time. 30 days ≈ 720 h.
@@ -92,15 +98,32 @@ class ConsolidationReport:
     contradictions: list[ContradictionCandidate] = field(default_factory=list)
     consolidated_memory_ids: list[str] = field(default_factory=list)
     audit_events: int = 0
+    #: Dry run (``consolidate(..., dry_run=True)``): what the pass would do, nothing written.
+    dry_run: bool = False
+    #: Pairs the deterministic triage classified, by class (``dreamtriage.PAIR_KINDS``).
+    triage: dict[str, int] = field(default_factory=dict)
+    #: Supersedes the guarded path refused (a concurrent close/erase/supersede won): skipped, not failed.
+    skipped_supersedes: int = 0
+    #: The model writer's cost record, when one was configured. Empty with no writer (the default).
+    writer: dict[str, Any] = field(default_factory=dict)
+    #: What a dry run would write, in the order it would write it.
+    planned: list[dict[str, Any]] = field(default_factory=list)
+    #: How many detect-and-merge rounds it took to reach a fixed point (1 unless duplicates chained).
+    rounds: int = 0
 
     def summary(self) -> dict[str, Any]:
         return {
             "scope": self.scope.model_dump(),
+            "dry_run": self.dry_run,
             "duplicate_groups": len(self.duplicate_groups),
             "memories_superseded": sum(len(g.superseded_ids) for g in self.duplicate_groups),
             "contradictions": len(self.contradictions),
             "consolidated_memories": len(self.consolidated_memory_ids),
+            "skipped_supersedes": self.skipped_supersedes,
             "audit_events": self.audit_events,
+            "triage": self.triage,
+            "writer": self.writer,
+            "rounds": self.rounds,
         }
 
 
@@ -113,6 +136,10 @@ class CurationReport:
     low_value_ids: list[str] = field(default_factory=list)
     contradiction_ids: list[tuple[str, str]] = field(default_factory=list)
     review_marker_ids: list[str] = field(default_factory=list)
+    #: Dry run: the scoring and the proposals, with no marker and no report row written.
+    dry_run: bool = False
+    #: Pairs the deterministic triage classified, by class (``dreamtriage.PAIR_KINDS``).
+    triage: dict[str, int] = field(default_factory=dict)
     # Stable identity of THIS pass, so the audit trail can name the report it
     # summarises (the review marker keeps the prose summary).
     report_id: str = field(default_factory=lambda: str(uuid4()))
@@ -121,10 +148,12 @@ class CurationReport:
         return {
             "scope": self.scope.model_dump(),
             "report_id": self.report_id,
+            "dry_run": self.dry_run,
             "memories_scored": len(self.scored),
             "low_value_candidates": len(self.low_value_ids),
             "contradiction_pairs": len(self.contradiction_ids),
             "review_markers": len(self.review_marker_ids),
+            "triage": self.triage,
         }
 
     def reference(self) -> dict[str, Any]:
@@ -155,13 +184,19 @@ class RetentionEvaluation:
     expired_ids: list[str] = field(default_factory=list)
     kept_ids: list[str] = field(default_factory=list)
     policy: dict[str, Any] = field(default_factory=dict)
+    #: Dry run: the plan only, nothing archived.
+    dry_run: bool = False
+    #: Supersedes the guarded path refused (lost race): skipped and logged, never a failure.
+    skipped: int = 0
 
     def summary(self) -> dict[str, Any]:
         return {
             "scope": self.scope.model_dump(),
+            "dry_run": self.dry_run,
             "archived_candidates": len(self.archived_ids),
             "expired_candidates": len(self.expired_ids),
             "kept": len(self.kept_ids),
+            "skipped": self.skipped,
             "policy": self.policy,
         }
 
@@ -192,12 +227,21 @@ class RetentionPolicyService:
         self._repository = repository
         self._now = now or datetime.now(UTC)
 
-    def evaluate(self, scope: Scope, policy: dict[str, Any]) -> RetentionEvaluation:
+    def evaluate(
+        self,
+        scope: Scope,
+        policy: dict[str, Any],
+        *,
+        exclude_kinds: Collection[str] = (),
+        dry_run: bool = False,
+    ) -> RetentionEvaluation:
         max_age_days = float(policy.get("max_age_days", 0))
         min_usage = int(policy.get("min_usage", 0))
         kinds = set(policy.get("kinds", []))
-        eval_result = RetentionEvaluation(scope=scope, policy=policy)
+        eval_result = RetentionEvaluation(scope=scope, policy=policy, dry_run=dry_run)
         for memory in self._repository.list_memories(scope):
+            if memory.kind in exclude_kinds:
+                continue
             if kinds and memory.kind not in kinds:
                 eval_result.kept_ids.append(memory.id)
                 continue
@@ -215,15 +259,27 @@ class RetentionPolicyService:
         return eval_result
 
     def apply_archive(
-        self, scope: Scope, policy: dict[str, Any], *, archive_note: str = "retention:archive"
+        self,
+        scope: Scope,
+        policy: dict[str, Any],
+        *,
+        archive_note: str = "retention:archive",
+        exclude_kinds: Collection[str] = (),
+        dry_run: bool = False,
     ) -> RetentionEvaluation:
         """OPT-IN: supersede archive candidates with a retention marker.
 
         Non-destructive to the canonical store: the archived memories stay
         in history; active reads and projection rebuilds drop them. The
         marker memory records the policy that archived them.
+
+        The plan is written down FIRST (``retention.archive_plan``, an id-and-counts row) and only
+        then carried out, so a shared store always has the dry run recorded beside the apply
+        (owner decision 5). ``dry_run`` stops after the plan: nothing is written at all.
         """
-        eval_result = self.evaluate(scope, policy)
+        eval_result = self.evaluate(scope, policy, exclude_kinds=exclude_kinds, dry_run=dry_run)
+        if eval_result.archived_ids and dry_run:
+            return eval_result
         if eval_result.archived_ids:
             # The marker's source_observation_ids must be REAL observations
             # (add_memory validates sources): gather them from the archived
@@ -242,7 +298,7 @@ class RetentionPolicyService:
                 "retention archive marker requires real source observation IDs "
                 "from archived memories, but none were found"
             )
-            marker = self._repository.add_memory(
+            marker, _row = self._repository.add_memory_with_audit(
                 Memory(
                     scope=scope,
                     kind="retention_archive",
@@ -255,7 +311,20 @@ class RetentionPolicyService:
                     model_id="severian-retention-v1",
                     prompt_version="deterministic-policy-v1",
                     confidence=1.0,
-                )
+                ),
+                action="retention.archive",
+                metadata_={"policy": dict(policy), "candidates": len(eval_result.archived_ids)},
+            )
+            # The plan, written BEFORE anything is archived: the dry run a shared store must have.
+            self._repository.append_audit(
+                scope,
+                action="retention.archive_plan",
+                target_id=marker.id,
+                metadata_={
+                    "policy": dict(policy),
+                    "memory_ids": sorted(eval_result.archived_ids),
+                    "note": archive_note,
+                },
             )
             for memory_id in eval_result.archived_ids:
                 # OPS-05: idempotent re-run — a second apply_archive on the
@@ -263,7 +332,17 @@ class RetentionPolicyService:
                 archived = self._repository.get_memory(scope, memory_id)
                 if archived.superseded_by_id is not None:
                     continue
-                self._repository.supersede_memory(scope, memory_id, replacement_id=marker.id)
+                try:
+                    self._repository.supersede_memory(scope, memory_id, replacement_id=marker.id)
+                except ConflictError as exc:
+                    # Owner decision 7: a lost race is skipped and logged, never a failed pass.
+                    eval_result.skipped += 1
+                    self._repository.append_audit(
+                        scope,
+                        action="retention.skip",
+                        target_id=memory_id,
+                        metadata_={"reason": str(exc), "replacement_id": marker.id},
+                    )
             eval_result.expired_ids = list(eval_result.archived_ids)
             eval_result.archived_ids = []
         return eval_result
@@ -288,8 +367,8 @@ class ContradictionScanService:
         self._contradiction_jaccard = contradiction_jaccard
         self._duplicate_jaccard = duplicate_jaccard
 
-    def scan(self, scope: Scope) -> list[ContradictionCandidate]:
-        memories = self._repository.list_memories(scope)
+    def scan(self, scope: Scope, *, exclude_kinds: Collection[str] = ()) -> list[ContradictionCandidate]:
+        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
         return [
             ContradictionCandidate(a, b, overlap)
             for a, b, overlap in self._find(memories)
@@ -544,15 +623,60 @@ def detect_contradictions(
     Used by standalone contradiction scanning, curation, and consolidation
     so there is exactly one LSH->Jaccard implementation.
     """
+    classified = triage(
+        memories,
+        duplicate_jaccard=duplicate_jaccard,
+        contradiction_jaccard=contradiction_jaccard,
+    )
+    return [(verdict.memory_a_id, verdict.memory_b_id, verdict.overlap) for verdict in classified.contradictions]
+
+
+def triage(
+    memories: list[Memory],
+    *,
+    duplicate_jaccard: float = _DUPLICATE_JACCARD,
+    contradiction_jaccard: float = _CONTRADICTION_JACCARD,
+) -> Triage:
+    """Classify every LSH-candidate pair as duplicate, restate or contradict (code, never a model).
+
+    One candidate scan feeds all three classes, so a pass can never see a pair as a duplicate in
+    one place and a contradiction in another. The rules live in
+    :func:`severian.application.dreamtriage.classify_pair`; this function only enumerates
+    candidates and measures them.
+    """
     tokens = _tokens_cached([m.content for m in memories])
-    out: list[tuple[str, str, float]] = []
+    proper_by_index = [proper_tokens(m.content) for m in memories]
+    verdicts = Triage()
     for a_idx, b_idx in _lsh_candidates(memories):
-        mem_a = memories[a_idx]
-        mem_b = memories[b_idx]
-        sim = _jaccard_tokens(tokens[a_idx], tokens[b_idx])
-        if contradiction_jaccard <= sim < duplicate_jaccard:
-            out.append((mem_a.id, mem_b.id, sim))
-    return out
+        tokens_a = tokens[a_idx]
+        tokens_b = tokens[b_idx]
+        sim = _jaccard_tokens(tokens_a, tokens_b)
+        if sim < contradiction_jaccard:
+            continue
+        # A negation is never noise: "has a garden" against "has not a garden" differs by one
+        # stopword, and that stopword is the whole fact.
+        differing = {
+            tok for tok in tokens_a ^ tokens_b if tok not in STOPWORDS or tok in NEGATIONS
+        }
+        kind = classify_pair(
+            overlap=sim,
+            differing=differing,
+            proper=proper_by_index[a_idx] | proper_by_index[b_idx],
+            duplicate_jaccard=duplicate_jaccard,
+            contradiction_jaccard=contradiction_jaccard,
+        )
+        if kind is None:
+            continue
+        verdicts.verdicts.append(
+            PairVerdict(
+                memory_a_id=memories[a_idx].id,
+                memory_b_id=memories[b_idx].id,
+                kind=kind,
+                overlap=sim,
+                differing=tuple(sorted(differing)),
+            )
+        )
+    return verdicts
 
 
 def _content_digest(content: str) -> str:
@@ -570,14 +694,23 @@ class ConsolidationService:
         contradiction_jaccard: float = _CONTRADICTION_JACCARD,
         model_id: str = "severian-consolidation-v1",
         prompt_version: str = "deterministic-jaccard-v1",
+        writer: DreamWriter | None = None,
     ) -> None:
         self._repository = repository
         self._duplicate_jaccard = duplicate_jaccard
         self._contradiction_jaccard = contradiction_jaccard
         self._model_id = model_id
         self._prompt_version = prompt_version
+        #: Optional text writer for the merge summary. It writes words, never decisions.
+        self._writer = writer
 
-    def consolidate(self, scope: Scope) -> ConsolidationReport:
+    def consolidate(
+        self,
+        scope: Scope,
+        *,
+        exclude_kinds: Collection[str] = (),
+        dry_run: bool = False,
+    ) -> ConsolidationReport:
         """Run one dreaming pass: detect + merge duplicates, flag contradictions.
 
         Non-destructive:
@@ -585,18 +718,77 @@ class ConsolidationService:
         - the surviving head's source_observation_ids are merged;
         - a ``consolidated`` memory is emitted linking the group;
         - audit events record every action.
-        """
-        memories = self._repository.list_memories(scope)
-        report = ConsolidationReport(scope=scope)
 
-        # 1. Near-duplicate detection (pairwise, deterministic, O(n^2) but
-        # bounded: memories per scope are typically small; scale tier later).
-        groups = self._find_duplicate_groups(memories)
-        # OPS-06: pre-flight validation BEFORE any mutation — a failure
-        # mid-consolidation must not leave a partially-applied pass. All
-        # survivor source observations must resolve (add_memory validates
-        # sources); checking up front moves the common failure mode
-        # (invalid provenance) to BEFORE the first write.
+        ``exclude_kinds`` keeps kinds out of the INPUT (the dreaming pass excludes its own markers
+        so a pass cannot read its own last record as a fact; see ``markers.MARKER_KINDS``).
+        ``dry_run`` computes the identical plan and writes nothing — the operator command's default.
+        """
+        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
+        report = ConsolidationReport(scope=scope, dry_run=dry_run)
+        totals: dict[str, int] = {}
+        # One pass reaches a fixed point: the greedy pairwise grouping can leave a longer duplicate
+        # chain one merge short ("a"~"b" merges, "b"~"c" is left), which is how a second pass used to
+        # find another duplicate on a real store. Each round strictly reduces the number of active
+        # memories, so the loop terminates; MAX rounds is a stop, and it is reported when it is hit.
+        classified = triage(
+            memories,
+            duplicate_jaccard=self._duplicate_jaccard,
+            contradiction_jaccard=self._contradiction_jaccard,
+        )
+        planned_superseded: set[str] = set()
+        blocked: set[str] = set()
+        remaining = list(memories)
+        for round_number in range(1, MAX_CONSOLIDATION_ROUNDS + 1):
+            # 1. Deterministic triage FIRST (owner decision 3): code says what each candidate pair is.
+            #    A model may only write the summary text later, and only if one is configured.
+            classified = triage(
+                remaining,
+                duplicate_jaccard=self._duplicate_jaccard,
+                contradiction_jaccard=self._contradiction_jaccard,
+            )
+            for kind, count in classified.counts().items():
+                totals[kind] = totals.get(kind, 0) + count
+            groups = self._find_duplicate_groups(remaining, classified)
+            if not groups:
+                break
+            self._check_duplicate_groups(scope, groups)
+            # The merge summaries are the ONLY thing a model may write. Code has already decided the
+            # groups; a failed batch costs nothing but a line in the writer's counters.
+            blocked |= self._write_groups(
+                scope,
+                groups,
+                self._summaries(remaining, groups, report, dry_run=dry_run),
+                report,
+                dry_run=dry_run,
+                planned_superseded=planned_superseded,
+            )
+            report.rounds = round_number
+            if round_number == MAX_CONSOLIDATION_ROUNDS:
+                break
+            before = {memory.id for memory in remaining}
+            remaining = [
+                memory
+                for memory in self._repository.list_memories(scope)
+                if memory.kind not in exclude_kinds
+                and memory.id not in planned_superseded
+                and memory.id not in blocked
+            ]
+            if dry_run:
+                # Nothing was superseded for real, so the plan must skip the ids it would have merged.
+                remaining = [memory for memory in remaining if memory.superseded_by_id is None]
+            if {memory.id for memory in remaining} == before:
+                # No progress (every merge this round was refused): another round would repeat it.
+                break
+        report.triage = totals
+
+        # 2. Contradiction flags (non-destructive: report only).
+        for a, b, overlap in self._find_contradictions(classified):
+            report.contradictions.append(ContradictionCandidate(a, b, overlap))
+
+        return report
+
+    def _check_duplicate_groups(self, scope: Scope, groups: list[DuplicateGroup]) -> None:
+        """OPS-06: pre-flight validation BEFORE any mutation per round."""
         for group in groups:
             survivor = self._repository.get_memory(scope, group.survivor_id)
             merged_sources = sorted(set(survivor.source_observation_ids) | set(group.merged_source_ids))
@@ -608,9 +800,37 @@ class ConsolidationService:
                         f"consolidation aborted before any write: survivor "
                         f"{survivor.id!r} references missing observation {source_id!r}"
                     ) from exc
-        for group in groups:
+
+    def _write_groups(
+        self,
+        scope: Scope,
+        groups: list[DuplicateGroup],
+        summaries: list[str],
+        report: ConsolidationReport,
+        *,
+        dry_run: bool,
+        planned_superseded: set[str],
+    ) -> set[str]:
+        """Apply one round of merge groups: supersede, audit, and one summary memory per group.
+
+        Returns the ids whose supersede the guarded path refused (a lost race). A group whose merge
+        did not fully apply writes NO summary: a memory saying "this group is consolidated" must not
+        exist when it is not, and the ids are what a reader would follow.
+        """
+        blocked: set[str] = set()
+        for group, summary in zip(groups, summaries, strict=True):
             survivor = self._repository.get_memory(scope, group.survivor_id)
             merged_sources = sorted(set(survivor.source_observation_ids) | set(group.merged_source_ids))
+            if dry_run:
+                report.planned.append(
+                    {
+                        "survivor_id": survivor.id,
+                        "supersede": list(group.superseded_ids),
+                        "similarity": group.similarity,
+                        "marker": summary,
+                    }
+                )
+                planned_superseded.update(group.superseded_ids)
             for old_id in group.superseded_ids:
                 # OPS-05: idempotent re-run — a second consolidate pass on
                 # the same scope must not crash on an already-superseded
@@ -619,7 +839,23 @@ class ConsolidationService:
                 existing = self._repository.get_memory(scope, old_id)
                 if existing.superseded_by_id is not None:
                     continue
-                self._repository.supersede_memory(scope, old_id, replacement_id=survivor.id)
+                if dry_run:
+                    continue
+                try:
+                    # M2's guarded path: ONE conditional UPDATE, ConflictError on a lost race.
+                    self._repository.supersede_memory(scope, old_id, replacement_id=survivor.id)
+                except ConflictError as exc:
+                    # Owner decision 7: a lost race is "skip and log", never a failed pass.
+                    report.skipped_supersedes += 1
+                    blocked.add(old_id)
+                    self._repository.append_audit(
+                        scope,
+                        action="dreaming.skip",
+                        target_id=old_id,
+                        metadata_={"reason": str(exc), "replacement_id": survivor.id},
+                    )
+                    report.audit_events += 1
+                    continue
                 self._repository.append_audit(
                     scope,
                     action="dreaming.merge",
@@ -627,39 +863,91 @@ class ConsolidationService:
                     metadata_={"replacement_id": survivor.id, "similarity": group.similarity},
                 )
                 report.audit_events += 1
-            # Emit a consolidated semantic memory linking the group.
-            consolidated = self._repository.add_memory(
-                Memory(
-                    scope=scope,
-                    kind="consolidated",
-                    content=(
-                        f"Consolidated memory group: {survivor.content[:80]!r} "
-                        f"unifies {len(group.all_ids)} memories "
-                        f"(ids: {', '.join(sorted(group.all_ids)[:5])})"
+            # Emit a consolidated memory linking the group (M2's in-transaction audit-only helper).
+            # Not when its merge was refused: a summary that names ids it did not merge is a lie.
+            if not dry_run and not blocked.intersection(group.superseded_ids):
+                consolidated, _row = self._repository.add_memory_with_audit(
+                    Memory(
+                        scope=scope,
+                        kind="consolidated",
+                        content=summary,
+                        source_observation_ids=list(merged_sources or survivor.source_observation_ids),
+                        model_id=self._model_id,
+                        prompt_version=self._prompt_version,
+                        confidence=group.similarity,
                     ),
-                    source_observation_ids=list(merged_sources or survivor.source_observation_ids),
-                    model_id=self._model_id,
-                    prompt_version=self._prompt_version,
-                    confidence=group.similarity,
+                    action="dreaming.consolidate",
+                    metadata_={
+                        "survivor_id": survivor.id,
+                        "memory_ids": sorted(group.all_ids),
+                        "similarity": group.similarity,
+                        "writer": "model" if self._writer is not None else "deterministic",
+                    },
                 )
-            )
-            report.consolidated_memory_ids.append(consolidated.id)
+                report.consolidated_memory_ids.append(consolidated.id)
+                report.audit_events += 1
             report.duplicate_groups.append(group)
+        return blocked
 
-        # 2. Contradiction flags (non-destructive: report only).
-        for a, b, overlap in self._find_contradictions(memories):
-            report.contradictions.append(ContradictionCandidate(a, b, overlap))
+    def _default_summary(self, group: DuplicateGroup, survivor: Memory) -> str:
+        """The deterministic merge summary: the group's first words and the ids it unifies."""
+        return (
+            f"Consolidated memory group: {survivor.content[:80]!r} "
+            f"unifies {len(group.all_ids)} memories "
+            f"(ids: {', '.join(sorted(group.all_ids)[:5])})"
+        )
 
-        return report
+    def _summaries(
+        self,
+        memories: list[Memory],
+        groups: list[DuplicateGroup],
+        report: ConsolidationReport,
+        *,
+        dry_run: bool = False,
+    ) -> list[str]:
+        """One summary per group: the writer's sentence where it produced one, else the default text.
 
-    def _find_duplicate_groups(self, memories: list[Memory]) -> list[DuplicateGroup]:
+        The writer is given the group's own words (never ids) in batches of 8 and may only return
+        a sentence; anything it does not return falls back to :meth:`_default_summary`, so a broken
+        or absent model cannot change what the pass decides or lose the record of a merge.
+        """
+        by_id = {memory.id: memory for memory in memories}
+        defaults = [self._default_summary(group, by_id[group.survivor_id]) for group in groups]
+        if dry_run:
+            # A dry run is free: it shows the deterministic summary a confirmed run would store when
+            # no writer is configured, and never spends a call to show what it WOULD have written.
+            return defaults
+        if self._writer is None or not groups:
+            if self._writer is not None:
+                report.writer = self._writer.stats.summary()
+            return defaults
+        inputs = [by_id[group.survivor_id].content for group in groups]
+        written = self._writer.write(inputs)
+        report.writer = self._writer.stats.summary()
+        return [
+            text if text else default
+            for text, default in zip(written, defaults, strict=True)
+        ]
+
+    def _find_duplicate_groups(self, memories: list[Memory], classified: Triage | None = None) -> list[DuplicateGroup]:
         """Group near-duplicates, newest (created_at, then id) survives.
 
         Uses MinHash-LSH as a candidate generator (same signatures as
         contradiction detection), with exact Jaccard as the final merge
         decision. Deterministic grouping/survivor semantics preserved:
         ordered by (created_at, id), first match wins, later memory survives.
+
+        The decision itself is the triage verdict (``dreamtriage.DUPLICATE``), so a pass has one
+        classifier rather than a merge rule here and a contradiction rule next to it.
         """
+        classified = classified if classified is not None else triage(
+            memories,
+            duplicate_jaccard=self._duplicate_jaccard,
+            contradiction_jaccard=self._contradiction_jaccard,
+        )
+        duplicates = {
+            frozenset((verdict.memory_a_id, verdict.memory_b_id)): verdict for verdict in classified.duplicates
+        }
         groups: list[DuplicateGroup] = []
         used: set[str] = set()
         ordered = sorted(memories, key=lambda m: (m.created_at, m.id))
@@ -681,8 +969,9 @@ class ConsolidationService:
                 mem_b = ordered[j]
                 if mem_b.id in used:
                     continue
-                sim = jaccard(mem_a.content, mem_b.content)
-                if sim >= self._duplicate_jaccard:
+                verdict = duplicates.get(frozenset((mem_a.id, mem_b.id)))
+                if verdict is not None:
+                    sim = verdict.overlap
                     # The later-created memory survives (newer evidence).
                     survivor, older = mem_b, mem_a
                     groups.append(
@@ -697,18 +986,14 @@ class ConsolidationService:
                     break
         return groups
 
-    def _find_contradictions(self, memories: list[Memory]) -> list[tuple[str, str, float]]:
-        """Pairs with high overlap that are NOT near-duplicates (same surface,
-        different content) — contradiction candidates for review.
+    def _find_contradictions(self, classified: Triage) -> list[tuple[str, str, float]]:
+        """Pairs the triage called contradictions (same surface, a value-bearing difference).
 
-        Delegates to the shared detect_contradictions helper (single
-        LSH->Jaccard implementation).
+        Report only. A restatement (same fact, different words) is NOT a contradiction and is not
+        listed here: the OPS rule is to hide only when certain, and "hide" is not something this
+        pass does at all — it proposes.
         """
-        return detect_contradictions(
-            memories,
-            contradiction_jaccard=self._contradiction_jaccard,
-            duplicate_jaccard=self._duplicate_jaccard,
-        )
+        return [(verdict.memory_a_id, verdict.memory_b_id, verdict.overlap) for verdict in classified.contradictions]
 
 
 class CurationService:
@@ -735,10 +1020,22 @@ class CurationService:
         self._prompt_version = prompt_version
         self._now = now or datetime.now(UTC)
 
-    def curate(self, scope: Scope) -> CurationReport:
-        """Score every active memory and propose (never delete) actions."""
-        memories = self._repository.list_memories(scope)
-        report = CurationReport(scope=scope)
+    def curate(
+        self,
+        scope: Scope,
+        *,
+        exclude_kinds: Collection[str] = (),
+        dry_run: bool = False,
+    ) -> CurationReport:
+        """Score every active memory and propose (never delete) actions.
+
+        ``exclude_kinds`` keeps kinds out of the input. The dreaming pass excludes its own markers:
+        a ``curation_review`` marker would otherwise score itself, its counts would change on every
+        pass, and each pass would write another marker — growth instead of convergence.
+        ``dry_run`` scores and proposes without writing the marker or the report row.
+        """
+        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
+        report = CurationReport(scope=scope, dry_run=dry_run)
         for memory in memories:
             age_h = max((self._now - memory.created_at).total_seconds() / 3600.0, 0.0)
             recency = 0.5 ** (age_h / self._halflife)
@@ -756,11 +1053,14 @@ class CurationService:
             )
             if salience < self._low_value_threshold:
                 report.low_value_ids.append(memory.id)
-        # Contradiction candidates via the shared detector (single source of truth).
-        for a, b, _overlap in detect_contradictions(memories):
-            report.contradiction_ids.append((a, b))
+        # Contradiction candidates from the same deterministic triage the consolidation pass uses:
+        # one classifier, so "restate" is never reported as a disagreement.
+        classified = triage(memories)
+        report.triage = classified.counts()
+        for verdict in classified.contradictions:
+            report.contradiction_ids.append((verdict.memory_a_id, verdict.memory_b_id))
         # Write ONE review-marker memory per scope summarising the pass.
-        if report.scored:
+        if report.scored and not dry_run:
             marker, _reference = self._repository.add_memory_with_audit(
                 Memory(
                     scope=scope,
