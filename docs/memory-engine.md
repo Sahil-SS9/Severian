@@ -59,6 +59,40 @@ With the switch off, the write path and the graph's read boundary behave exactly
 - A derivation gateway is injected by the future model-adapter layer.
 - Job leasing, dead-letter recovery and the erasure path are implemented. Purge is an explicit operator action, not an automatic retention step.
 
+## Message-level units (S1, switch off by default)
+
+A saved turn is one immutable observation, but the answerer often needs the
+user's line separately from a long assistant reply. With
+`SEVERIAN_MESSAGE_UNITS=1`, derivation also emits one `message_unit` memory per
+role, linked to the parent observation by `source_observation_ids`:
+
+- `user` and `assistant` are separate units;
+- each unit carries its role and stable message order in its content, e.g.
+  `[2024/03/15 (Fri)] user message 6: ...`;
+- long messages are chunked at sentence boundaries, 1,200 characters with a
+  120-character sentence overlap; a single oversized sentence is kept whole
+  rather than cut mid-sentence;
+- when search returns a turn's units, the generic turn-level derived memory is
+  dropped from that result set; `user_fact` memories are kept;
+- units on the same displayed date are rendered in message order, and all but
+  the first are marked `[later message]`;
+- units are ordinary memories, so M0 snapshot round-trip, M1 erase and purge,
+  projections and the M2 audit path already cover them.
+
+With the switch off, derivation writes no units, search and context are
+unchanged, and existing stores are untouched. Old stores are backfilled with:
+
+```bash
+severian migrate message-units \
+  --database <s.db> --fts <s.fts> --vectors <s.vec> \
+  --tenant <t> --profile <p> --collection <c> --agent <a> --session <s>
+```
+
+The command is dry-run by default, reports planned/present units and drift,
+and with `--confirm` takes a SQLite backup, runs `integrity_check`, rehearses
+the apply on a copy, applies the additive units and rebuilds the projection.
+It is safe to run twice. See [operator-runbook.md](operator-runbook.md).
+
 ## Erase versus purge (M1)
 
 They are different operations, and the docs must not conflate them:

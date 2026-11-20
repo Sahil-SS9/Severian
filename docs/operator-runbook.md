@@ -155,6 +155,32 @@ markers (`retention_archive`, `curation_review`, `consolidated`) are never searc
 
 ---
 
+### 2.5 Backfill message units (S1, opt-in)
+
+`SEVERIAN_MESSAGE_UNITS=1` makes new turns searchable as separate user and
+assistant units. Existing stores need a one-time additive backfill:
+
+```bash
+severian migrate message-units \
+  --database "$SEVERIAN_DB" --fts "$SEVERIAN_FTS" --vectors "$SEVERIAN_VEC" \
+  --tenant t --profile p --collection c --agent a --session s
+```
+
+It is a dry run by default and prints planned/present units and drift. Add
+`--confirm` to take a SQLite backup through the backup API, run
+`PRAGMA integrity_check`, rehearse on a copy, apply, and rebuild the scope's
+projection. Running it twice is safe; the second apply writes zero units. Old
+stores continue to read unchanged until this command is run. It does not run
+on PostgreSQL; use the SQLite store's migration path.
+
+### 2.6 Search after migration
+
+Search is unchanged with the switch off. With it on, search prefers the
+message units for a turn over the turn's generic derived memory and keeps
+`user_fact` memories; context renders same-date units in message order and
+marks later occurrences. Unit creation is ordinary memory creation, so purge
+and erase cover it.
+
 ## 3. Backup and restore
 
 ### 3.1 Portable snapshot (recommended for app-level backup)

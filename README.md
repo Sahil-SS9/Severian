@@ -92,6 +92,9 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
 - **Hybrid search that holds up.** BM25 and vector search fused with reciprocal rank fusion, an optional cross-encoder
   re-ranker, an entity graph for multi-hop lookups, and a context assembler that keeps the most useful items inside a
   character budget.
+- **Message-level units, opt-in.** `SEVERIAN_MESSAGE_UNITS=1` indexes the user and assistant lines separately, keeps
+  their conversation order for same-date updates, and backfills existing stores with a dry-run-first migration. It is
+  off by default; with it off search and context are byte-identical.
 - **Local-first.** No network call from the engine; cloud derivation needs an explicit per-collection opt-in. Qwen3
   0.6B embeddings run locally or in a shared sidecar; a deterministic hash embedding needs nothing at all.
 - **Offline maintenance is available, not automatic.** Consolidation, curation and retention services are
