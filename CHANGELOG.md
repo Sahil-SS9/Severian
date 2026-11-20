@@ -3,6 +3,14 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased]
+
+### Added
+- **Message-level indexing units (S1, opt-in).** `SEVERIAN_MESSAGE_UNITS=1` makes user and assistant messages
+  searchable as separate units linked to their turn, carries message order for same-date updates, and adds
+  `severian migrate message-units` for a dry-run-first, rehearsed, idempotent backfill. The switch is off by
+  default; with it off search and assembled context are byte-identical to 0.4.1.
+
 ## [0.5.1] - 2026-11-20
 
 Relation validity from event time (S3).
