@@ -256,6 +256,8 @@ Behaviour switches are environment variables, so the same code serves benchmarks
 | `SEVERIAN_FILL_BUDGET` | off | Search over-fetches a bounded pool and the context keeps adding ranked items until its character budget is full, instead of stopping at `limit` |
 | `SEVERIAN_COMPACT_CITES` | off | Cites the source observation ids in one bracket and drops the trailing `source:` line: about 45 characters less per item, every citation still resolvable through `severian_get_observation` |
 | `SEVERIAN_SUFFICIENCY` | off | Adds one line after the results when no returned memory holds the specific detail the question names |
+| `SEVERIAN_DREAMING` | off | The maintenance passes: `severian dream --mode <m>` (dry run unless `--confirm`) and the `severian work --dream-tenant/--dream-profile` tick. Off means no pass runs, nothing queues one, and the derive drain behaves exactly as before. See [docs/memory-engine.md](docs/memory-engine.md#maintenance-passes-dream-jobs--s2) |
+| `SEVERIAN_DREAM_URL` / `SEVERIAN_DREAM_MODEL` | `http://127.0.0.1:8091/v1/chat/completions` / `active:aux` | The optional writer that words a merge summary. Loopback only unless `SEVERIAN_DREAM_ALLOW_REMOTE=1`: a remote model is a costed run, never a default |
 | `SEVERIAN_STORAGE` / `SEVERIAN_DSN` | Hermes store / unset | SQLite directory, or a PostgreSQL DSN |
 
 The recommended settings are the ones benchmarked above. PostgreSQL setup:

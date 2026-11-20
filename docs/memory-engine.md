@@ -58,19 +58,44 @@ They are different operations, and the docs must not conflate them:
   [operator-runbook.md](operator-runbook.md) and
   [threat-model.md](threat-model.md#data-lifecycle).
 
-## Deferred to S2: scheduled maintenance and usage salience
+## Maintenance passes (dream jobs) — S2
 
-The consolidation, curation, contradiction-scan and retention services exist and are
-non-destructive, but **no production path queues `dream` jobs**. A worker can process them if an
-operator or a future scheduler enqueues them; the fleet does not do so today. Retention
-`apply_archive` is opt-in and keeps history. Curation's salience blend includes a `usage_count`
-term, but retrieval usage tracking is off in production, so that term is inert; salience-weighted
-ranking in `RetrievalService` is also opt-in with a default weight of zero.
+The consolidation, curation, contradiction-scan and retention services are non-destructive and are
+now reachable two ways, both behind `SEVERIAN_DREAMING` (off by default):
 
-S2 (the Should-wave worker/curation work in the programme plan) is where a real dream-job
-producer, scheduling policy and deliberate usage tracking would be designed and tested. Until
-then, the README and operator docs describe these as available services, not autonomous
-behaviour.
+- **One pass, on demand:** `severian dream --mode <m> <scope flags>`. Dry run by default — it
+  prints the plan and writes nothing, and calls no model. `--confirm` carries the pass out.
+  Modes: `consolidate`, `curate`, `retention`, `retention-archive`, `contradictions`.
+- **The worker tick:** `severian work --dream-tenant T --dream-profile P` queues one `dream` job
+  per (active scope, tick mode) and then runs them. The tick queues `consolidate`, `curate` and
+  `contradictions` only: retention and retention-archive stay explicit operator actions. It cannot
+  queue a mode twice — `enqueue_job` is idempotent on (kind, payload) — so a second tick queues
+  nothing. No cron is created or enabled by this release.
+
+**Code decides, a model may only write.** Every candidate pair is classified deterministically as a
+*duplicate* (supersede the older head), a *contradiction* (value-bearing difference: a number, a
+negation or a name — reported, never resolved) or a *restatement* (different words, same fact — no
+write). A model is optional and its only job is the text of a merge summary: batches of eight, one
+retry per the busy-model rules, a failed batch falls back to the deterministic summary text and is
+counted, and the pass stops calling the model once ~10% of its batches have failed. The writer must
+be loopback unless `SEVERIAN_DREAM_ALLOW_REMOTE=1`, so the default path cannot spend money.
+
+**Maintenance markers are not memories.** `retention_archive`, `curation_review` and the
+`consolidated` merge summary are records about a pass. They are never returned by `search` and never
+rendered by `assemble_context`, on either context format and not through the fill-budget read
+either (`severian.application.markers`). This is a fix, not a switch: they were ordinary searchable
+memories before, at confidence 1.0.
+
+**Convergence and safety.** Markers are excluded from the passes' own inputs, so a second pass
+converges instead of writing another marker. Supersedes go through M2's guarded path: a lost race
+(`ConflictError`) is skipped and logged as `dreaming.skip`, never a failed pass. Every dream write
+carries an audit row — `dreaming.merge`, `dreaming.consolidate`, `curation.report`,
+`retention.archive`, and `retention.archive_plan` written before anything is archived.
+
+**Usage is not a salience input.** Curation's blend is confidence and recency only. Retrieval usage
+tracking is off in production (nothing passes `search(track_usage=True)`), so the removed
+`usage_count` term always contributed exactly 0.0; the score is unchanged on every real store and a
+test pins it from both sides.
 
 ## Correction depth: first order only
 

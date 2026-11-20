@@ -112,6 +112,47 @@ severian search \
 
 Emit JSON hits with lexical/vector/fused scores and scope.
 
+### 2.5 Maintenance passes (dream jobs) — `SEVERIAN_DREAMING`
+
+Off by default. Two entry points, both refused while the switch is off (the message names it).
+
+**One pass over one scope, dry run first:**
+
+```bash
+export SEVERIAN_DREAMING=1
+severian dream \
+  --database data/severian.db --fts data/fts.db --vectors data/vectors.db \
+  --tenant acme --profile alice --collection main --agent cli --session ses-1 \
+  --mode consolidate          # prints the plan, writes nothing, calls no model
+severian dream ... --mode consolidate --confirm    # carries it out
+```
+
+Modes: `consolidate` (supersede older duplicate heads, one merge summary per group),
+`curate` (score, propose, write the review marker and its report), `retention` (report candidates
+for a policy), `retention-archive` (opt-in: archive them; the plan is written to audit first),
+`contradictions` (report only). `--policy '{"max_age_days": 365}'` applies to the retention modes.
+
+**The worker tick** queues `consolidate`, `curate` and `contradictions` for every active scope of
+one profile and then runs them:
+
+```bash
+severian work --database data/severian.db --fts data/fts.db --vectors data/vectors.db \
+  --dream-tenant acme --dream-profile alice
+```
+
+It cannot queue the same (scope, mode) twice, so running it on a timer is safe; it does not queue
+retention. Nothing in this release creates or enables a cron entry — schedule the tick yourself if
+you want one.
+
+**Cost.** The pass is deterministic. The only model call is the optional writer that words a merge
+summary (`SEVERIAN_DREAM_URL`, loopback by default; a non-loopback URL needs
+`SEVERIAN_DREAM_ALLOW_REMOTE=1`). It batches eight groups per call, retries once, falls back to the
+deterministic text, and stops calling the model once about 10% of its batches have failed.
+
+**What a pass will never do:** delete anything, resolve a contradiction (it reports), archive
+without the plan row that precedes it, or bring back erased/purged/corrected content. Its own
+markers (`retention_archive`, `curation_review`, `consolidated`) are never searchable.
+
 ---
 
 ## 3. Backup and restore
