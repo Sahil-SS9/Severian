@@ -13,6 +13,16 @@ and must be re-proved before it is treated as fact.
 **Status:** captured as candidate work. Nothing here is approved, scheduled or
 started. Triage each row before building.
 
+**Owner direction (20/11/26):** Sahil approved proceeding with the Must + Should
+recommendations of the MoSCoW review. Could items are captured below
+(W-14..W-18) and are NOT scheduled. The implementation plan goes to an
+independent objective review BEFORE any build; nothing here is implemented yet.
+- Decision record: `~/docs/severian-programme/MOSCOW-DECISION-RECORD-2026-11-20.md`
+- Implementation plan: `~/docs/severian-programme/IMPLEMENTATION-PLAN-2026-11-20.md`
+- Review kickoff: `~/docs/severian-programme/handoffs-2026-11-20/KICKOFF-REVIEW.md`
+Must items map to plan M1–M7, Should items to S1–S4; the triage table at the
+bottom carries the 20/11 disposition of every row.
+
 ---
 
 ## W-1 — "Forget" removes from reads, not from storage  (HIGH)
@@ -35,6 +45,10 @@ if the text stays*.
 fact that something was removed; document the current behaviour honestly in the
 meantime.
 
+**Disposition 20/11:** MUST — plan M1. Claim re-proved in code 20/11
+(`revise_observation` only sets `superseded_by_id`). Explicit operator purge
+recommended (plan Q2); erasure's audited tombstone semantics unchanged.
+
 ## W-2 — Correction is first order only  (HIGH — matches local finding t_54fb0317)
 
 Correcting an observation cascades one hop and is proven. Nothing links a memory
@@ -46,6 +60,11 @@ stale plan side by side. `severian_correct(memory_id=…)` cascades nothing.
 **Candidate work (scope B/C, not approved):** link memory→memory, or withdraw
 dependent memories on correction. Any change is a write-path change on the shared
 store.
+
+**Disposition 20/11:** WON'T this iteration (decision record N1). Sahil chose
+scope A (document only) on 14/11; live exposure near zero (2 `observation.revise`
+events ever, 0 memory-path corrections, 0 active memories with a superseded
+source). Reopen only on owner call or real exposure.
 
 ## W-3 — Five payload changes write no audit row  (HIGH)
 
@@ -67,6 +86,10 @@ writes no audit entry, and the worker discards the report it returns
 **Candidate work:** audit rows for all five paths; either make the curation
 marker's claim true or remove it.
 
+**Disposition 20/11:** MUST — plan M2. Four paths re-proved 20/11 (no audit write
+in method bodies). Fifth most likely `record_memory_usage` (sqlite l.946,
+PG l.1091) — confirm at build by sweeping every payload-mutating method.
+
 ## W-4 — Dreaming is a job kind with no producer  (MEDIUM)
 
 `ConsolidationService`, `CurationService` and `RetentionPolicyService` only run
@@ -77,6 +100,11 @@ lanes call the services directly.
 
 **Gap:** the README's "Looks after itself" describes code a deployment does not
 run. Either schedule the dream jobs or correct the README.
+
+**Disposition 20/11:** split. MUST (minimum) — plan M4: correct the README claim
+now. SHOULD — plan S2: deterministic-first dreaming producer (schedule the jobs,
+deterministic triage before any LLM, retention trail default-on). Claim re-proved
+20/11: only `derive` enqueued in src/scripts; dream modes handled at worker.py:448.
 
 ## W-5 — MCP hands the model all five scope dimensions  (MEDIUM, security)
 
@@ -90,6 +118,10 @@ over stdio the model supplies all five.
 **Candidate work:** bind a principal at launch, or document stdio MCP as
 single-tenant/trusted-context only.
 
+**Disposition 20/11:** MUST — plan M3. Re-proved 20/11: `mcp/server.py:495`
+accepts `principal` (SEC-01) but `mcp/__main__.py` never passes it. Fail-closed
+launch with explicit trusted-single-tenant opt-out recommended (plan Q1).
+
 ## W-6 — Relation validity is record time, not event time  (MEDIUM)
 
 `Relation` carries `valid_from`/`valid_to`, and single-valued predicates
@@ -102,6 +134,12 @@ distinction the memory path is careful about.
 **Candidate work:** derive relation validity from the source's event time, as the
 memory path does.
 
+**Disposition 20/11:** SHOULD — plan S3, plus temporal conformance tests
+(mixed-tz instants, inclusive boundaries, accumulation-vs-replacement negatives).
+Anchors located 20/11: `extraction.py:193` (EntityExtractionService),
+`domain/models.py:21` (SINGLE_VALUED_PREDICATES); line-level validity claim still
+a reading — re-prove at build.
+
 ## W-7 — Index bookkeeping competes for the context budget  (LOW/MEDIUM)
 
 The atlas flags indexing the engine's own bookkeeping: a summary memory listing
@@ -109,6 +147,9 @@ merged ids, or a review marker at confidence 1.0, spends the character budget
 that facts need.
 
 **Candidate work:** keep maintenance artefacts out of the searchable set.
+
+**Disposition 20/11:** COULD — decision record C1. Captured, not scheduled.
+Measure via the context-assembly probe before/after; no assertion-only wins.
 
 ## W-8 — Benchmark evidence is only partly reproducible  (MEDIUM, credibility)
 
@@ -126,6 +167,13 @@ no paper cited.
 **Candidate work:** commit the per-question evidence (or a manifest + hashes), and
 re-run at a commit someone can check out.
 
+**Disposition 20/11:** MUST — plan M5. Commit evidence/manifest + hashes +
+recompute script, version-label every number, audit the harness for the
+"ideal DCG from top-k" inflation (MemPalace signal 02/11), write the
+METHODOLOGY/RESULTS docs prescribed by the 22/10 benchmark decision. The fresh
+paid contract re-run rides with the S1 gate (0.3.13 default behaviour is
+byte-identical to the measured 0.3.11 behaviour with switches off).
+
 ## W-9 — Missing mechanisms the rubric looked for  (assess)
 
 Not found at this commit: `tombstone` (see W-1 — `:erased` is the near-miss),
@@ -136,6 +184,11 @@ verified/rejected.
 
 **Candidate work:** decide whether any of the three is wanted. If not, say so in
 the README so the absence is a decision rather than an omission.
+
+**Disposition 20/11:** split. MUST — plan M4: record the absences as deliberate
+decisions (tombstone near-miss resolved by M1; human_review WON'T per N7 — no
+demonstrated need, governance already approval-gated). COULD — stored trust
+tiers captured as W-18 (C6), only if S2 curation or W-13 promotion needs them.
 
 ## W-10 — Test coverage gaps implied by the above  (HIGH)
 
@@ -153,6 +206,9 @@ the harness. Nothing pins:
 **Candidate work:** add the tests that would fail today, then fix or explicitly
 waive each.
 
+**Disposition 20/11:** MUST — plan M7 (RED tests woven into M1–M3; W-2 test
+waived by owner decision, documented). Both backends + live-PG lane.
+
 ## W-11 — Keep these (the atlas's "steal" list, already true here)
 
 Re-confirm each with a test rather than assuming the reader got it right:
@@ -167,12 +223,18 @@ Re-confirm each with a test rather than assuming the reader got it right:
 5. The audit is read-only: it cannot write a byte, and repair only re-queues and
    re-indexes.
 
+**Disposition 20/11:** MUST — plan M7: pin all five with named tests.
+
 ## W-12 — Reviewer's own limits  (context, not work)
 
 The atlas page says explicitly that the marks are one reviewer's reading of the
 code, not a run, and that a dash means "not found", not "missing". Treat every
 item above as a lead to verify, not a verdict. Two build-time execution paths were
 noted and not triggered.
+
+**Disposition 20/11:** context. Kensei re-proved W-1, W-3 (four paths), W-4, W-5
+in code on 20/11 (decision record §2 verification ledger); remaining readings
+re-proved at build per plan ground rule 1.
 
 ## W-13 — Rebuild the memory→wiki promotion job against Severian  (REQUESTED)
 
@@ -207,7 +269,13 @@ Schedule was `35 4 * * *`; silent when there was nothing to promote.
   rewritten wholesale.
 - Borderline facts land in the review file, never as kanban cards.
 
-**Status:** not started. Requires the two decisions above before any code.
+**Status (20/11):** MUST — plan M6, approved. Owner proceeded on the
+recommendations, so the two decisions are TAKEN AS the recommended options:
+D1 = A (signal = user-stated `user_fact` memories + corrected/revised facts, not
+a confidence threshold) and D2 = A (default-profile store only: tenant `kensei`,
+profile `default`, collection `profile`, agent `default`, session `shared`).
+Override window open at plan review (plan Q3). Separate agent lane; handoff
+written after plan approval.
 
 **Handoff note (Sahil, 14/11/26):** do **not** build this as part of the current
 tidy-up. It is left here deliberately for another agent to pick up from this file.
@@ -225,24 +293,116 @@ Whoever takes it should:
    reviewed by hand.
 4. Update this item with the commit, the dry-run output and the enabling decision.
 
+---
 
+## W-14 — Deterministic human-readable export (OKF-style)  (COULD)
+
+**Source:** decision record C2; upstream signal 16/11/26 — Hindsight Observation
+Tree export as Open Knowledge Format v0.2 (`vectorize-io/hindsight` #6519, MIT,
+deterministic no-LLM markdown bundle, tag-scoped, stability 100% reordered /
+84–97% under removals). Design-only reimplementation — no code port.
+
+**What:** a canonical, browseable/grep-able markdown export of a scope's
+observations and memories, deterministic ordering, no model in the export path.
+Pairs with M1 purge verification (export must exclude purged text) and W-13
+browsability.
+
+**Acceptance sketch:** export is byte-stable under reordering of input rows;
+scope-tagged; purged/erased text absent; round-trip manifest hashes verify.
+
+**Status:** could — captured 20/11, NOT scheduled. Revisit after M1 lands.
+
+## W-15 — Idempotent repair walk  (COULD)
+
+**Source:** decision record C3; upstream signal 28/09/26 — MemPalace guided
+audit + repair tooling (`mempalace/mempalace` #2576, MIT). The only EXTRACT
+verdict in 8 weeks of signal reports.
+
+**What:** read-only audit walk that reports canonical-vs-index drift, plus a
+reversible `--repair` that converges with zero loss (journaled, rollback-safe).
+Severian already has read-only audit + projection rebuild controls; this wraps
+them into an operator walk.
+
+**Acceptance sketch:** full drift report on synthetic fixtures; two runs converge
+with zero loss; repair is journaled and reversible; no live-store writes without
+explicit approval.
+
+**Trigger:** build before the first big migration (S1) or the first drift
+incident — not before. Live stores are healthy today.
+
+**Status:** could — captured 20/11, NOT scheduled.
+
+## W-16 — Upstream-failure conformance test pack  (COULD)
+
+**Source:** decision record C4; upstream signals 12/10–16/11/26. Cheap test
+additions, no behaviour change. Items adjacent to M1/M2 fold into the Must wave;
+the remainder live here:
+
+- update never re-creates a deleted record (mem0 #7787/#7788, 02/11);
+- concurrent retains of identical content store each fact exactly once
+  (Hindsight #6433, 09/11);
+- derived counters are transactionally serialised or rebuild-from-canonical
+  (Hindsight #6233, 02/11);
+- racing restore refuses instead of silently merging; backup archives stay under
+  the tenant's storage prefix (Hindsight #6408/#6409, 09/11);
+- no secrets at any log level, including error paths (mem0 12/10, MemPalace
+  3.12.0 19/10);
+- entry must bind to its owning scope; stale binding refused like a forbidden id
+  (cognee, 19/10).
+
+**Acceptance sketch:** each named failure mode has a test that fails on a
+deliberately broken variant and passes on current code (or a fix is filed).
+
+**Status:** could — captured 20/11, NOT scheduled.
+
+## W-17 — Dashboard UI/UX rescope  (COULD)
+
+**Source:** decision record C5; ops board card `t_97fb7ecf` (backlog): "Revisit
+Severian memory-system dashboard UI/UX".
+
+**What:** the card is STALE — it points at the old `ultramemory-dashboard` repo
+and naming, and a dev backend at 127.0.0.1:8000. Rescope against the current
+`web/` surface in this repo first (design consistency, interaction polish,
+accessibility, graph-view performance, empty/error states). Dezzy lane; separate
+track from the engine iteration. Owner decision D4 (rescope yes/no) still pending.
+
+**Status:** could — captured 20/11, NOT scheduled. Do not dispatch the stale card
+as-is.
+
+## W-18 — Stored trust tiers (candidate/verified/rejected)  (COULD)
+
+**Source:** decision record C6; W-9 partial. `TruthState` is computed at read
+time and never stored (`domain/models.py:24-35`).
+
+**What:** persisted trust tiers ONLY if S2 curation or W-13 promotion needs a
+stored trust signal. Otherwise the read-time design stands and the absence is a
+recorded decision (M4). Do not build a trust layer speculatively.
+
+**Status:** could — captured 20/11, NOT scheduled. Revisit when S2/M6 evidence
+shows a need.
 
 ---
 
-### Triage table
+### Triage table (updated 20/11/26 — owner direction: Must + Should proceed to
+### objective review; Could captured, not scheduled; Won't stands)
 
-| id | item | severity | status |
-|----|------|----------|--------|
-| W-1 | erasure keeps text | high | todo |
-| W-2 | second-order correction | high | documented only |
-| W-3 | five unaudited paths | high | todo |
-| W-4 | dream jobs have no producer | medium | todo |
-| W-5 | MCP scope chosen by model | medium | todo |
-| W-6 | relation validity is record time | medium | todo |
-| W-7 | bookkeeping in the index | low | todo |
-| W-8 | benchmark evidence not reproducible | medium | todo |
-| W-9 | missing mechanisms | assess | todo |
-| W-10 | tests for all of the above | high | todo |
-| W-11 | strengths to keep proven | n/a | re-confirm |
-| W-12 | reviewer limits | n/a | context |
-| W-13 | rebuild memory→wiki promotion on Severian | medium | requested, 2 decisions needed |
+| id | item | severity | disposition 20/11 | plan ref |
+|----|------|----------|-------------------|----------|
+| W-1 | erasure keeps text | high | MUST — approved | M1 |
+| W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
+| W-3 | five unaudited paths | high | MUST — approved (fifth path confirm at build) | M2 |
+| W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer | M4 + S2 |
+| W-5 | MCP scope chosen by model | medium | MUST — approved | M3 |
+| W-6 | relation validity is record time | medium | SHOULD | S3 |
+| W-7 | bookkeeping in the index | low | COULD — captured, not scheduled | C1 |
+| W-8 | benchmark evidence not reproducible | medium | MUST — approved (paid re-run rides with S1 gate) | M5 |
+| W-9 | missing mechanisms | assess | MUST docs decision + COULD trust tiers | M4 + W-18 |
+| W-10 | tests for all of the above | high | MUST — RED-first woven into M1–M3 | M7 |
+| W-11 | strengths to keep proven | n/a | MUST — pin all five with named tests | M7 |
+| W-12 | reviewer limits | n/a | context — ledger in decision record §2 | — |
+| W-13 | rebuild memory→wiki promotion on Severian | medium | MUST — approved; D1/D2 taken as A/A (override open); separate agent lane | M6 |
+| W-14 | deterministic human-readable export | low | COULD — captured 20/11, not scheduled | C2 |
+| W-15 | idempotent repair walk | low | COULD — captured 20/11, trigger: before S1 migration or first drift | C3 |
+| W-16 | upstream-failure conformance tests | low | COULD — captured 20/11, not scheduled | C4 |
+| W-17 | dashboard UI/UX rescope | low | COULD — captured 20/11, stale card needs rescope; D4 pending | C5 |
+| W-18 | stored trust tiers | low | COULD — captured 20/11, only on S2/M6 demonstrated need | C6 |
