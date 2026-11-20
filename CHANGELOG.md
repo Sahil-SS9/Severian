@@ -3,7 +3,9 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased]
+## [0.5.1] - 2026-11-20
+
+Relation validity from event time (S3).
 
 ### Added
 - **Relation validity from event time (S3, opt-in).** `SEVERIAN_RELATION_EVENT_TIME=1` makes the derive
