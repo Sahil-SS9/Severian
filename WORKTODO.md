@@ -479,17 +479,17 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 
 | id | item | severity | disposition 20/11 | plan ref |
 |----|------|----------|-------------------|----------|
-| W-1 | erasure keeps text | high | MUST M1 — BUILT + independent review PASS 20/11; local-only, wave gate pending | M1 / REV A1, MG-2, MG-3, MG-7 |
+| W-1 | erasure keeps text | high | MUST M1 — BUILT + independent review PASS; WAVE GATE PASS at ec719e8 (M1 8a17a9f) | M1 / REV A1, MG-2, MG-3, MG-7 |
 | W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
-| W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M2 / REV A2, MG-4 |
+| W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT; WAVE GATE PASS at ec719e8 (921ce62) | M2 / REV A2, MG-4 |
 | W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer — M4 docs DONE 20/11 (021e627); S2 producer open | M4 + S2 |
-| W-5 | MCP scope chosen by model | medium | MUST M3 — BUILT + controller gate PASS 20/11; local commit be12e08 | M3 |
+| W-5 | MCP scope chosen by model | medium | MUST M3 — BUILT + controller gate PASS; WAVE GATE PASS at ec719e8 (be12e08) | M3 |
 | W-6 | relation validity is record time | medium | SHOULD | S3 |
 | W-7 | bookkeeping in the index | low | COULD — captured, not scheduled | C1 |
-| W-8 | benchmark evidence not reproducible | medium | MUST M5 — BUILT 20/11 (c6c02c2), recompute PASS; paid re-run rides S1 | M5 |
+| W-8 | benchmark evidence not reproducible | medium | MUST M5 — BUILT (c6c02c2), recompute PASS, temp fix 0046237; paid re-run rides S1 | M5 |
 | W-9 | missing mechanisms | assess | MUST docs decision DONE 20/11 (021e627); COULD trust tiers W-18 | M4 + W-18 |
-| W-10 | tests for all of the above | high | MUST — RED-first woven into M1–M3 | M7 |
-| W-11 | strengths to keep proven | n/a | MUST — pin all five with named tests | M7 |
+| W-10 | tests for all of the above | high | MUST M7 — RED tests woven into M1–M3 and full suites pass; five-strength mutation-witness inventory remains OPEN | M7 |
+| W-11 | strengths to keep proven | n/a | MUST M7 — five strengths have named tests; mutation-witness evidence remains OPEN | M7 |
 | W-12 | reviewer limits | n/a | context — ledger in decision record §2 | — |
 | W-13 | rebuild memory→wiki promotion on Severian | medium | MUST — approved; D1/D2 taken as A/A (override open); separate agent lane | M6 |
 | W-14 | deterministic human-readable export | low | COULD — captured 20/11, not scheduled | C2 |
@@ -497,4 +497,4 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 | W-16 | upstream-failure conformance tests | low | COULD — captured 20/11, not scheduled | C4 |
 | W-17 | dashboard UI/UX rescope | low | COULD — captured 20/11, stale card needs rescope; D4 pending | C5 |
 | W-18 | stored trust tiers | low | COULD — captured 20/11, only on S2/M6 demonstrated need | C6 |
-| W-19 | snapshot import rejects real stores | high | MUST M0 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M0 / REV MG-1 |
+| W-19 | snapshot import rejects real stores | high | MUST M0 — BUILT (5c36950); WAVE GATE PASS at ec719e8 | M0 / REV MG-1 |
