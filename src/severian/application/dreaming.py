@@ -52,9 +52,13 @@ _CONTRADICTION_JACCARD = 0.6
 _SALIENCE_HALFLIFE_H = 720.0
 # Confidence weight in the salience blend.
 _CONFIDENCE_WEIGHT = 0.4
-# Usage weight (per recorded read/boost).
-_USAGE_WEIGHT = 0.3
 # Recency weight in the salience blend.
+#
+# There is no usage term (S2, decision 4). Usage tracking is never on: nothing in ``src/`` calls
+# ``search(track_usage=True)``, so every ``usage_count`` in every store is 0 and the old
+# ``0.3 * min(usage_count / 100, 1)`` term always contributed exactly 0.0. Removing it is
+# byte-identical in practice and stops a dormant-but-plausible knob from silently changing what
+# curation proposes. ``tests/application/test_dream_usage_salience.py`` pins both halves of that.
 _RECENCY_WEIGHT = 0.3
 
 
@@ -716,7 +720,6 @@ class CurationService:
         *,
         salience_halflife_h: float = _SALIENCE_HALFLIFE_H,
         confidence_weight: float = _CONFIDENCE_WEIGHT,
-        usage_weight: float = _USAGE_WEIGHT,
         recency_weight: float = _RECENCY_WEIGHT,
         low_value_threshold: float = 0.15,
         model_id: str = "severian-curation-v1",
@@ -726,7 +729,6 @@ class CurationService:
         self._repository = repository
         self._halflife = salience_halflife_h
         self._cw = confidence_weight
-        self._uw = usage_weight
         self._rw = recency_weight
         self._low_value_threshold = low_value_threshold
         self._model_id = model_id
@@ -740,12 +742,8 @@ class CurationService:
         for memory in memories:
             age_h = max((self._now - memory.created_at).total_seconds() / 3600.0, 0.0)
             recency = 0.5 ** (age_h / self._halflife)
-            usage = min(memory.usage_count / 100.0, 1.0)  # saturate at 100 hits
-            salience = (
-                self._cw * memory.confidence
-                + self._rw * recency
-                + self._uw * usage
-            )
+            # No usage term: see the note on ``_RECENCY_WEIGHT``.
+            salience = self._cw * memory.confidence + self._rw * recency
             report.scored.append(
                 {
                     "memory_id": memory.id,

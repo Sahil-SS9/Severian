@@ -281,7 +281,15 @@ def test_worker_dream_contradictions_mode() -> None:
         assert len(repo.list_memories(scope)) == 2
 
 
-def test_curation_uses_real_usage_count() -> None:
+def test_curation_ignores_recorded_usage() -> None:
+    """S2 decision 4: usage is recorded, but it is not a salience input.
+
+    This used to pin the opposite (a usage term in the blend). Nothing ever passes
+    ``search(track_usage=True)``, so every count is 0 in practice and the term contributed
+    exactly 0.0; the owner decision is to remove it rather than leave a knob that would
+    silently re-weight curation. ``test_dream_usage_salience.py`` pins the same rule from the
+    other side (the score equals the two-term blend).
+    """
     with tempfile.TemporaryDirectory() as tmp:
         repo, *_ = _bundle(tmp)
         scope = _scope()
@@ -289,8 +297,9 @@ def test_curation_uses_real_usage_count() -> None:
         used = _add_memory(repo, scope, "heavily used fact", created_delta=timedelta(hours=1))
         for _ in range(50):
             repo.record_memory_usage(scope, used.id)
+        assert repo.get_memory(scope, used.id).usage_count == 50  # the count IS recorded
         service = CurationService(repo, now=datetime.now(UTC))
         report = service.curate(scope)
         by_id = {entry["memory_id"]: entry for entry in report.scored}
-        # Same confidence + same recency, but usage differentiates.
-        assert by_id[used.id]["salience"] > by_id[unused.id]["salience"]
+        # Same confidence + same recency: usage makes no difference to the score.
+        assert by_id[used.id]["salience"] == by_id[unused.id]["salience"]
