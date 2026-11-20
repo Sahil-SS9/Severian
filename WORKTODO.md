@@ -144,6 +144,9 @@ run. Either schedule the dream jobs or correct the README.
 now. SHOULD — plan S2: deterministic-first dreaming producer (schedule the jobs,
 deterministic triage before any LLM, retention trail default-on). Claim re-proved
 20/11: only `derive` enqueued in src/scripts; dream modes handled at worker.py:448.
+**Built 20/11 (M4):** README and memory-engine now say no production path queues
+dream jobs, the usage term is inert and salience ranking is opt-in; local commit
+`021e627`. S2 producer remains open.
 
 ## W-5 — MCP hands the model all five scope dimensions  (MEDIUM, security)
 
@@ -219,6 +222,11 @@ recompute script, version-label every number, audit the harness for the
 METHODOLOGY/RESULTS docs prescribed by the 22/10 benchmark decision. The fresh
 paid contract re-run rides with the S1 gate (0.3.13 default behaviour is
 byte-identical to the measured 0.3.11 behaviour with switches off).
+**Built 20/11 (M5):** `METHODOLOGY.md`, `RESULTS.md`, archive file manifest,
+offline recompute script and corrected `_about`; archive `SHA256SUMS` verified,
+all three headline scores and paired ranges reproduced. Per-question outputs
+were not redistributed because dataset terms are not established. Local commit
+`c6c02c2`. Paid re-run still rides with S1.
 
 ## W-9 — Missing mechanisms the rubric looked for  (assess)
 
@@ -235,6 +243,9 @@ the README so the absence is a decision rather than an omission.
 decisions (tombstone near-miss resolved by M1; human_review WON'T per N7 — no
 demonstrated need, governance already approval-gated). COULD — stored trust
 tiers captured as W-18 (C6), only if S2 curation or W-13 promotion needs them.
+**Built 20/11 (M4):** README "Deliberate absences" records read-time trust state,
+no human-review queue and M1 tombstones as decisions; local commit `021e627`.
+Stored trust tiers remain W-18 (Could).
 
 ## W-10 — Test coverage gaps implied by the above  (HIGH)
 
@@ -471,12 +482,12 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 | W-1 | erasure keeps text | high | MUST M1 — BUILT + independent review PASS 20/11; local-only, wave gate pending | M1 / REV A1, MG-2, MG-3, MG-7 |
 | W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
 | W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M2 / REV A2, MG-4 |
-| W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer | M4 + S2 |
+| W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer — M4 docs DONE 20/11 (021e627); S2 producer open | M4 + S2 |
 | W-5 | MCP scope chosen by model | medium | MUST M3 — BUILT + controller gate PASS 20/11; local commit be12e08 | M3 |
 | W-6 | relation validity is record time | medium | SHOULD | S3 |
 | W-7 | bookkeeping in the index | low | COULD — captured, not scheduled | C1 |
-| W-8 | benchmark evidence not reproducible | medium | MUST — approved (paid re-run rides with S1 gate) | M5 |
-| W-9 | missing mechanisms | assess | MUST docs decision + COULD trust tiers | M4 + W-18 |
+| W-8 | benchmark evidence not reproducible | medium | MUST M5 — BUILT 20/11 (c6c02c2), recompute PASS; paid re-run rides S1 | M5 |
+| W-9 | missing mechanisms | assess | MUST docs decision DONE 20/11 (021e627); COULD trust tiers W-18 | M4 + W-18 |
 | W-10 | tests for all of the above | high | MUST — RED-first woven into M1–M3 | M7 |
 | W-11 | strengths to keep proven | n/a | MUST — pin all five with named tests | M7 |
 | W-12 | reviewer limits | n/a | context — ledger in decision record §2 | — |
