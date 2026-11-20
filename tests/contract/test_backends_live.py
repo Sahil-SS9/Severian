@@ -637,7 +637,20 @@ def _m0_build(backend: str, tmp_path: Path, tag: str, *, target: bool = False) -
             vectors=tmp_path / f"{tag}.vec",
         )
     dsn = PG_DSN.rsplit("/", 1)[0] + "/severian_dst" if target else PG_DSN
+    if target:
+        _ensure_pg_database(PG_DSN, "severian_dst")
     return build_bundle(backend="postgresql", dsn=dsn)
+
+
+def _ensure_pg_database(admin_dsn: str, name: str) -> None:
+    """Create the cross-backend target database when the server lacks it (fresh CI)."""
+    import psycopg
+    from psycopg import sql
+
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+        if exists is None:
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
 
 
 @pytest.mark.skipif(not PG_DSN, reason="SEVERIAN_PG_DSN not set; live PostgreSQL lane")
