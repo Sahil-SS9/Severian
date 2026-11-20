@@ -3,7 +3,9 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased] — 0.5.1 (S2: deterministic-first dreaming producer, with C1)
+## [0.5.0] - 2026-11-20
+
+Deterministic-first dreaming producer (S2), with C1.
 
 Every behaviour below is behind `SEVERIAN_DREAMING`, off by default, except C1 which is a fix.
 
