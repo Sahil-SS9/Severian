@@ -33,7 +33,44 @@ Results are scope-filtered before ranking. Hybrid ranking uses reciprocal rank f
 
 - No network or cloud call is made by the engine itself.
 - A derivation gateway is injected by the future model-adapter layer.
-- Job completion/lease lifecycle and deletion tombstone propagation remain part of the interface and governance phases.
+- Job leasing, dead-letter recovery and the erasure path are implemented. Purge is an explicit operator action, not an automatic retention step.
+
+## Erase versus purge (M1)
+
+They are different operations, and the docs must not conflate them:
+
+- **Erase** (`erase_memory` / `erase_observation`) is the normal user-facing deletion. It writes a
+  synthetic `[reason]` tombstone, supersedes the active head and every derived memory, and
+  retracts the relations that depended on the erased observation. The whole cascade is one
+  transaction. Search and active reads stop returning the record, but **the text remains in the
+  canonical row, in history and in an export**. Erasure also releases the observation's dedupe
+  identity so re-stating the same fact later is stored as new evidence.
+- **Purge** (`severian purge --observation <id>`, dry run by default, `--confirm` to act) is the
+  explicit physical-removal path. It scrubs the observation's whole revision chain, every memory
+  derived from it, the relations that lose their last support and the entity names nothing else
+  supports. Text becomes the fixed marker `[purged]`, hashes are recomputed over that marker,
+  `identity_key` is cleared, and one content-free audit row per target id records what was removed.
+  Task notes are deliberately out of scope because they are working state, not canonical memory.
+- Purge cannot reach external backups, exported snapshots, PostgreSQL base backups or WAL
+  archives. SQLite files are checkpointed and `VACUUM`ed; PostgreSQL physical reclaim is printed
+  for the operator, not run. The honest claim is "removed from this store and its index files",
+  never "physically purged everywhere". See
+  [operator-runbook.md](operator-runbook.md) and
+  [threat-model.md](threat-model.md#data-lifecycle).
+
+## Deferred to S2: scheduled maintenance and usage salience
+
+The consolidation, curation, contradiction-scan and retention services exist and are
+non-destructive, but **no production path queues `dream` jobs**. A worker can process them if an
+operator or a future scheduler enqueues them; the fleet does not do so today. Retention
+`apply_archive` is opt-in and keeps history. Curation's salience blend includes a `usage_count`
+term, but retrieval usage tracking is off in production, so that term is inert; salience-weighted
+ranking in `RetrievalService` is also opt-in with a default weight of zero.
+
+S2 (the Should-wave worker/curation work in the programme plan) is where a real dream-job
+producer, scheduling policy and deliberate usage tracking would be designed and tested. Until
+then, the README and operator docs describe these as available services, not autonomous
+behaviour.
 
 ## Correction depth: first order only
 

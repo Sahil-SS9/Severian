@@ -71,9 +71,12 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
 
 ## Why Severian
 
-- **Nothing is lost, nothing is made up.** Raw observations are append-only and hashed. Every memory and every search
-  hit cites the observation it came from, and corrections create a new revision instead of overwriting history, so
-  any earlier version can be restored.
+- **Kept unless an operator purges it, and every claim carries its source.** Raw observations are append-only and
+  hashed. Every memory and every search hit cites the observation it came from, and corrections create a new revision
+  instead of overwriting history, so any earlier version can be restored. Erasure hides records; an explicit purge
+  removes text from the store and its indexes, subject to the backup and PostgreSQL caveats in
+  [docs/threat-model.md](docs/threat-model.md). Derived text is model-generated, so provenance shows where a claim came
+  from; it does not make the claim true.
 - **Scope is the security boundary.** Every read and write names five levels: tenant, profile, collection, agent and
   session. There is no default scope, and another scope's memories are never returned or even hinted at. Agents can
   opt in to reading an explicit list of teammates' scopes.
@@ -84,12 +87,27 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
   character budget.
 - **Local-first.** No network call from the engine; cloud derivation needs an explicit per-collection opt-in. Qwen3
   0.6B embeddings run locally or in a shared sidecar; a deterministic hash embedding needs nothing at all.
-- **Looks after itself.** Background "dreaming" merges near-duplicates and flags contradictions, curation scores
-  salience, and retention policies archive instead of deleting.
+- **Offline maintenance is available, not automatic.** Consolidation, curation and retention services are
+  non-destructive and can process dream-mode work, but **no production path queues dream jobs yet**, so they do not run
+  on their own. Curation's usage term is inert until retrieval usage tracking is deliberately enabled; salience
+  weighting in ranking is opt-in and off by default.
 - **Operable.** Crash-safe leased worker jobs, dead-letter recovery, export/import, side-by-side vector rebuilds, an
   integrity audit, per-profile fact rollback and an optional Rust acceleration module.
 - **Harness-agnostic.** The same engine serves any agent framework through the CLI, the Python SDK, the HTTP API or
   MCP, and runs unchanged on SQLite or PostgreSQL; the Hermes plugin is one adapter on top.
+
+### Deliberate absences
+
+These are decisions, not omissions:
+
+- **`trust_state` is computed at read time.** Severian does not store candidate/verified/rejected tiers. The truth
+  answer depends on the active view plus the requested `as_of` time, so persisting a separate state would create a
+  second truth to keep in sync.
+- **There is no human-review queue.** Approval-gated governance already exists outside the memory store; a per-memory
+  review workflow was not built because there is no demonstrated need (W-9, decision N7).
+- **Tombstones are the erasure mechanism, not a separate feature.** Erasure writes an auditable tombstone; explicit
+  operator purge is the physical-removal path. Both are documented in
+  [docs/memory-engine.md](docs/memory-engine.md) and [docs/operator-runbook.md](docs/operator-runbook.md).
 
 ## How it works
 
@@ -119,7 +137,8 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
                  │
                  ▼
    ┌──────────────────────────────────────────────────────────────┐
-   │  DerivationService (worker drains derive/episode/dream jobs) │
+   │  DerivationService (worker drains derive/episode jobs)       │
+   │  · dream modes exist but no production path queues them yet  │
    │  · policy-gated (cloud_allowed false by default)             │
    │  · deterministic hash OR Qwen 0.6B semantic opt-in          │
    │  · skips superseded observations (P0-5)                      │
@@ -134,7 +153,8 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
                  ▼
    ┌──────────────────────────────────────────────────────────────┐
    │  RetrievalService (hybrid RRF fusion)                        │
-   │  · coverage abstention gate    · salience-weighted ranking   │
+   │  · coverage abstention gate · optional salience weighting    │
+   │    (off by default)                                          │
    │  · shared-scope read (search_shared, opt-in multi-agent)     │
    │  · temporal query orientation (active head first for present)│
    └───────────────┬──────────────────────────────────────────────┘
@@ -149,11 +169,12 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
    │  · related_memories by min graph distance                    │
    └──────────────────────────────────────────────────────────────┘
 
-   OFFLINE SELF-REGULATION (dream worker jobs, non-destructive):
+   OFFLINE MAINTENANCE SERVICES (dream modes; no production
+   producer yet; non-destructive):
    ┌──────────────────────────────────────────────────────────────┐
    │  ConsolidationService  · Jaccard near-dup merge (>= 0.8)     │
-   │  CurationService       · salience scoring (recency+usage+    │
-   │                          confidence), review markers only    │
+   │  CurationService       · salience scoring (recency +         │
+   │                          confidence; usage term inert)       │
    │  RetentionPolicyService· max_age/min_usage/kinds policy,     │
    │                          evaluate + opt-in archive           │
    │  ContradictionScanService · report-only, never auto-resolves │

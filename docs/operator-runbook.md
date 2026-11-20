@@ -230,6 +230,13 @@ Severian is designed **local-first**. The current posture:
   public exposure, provision one tenant per untrusted party; do NOT put
   multiple untrusted parties in one tenant and rely on agent/session
   isolation — it does not exist.
+- **MCP stdio binding (M3, fail closed).** `python -m severian.mcp` refuses
+  to launch without a pinned tenant/profile from `--tenant-id`/`--profile-id`
+  or `SEVERIAN_MCP_TENANT_ID`/`SEVERIAN_MCP_PROFILE_ID`, unless the operator
+  explicitly passes `--trusted-single-tenant` for a trusted single-user host.
+  The binding pins tenant/profile only; collection/agent/session remain chosen
+  by the caller. Details and per-harness recipes:
+  [integrations.md](integrations.md).
 - **No rate limiting.** Acceptable for local-first; add before any
   network exposure.
 - **No CORS middleware** (deliberate): browser clients must proxy
