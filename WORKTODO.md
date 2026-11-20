@@ -488,8 +488,8 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 | W-7 | bookkeeping in the index | low | COULD — captured, not scheduled | C1 |
 | W-8 | benchmark evidence not reproducible | medium | MUST M5 — BUILT (c6c02c2), recompute PASS, temp fix 0046237; paid re-run rides S1 | M5 |
 | W-9 | missing mechanisms | assess | MUST docs decision DONE 20/11 (021e627); COULD trust tiers W-18 | M4 + W-18 |
-| W-10 | tests for all of the above | high | MUST M7 — RED tests woven into M1–M3 and full suites pass; five-strength mutation-witness inventory remains OPEN | M7 |
-| W-11 | strengths to keep proven | n/a | MUST M7 — five strengths have named tests; mutation-witness evidence remains OPEN | M7 |
+| W-10 | tests for all of the above | high | MUST M7 — DONE 20/11: transaction/scope tests added; five mutation witnesses recorded; SQLite 1638/120, PG 1738/20; tests commit 14a667d | M7 |
+| W-11 | strengths to keep proven | n/a | MUST M7 — DONE 20/11: five strengths mapped and each mutation-witnessed; see M7.md | M7 |
 | W-12 | reviewer limits | n/a | context — ledger in decision record §2 | — |
 | W-13 | rebuild memory→wiki promotion on Severian | medium | MUST — approved; D1/D2 taken as A/A (override open); separate agent lane | M6 |
 | W-14 | deterministic human-readable export | low | COULD — captured 20/11, not scheduled | C2 |
