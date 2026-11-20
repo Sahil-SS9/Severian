@@ -38,7 +38,10 @@ from severian.application.dreaming import (
     CurationService,
     RetentionPolicyService,
 )
+from severian.application.dreamqueue import DREAM_JOB, DreamProducer, QueueResult, dream_background_kinds
+from severian.application.dreamwriter import DreamWriter
 from severian.application.episodes import EpisodeService
+from severian.application.markers import MARKER_KINDS
 from severian.application.ports import CanonicalRepository
 from severian.application.projections import ProjectionCoordinator
 from severian.application.userfacts import BACKGROUND_JOB_KINDS, FACTS_JOB
@@ -145,7 +148,11 @@ class DerivationWorker:
         while max_jobs is None or (processed + failed) < max_jobs:
             try:
                 # Background kinds (Round 2 idea 1 facts) have their own pass: saving never waits on them.
-                job = self._repository.claim_job(worker_id, exclude_kinds=BACKGROUND_JOB_KINDS)
+                # Dream jobs join the excluded set only while SEVERIAN_DREAMING is on (then the dream
+                # pass owns them); with the switch off they are claimed here exactly as at 0.4.1.
+                job = self._repository.claim_job(
+                    worker_id, exclude_kinds=(*BACKGROUND_JOB_KINDS, *dream_background_kinds())
+                )
             except NotFoundError:
                 break  # queue empty — normal end of pass
             scope_key = job.scope.model_dump_json()
@@ -332,6 +339,68 @@ class DerivationWorker:
             deferred=deferred,
         )
 
+    def dream_pass(
+        self,
+        *,
+        worker_id: str = "dream",
+        writer: DreamWriter | None = None,
+        max_jobs: int | None = None,
+    ) -> WorkerSummary:
+        """Claim and run queued ``dream`` jobs, then project what they wrote.
+
+        Only reachable while ``SEVERIAN_DREAMING`` is on: the CLI refuses the tick without it, and
+        while it is off the derive drain still claims dream jobs itself (0.4.1 behaviour). Markers
+        written by the pass are projected like any other memory — they are hidden from search by
+        ``markers``, not by leaving the projection stale.
+
+        A failed job is completed ``failed`` with its reason and does not stop the pass; the lease
+        machinery decides when a reaped retry is due.
+        """
+        processed = failed = 0
+        touched: dict[str, Scope] = {}
+        while max_jobs is None or (processed + failed) < max_jobs:
+            try:
+                job = self._repository.claim_job(worker_id, kind=DREAM_JOB)
+            except NotFoundError:
+                break  # queue empty — normal end of pass
+            touched[job.scope.model_dump_json()] = job.scope
+            try:
+                report = self.dream(job, markers_out=True, writer=writer)
+                logger.info("dream pass job %s (%s): %s", job.id, job.kind, report)
+                self._repository.complete_job(job.id, "done", worker_id=worker_id)
+                processed += 1
+            except Exception as exc:
+                try:
+                    self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=str(exc))
+                except Exception:
+                    logger.warning("failed to mark dream job %s as failed: %s", job.id, exc, exc_info=True)
+                failed += 1
+        applied = self._project_outbox(touched, worker_id)
+        projection_failed = 1 if applied is None else 0
+        if applied:
+            try:
+                self._repository.ack_outbox_many([event.id for event in applied])
+            except Exception:
+                logger.warning("failed to ack outbox batch", exc_info=True)
+        return WorkerSummary(
+            processed=processed,
+            failed=failed,
+            touched_scopes=tuple(touched.values()),
+            projection_failed=projection_failed,
+        )
+
+    def dream_tick(
+        self,
+        *,
+        tenant_id: str,
+        profile_id: str,
+        writer: DreamWriter | None = None,
+        max_jobs: int | None = None,
+    ) -> tuple[QueueResult, WorkerSummary]:
+        """The opt-in worker tick: queue one dream job per (active scope, mode), then run them."""
+        queued = DreamProducer(self._repository).queue_profile(tenant_id, profile_id)
+        return queued, self.dream_pass(worker_id="dream", writer=writer, max_jobs=max_jobs)
+
     def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> list[Event] | None:
         """Apply pending outbox events for touched scopes incrementally.
 
@@ -446,26 +515,39 @@ class DerivationWorker:
             self._episodes.consolidate_session(job.scope, gateway=gateway, policy=dict(policy or {}))
             return
         if job.kind == "dream":
-            mode = str(job.payload.get("mode", "consolidate"))
-            if mode == "consolidate":
-                self._consolidation.consolidate(job.scope)
-            elif mode == "curate":
-                # M2: the report is the pass's evidence — it is no longer thrown
-                # away. CurationService persists the reference together with its
-                # marker in ONE transaction (so every caller gets it, and a crash
-                # cannot leave a marker promising evidence it does not have); the
-                # worker records the pass summary.
-                curation_report = self._curation.curate(job.scope)
-                logger.info("curation pass %s", curation_report.summary())
-            elif mode == "retention":
-                policy = dict(job.payload.get("policy", {}) or {})
-                self._retention.evaluate(job.scope, policy)
-            elif mode == "retention-archive":
-                policy = dict(job.payload.get("policy", {}) or {})
-                self._retention.apply_archive(job.scope, policy)
-            elif mode == "contradictions":
-                self._contradictions.scan(job.scope)
-            else:
-                raise ValueError(f"unsupported dream mode: {mode}")
+            self.dream(job, markers_out=False)
             return
         raise ValueError(f"unsupported job kind: {job.kind}")
+
+    def dream(self, job: Job, *, markers_out: bool, writer: DreamWriter | None = None) -> dict[str, Any]:
+        """Run one dream job and return its report summary.
+
+        ``markers_out`` keeps the pass's own maintenance markers out of its input. It is on for the
+        dream pass (switch on) and off for a job claimed by the derive drain (switch off, where the
+        pass must behave exactly as it did at 0.4.1).
+        """
+        mode = str(job.payload.get("mode", "consolidate"))
+        exclude_kinds = MARKER_KINDS if markers_out else ()
+        policy = dict(job.payload.get("policy", {}) or {})
+        if mode == "consolidate":
+            consolidation = self._consolidation if writer is None else ConsolidationService(
+                self._repository, writer=writer
+            )
+            return consolidation.consolidate(job.scope, exclude_kinds=exclude_kinds).summary()
+        if mode == "curate":
+            # M2: the report is the pass's evidence — it is no longer thrown
+            # away. CurationService persists the reference together with its
+            # marker in ONE transaction (so every caller gets it, and a crash
+            # cannot leave a marker promising evidence it does not have); the
+            # worker records the pass summary.
+            curation_report = self._curation.curate(job.scope, exclude_kinds=exclude_kinds)
+            logger.info("curation pass %s", curation_report.summary())
+            return curation_report.summary()
+        if mode == "retention":
+            return self._retention.evaluate(job.scope, policy, exclude_kinds=exclude_kinds).summary()
+        if mode == "retention-archive":
+            return self._retention.apply_archive(job.scope, policy, exclude_kinds=exclude_kinds).summary()
+        if mode == "contradictions":
+            pairs = self._contradictions.scan(job.scope, exclude_kinds=exclude_kinds)
+            return {"scope": job.scope.model_dump(), "contradiction_pairs": len(pairs)}
+        raise ValueError(f"unsupported dream mode: {mode}")

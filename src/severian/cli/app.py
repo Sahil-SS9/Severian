@@ -21,7 +21,16 @@ from typing import Any
 
 import typer
 
+from severian.application.dreaming import (
+    ConsolidationService,
+    ContradictionScanService,
+    CurationService,
+    RetentionPolicyService,
+)
+from severian.application.dreamqueue import DREAM_MODES, dreaming_enabled
+from severian.application.dreamwriter import DreamWriter
 from severian.application.eventtime import parse_time
+from severian.application.markers import MARKER_KINDS
 from severian.application.service import SEARCH_VIEWS
 from severian.composition import ServiceBundle, build_bundle
 from severian.domain.errors import NotFoundError
@@ -255,6 +264,8 @@ def work(
     vectors: Path = typer.Option(..., "--vectors"),
     worker_id: str = typer.Option("worker", "--worker-id", help="Unique worker name for job claiming."),
     max_jobs: int = typer.Option(0, "--max-jobs", min=0, help="Process at most N jobs (0 = drain all pending)."),
+    dream_tenant: str = typer.Option("", "--dream-tenant", help="With --dream-profile: run the dreaming tick."),
+    dream_profile: str = typer.Option("", "--dream-profile", help="With --dream-tenant: run the dreaming tick."),
 ) -> None:
     """Process pending derive jobs, then (SEVERIAN_USER_FACTS on) pending fact jobs, then exit.
 
@@ -266,6 +277,10 @@ def work(
     applies to it separately). With the switch off, fact jobs are left
     queued and the fact model is never called. Emits a JSON summary.
     """
+    if bool(dream_tenant) != bool(dream_profile):
+        raise typer.BadParameter("--dream-tenant and --dream-profile go together: the tick is per profile")
+    if dream_tenant:
+        _require_dreaming()
     bundle = build_default_service(database=database, fts=fts, vectors=vectors)
     try:
         from severian.application.worker import DerivationWorker
@@ -295,6 +310,24 @@ def work(
             facts_processed, facts_failed = facts.processed, facts.failed
             facts_projection_failed = facts.projection_failed
             facts_gave_up, facts_deferred = facts.gave_up, facts.deferred
+        dream_payload: dict[str, Any] = {"dream_scopes": 0, "dream_jobs": [], "dream_processed": 0, "dream_failed": 0}
+        if dream_tenant:
+            # The opt-in dreaming tick: queue one job per (active scope, mode), then run them. No cron
+            # is created or enabled anywhere; this only happens while the operator asks for it.
+            queued, dream_summary = worker.dream_tick(
+                tenant_id=dream_tenant,
+                profile_id=dream_profile,
+                writer=DreamWriter.from_env(),
+                max_jobs=None if max_jobs == 0 else max_jobs,
+            )
+            dream_payload = {
+                "dream_scopes": queued.scopes,
+                "dream_modes": list(queued.modes),
+                "dream_jobs": list(queued.jobs),
+                "dream_processed": dream_summary.processed,
+                "dream_failed": dream_summary.failed,
+                "dream_projection_failed": dream_summary.projection_failed,
+            }
         _emit(
             {
                 "processed": summary.processed,
@@ -306,8 +339,104 @@ def work(
                 "facts_projection_failed": facts_projection_failed,
                 "facts_gave_up": facts_gave_up,  # the model could not serve them: failed with the reason
                 "facts_deferred": facts_deferred,  # the model was busy: waiting to be tried again
+                **dream_payload,
             }
         )
+    finally:
+        bundle.close()
+
+
+def _require_dreaming() -> None:
+    """Every Should behaviour of S2 sits behind one switch, off by default."""
+    if not dreaming_enabled():
+        raise typer.BadParameter(
+            "the dreaming pass is off: set SEVERIAN_DREAMING=1 to enable the operator command, "
+            "the worker tick and the merge-summary writer"
+        )
+
+
+@cli.command("dream")
+def dream(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    tenant: str = typer.Option(..., "--tenant"),
+    profile: str = typer.Option(..., "--profile"),
+    collection: str = typer.Option(..., "--collection"),
+    agent: str = typer.Option(..., "--agent"),
+    session: str = typer.Option(..., "--session"),
+    mode: str = typer.Option(
+        ..., "--mode", help="consolidate | curate | retention | retention-archive | contradictions"
+    ),
+    policy: str = typer.Option("", "--policy", help="JSON retention policy (retention modes only)."),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Carry the pass out. Without it this is a dry run: the plan is printed and nothing is written.",
+    ),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Run ONE dreaming pass over a scope, dry run by default.
+
+    The pass is deterministic: code decides what is a duplicate, a restatement or a contradiction
+    (``dreamtriage``). With ``--confirm`` a consolidation supersedes the older duplicate heads and
+    writes one summary per merged group, curation writes its review marker and report, retention
+    writes its plan and archives only if asked. Without it the same plan is printed and nothing is
+    written, and no model is called. The command refuses to run while ``SEVERIAN_DREAMING`` is off.
+    """
+    _require_dreaming()
+    if mode not in DREAM_MODES:
+        raise typer.BadParameter(f"--mode must be one of: {', '.join(DREAM_MODES)}")
+    try:
+        parsed_policy: dict[str, Any] = json.loads(policy) if policy.strip() else {}
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"--policy is not JSON: {exc}") from exc
+    if parsed_policy and not isinstance(parsed_policy, dict):
+        raise typer.BadParameter("--policy must be a JSON object")
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        scope = _scope_from_flags(tenant=tenant, profile=profile, collection=collection, agent=agent, session=session)
+        payload: dict[str, Any] = {"mode": mode, "confirmed": bool(confirm)}
+        if mode == "consolidate":
+            # A dry run never calls a model: the plan shows the deterministic summary it would store.
+            writer = DreamWriter.from_env() if confirm else None
+            report = ConsolidationService(bundle.repository, writer=writer).consolidate(
+                scope, exclude_kinds=MARKER_KINDS, dry_run=not confirm
+            )
+            payload.update(report.summary())
+            payload["planned"] = report.planned
+        elif mode == "curate":
+            curation = CurationService(bundle.repository).curate(
+                scope, exclude_kinds=MARKER_KINDS, dry_run=not confirm
+            )
+            payload.update(curation.summary())
+            payload["low_value_ids"] = list(curation.low_value_ids)
+        elif mode == "retention":
+            evaluation = RetentionPolicyService(bundle.repository).evaluate(
+                scope, parsed_policy, exclude_kinds=MARKER_KINDS
+            )
+            payload.update(evaluation.summary())
+            payload["archived_candidates"] = list(evaluation.archived_ids)
+        elif mode == "retention-archive":
+            archived = RetentionPolicyService(bundle.repository).apply_archive(
+                scope, parsed_policy, exclude_kinds=MARKER_KINDS, dry_run=not confirm
+            )
+            payload.update(archived.summary())
+            payload["archived_candidates"] = list(archived.archived_ids)
+        else:  # contradictions
+            pairs = ContradictionScanService(bundle.repository).scan(scope, exclude_kinds=MARKER_KINDS)
+            payload.update(
+                {
+                    "scope": scope.model_dump(),
+                    "contradiction_pairs": len(pairs),
+                    "pairs": [[pair.memory_a_id, pair.memory_b_id, round(pair.overlap, 4)] for pair in pairs],
+                }
+            )
+        _emit(payload)
+    except typer.BadParameter:
+        raise
+    except Exception as exc:
+        raise typer.BadParameter(f"cannot dream: {exc}") from exc
     finally:
         bundle.close()
 

@@ -424,9 +424,11 @@ class _FakeRepository:
         )
 
     def append_audit(
-        self, scope: Scope, action: str, target_id: str, metadata: Mapping[str, Any]
+        self, scope: Scope, action: str, target_id: str, metadata_: Mapping[str, Any]
     ) -> AuditEvent:
-        return AuditEvent(scope=scope, action=action, target_id=target_id, metadata=dict(metadata))
+        # ``metadata_`` is the port's name (``metadata`` is SQLAlchemy's on the real backends); the
+        # dreaming pass calls it by keyword, so the fake has to spell it the same way.
+        return AuditEvent(scope=scope, action=action, target_id=target_id, metadata=dict(metadata_))
 
     def list_audit(self, scope: Scope) -> list[AuditEvent]:
         return []

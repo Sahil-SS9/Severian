@@ -158,6 +158,60 @@ def test_the_retention_marker_is_hidden_on_either_backend(bundle: Any) -> None:
     assert markers[0].id not in {hit.memory_id for hit in hits}
 
 
+# -- the dream pass is backend-neutral --------------------------------------------------------
+
+
+def test_repeated_consolidation_converges_on_either_backend(bundle: Any) -> None:
+    from severian.application.dreaming import ConsolidationService
+    from severian.application.markers import MARKER_KINDS
+
+    built = bundle
+    scope = provision(built)
+    _remember(built.repository, scope, "the user keeps a steel kettle")
+    _remember(built.repository, scope, "the user keeps a steel kettle")
+    service = ConsolidationService(built.repository)
+    first = service.consolidate(scope, exclude_kinds=MARKER_KINDS)
+    assert first.duplicate_groups and first.consolidated_memory_ids
+    memories_after_first = len(built.repository.list_memories(scope))
+    second = service.consolidate(scope, exclude_kinds=MARKER_KINDS)
+    assert second.duplicate_groups == []
+    assert second.consolidated_memory_ids == []
+    assert len(built.repository.list_memories(scope)) == memories_after_first
+
+
+def test_every_dream_write_is_audited_on_either_backend(bundle: Any) -> None:
+    from severian.application.dreaming import ConsolidationService
+    from severian.application.markers import MARKER_KINDS
+
+    built = bundle
+    scope = provision(built)
+    _remember(built.repository, scope, "the user keeps a steel kettle")
+    _remember(built.repository, scope, "the user keeps a steel kettle")
+    report = ConsolidationService(built.repository).consolidate(scope, exclude_kinds=MARKER_KINDS)
+    rows = [row.action for row in built.repository.list_audit(scope)]
+    assert {"memory.supersede", "dreaming.merge", "dreaming.consolidate"} <= set(rows)
+    marker_id = report.consolidated_memory_ids[0]
+    named = [row for row in built.repository.list_audit(scope) if row.action == "dreaming.consolidate"]
+    assert marker_id in {row.target_id for row in named}
+
+
+def test_the_fake_backend_runs_and_converges_without_sql() -> None:
+    """No SQL, no projections: the contract fake proves the pass is backend-neutral."""
+    from severian.application.dreaming import ConsolidationService, CurationService
+    from severian.application.markers import MARKER_KINDS
+
+    repository = _FakeRepository()
+    scope = _scope()
+    _remember(repository, scope, "the user keeps a steel kettle")
+    _remember(repository, scope, "the user keeps a steel kettle")
+    first = ConsolidationService(repository).consolidate(scope, exclude_kinds=MARKER_KINDS)
+    assert first.duplicate_groups and first.consolidated_memory_ids
+    second = ConsolidationService(repository).consolidate(scope, exclude_kinds=MARKER_KINDS)
+    assert second.duplicate_groups == []
+    CurationService(repository).curate(scope, exclude_kinds=MARKER_KINDS)
+    assert any(memory.kind == "curation_review" for memory in repository.list_memories(scope))
+
+
 # -- C1 on the contract fake: the rule is not SQL-specific ------------------------------------
 
 
