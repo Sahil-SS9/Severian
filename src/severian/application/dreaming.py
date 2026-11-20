@@ -124,10 +124,16 @@ class CurationReport:
         }
 
     def reference(self) -> dict[str, Any]:
-        """What the audit row carries: the ids and counts, never memory content."""
+        """What the audit row carries: the ids and counts, never memory content.
+
+        The review marker this report belongs to is the audit row's ``target_id``
+        and is deliberately NOT repeated here: the write decides which stored
+        memory the row names (an identical marker already in the scope is
+        reused), so a second copy of the id could disagree with the row it rides
+        on.
+        """
         return {
             "report_id": self.report_id,
-            "review_marker_id": self.review_marker_ids[0] if self.review_marker_ids else None,
             "memories_scored": len(self.scored),
             "low_value_candidates": len(self.low_value_ids),
             "low_value_ids": list(self.low_value_ids),
@@ -757,7 +763,7 @@ class CurationService:
             report.contradiction_ids.append((a, b))
         # Write ONE review-marker memory per scope summarising the pass.
         if report.scored:
-            marker = self._repository.add_memory(
+            marker, _reference = self._repository.add_memory_with_audit(
                 Memory(
                     scope=scope,
                     kind="curation_review",
@@ -771,11 +777,12 @@ class CurationService:
                     model_id=self._model_id,
                     prompt_version=self._prompt_version,
                     confidence=1.0,
-                )
+                ),
+                # The marker's text promises "review proposals in audit"; that promise
+                # is only true if the report reference is persisted WITH the marker, in
+                # one transaction (M2). Ids and counts only — never memory content.
+                action="curation.report",
+                metadata_=report.reference(),
             )
             report.review_marker_ids.append(marker.id)
-            # The marker's text promises "review proposals in audit"; that promise
-            # is only true if the report reference is actually persisted (M2).
-            # Ids and counts only — never memory content.
-            self._repository.append_audit(scope, "curation.report", marker.id, report.reference())
         return report

@@ -451,8 +451,10 @@ class DerivationWorker:
                 self._consolidation.consolidate(job.scope)
             elif mode == "curate":
                 # M2: the report is the pass's evidence — it is no longer thrown
-                # away. CurationService persists the audit reference itself (so
-                # every caller gets it); the worker records the pass summary.
+                # away. CurationService persists the reference together with its
+                # marker in ONE transaction (so every caller gets it, and a crash
+                # cannot leave a marker promising evidence it does not have); the
+                # worker records the pass summary.
                 curation_report = self._curation.curate(job.scope)
                 logger.info("curation pass %s", curation_report.summary())
             elif mode == "retention":

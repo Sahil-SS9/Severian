@@ -841,6 +841,43 @@ class PostgreSQLBackend(TaskNoteStore):
     # -- memories ----------------------------------------------------------
 
     def add_memory(self, memory: Memory) -> Memory:
+        return self._write_memory(memory, audit=None)[0]
+
+    def add_memory_with_audit(
+        self,
+        memory: Memory,
+        *,
+        action: str,
+        metadata_: dict[str, Any],
+    ) -> tuple[Memory, AuditEvent]:
+        """Create ``memory`` and ONE audit row naming it, in a single transaction.
+
+        Creation is ``add_memory``'s, unchanged: the same source validation, the
+        same identity key, the same dedupe against an identical memory in the
+        scope and the same ``memory.created`` outbox event, so the projection
+        still sees exactly one creation. The extra row is appended by the
+        audit-only helper to the SAME transaction, so a claim and its evidence
+        cannot be separated by a failure. On an identity hit nothing is inserted
+        and the row names the memory that is actually stored.
+        """
+        stored, row = self._write_memory(memory, audit=(action, dict(metadata_)))
+        assert row is not None  # an audit row was requested, so one is always returned
+        return stored, row
+
+    def _write_memory(
+        self,
+        memory: Memory,
+        *,
+        audit: tuple[str, dict[str, Any]] | None,
+    ) -> tuple[Memory, AuditEvent | None]:
+        """The one creation path behind ``add_memory`` and ``add_memory_with_audit``.
+
+        Same source-observation validation, same identity key, same dedupe and
+        the same creation outbox event either way. ``audit`` asks for ONE extra
+        append-only row: written inside the insert's transaction when the memory
+        is new, and on its own naming the stored memory when an identical one
+        already exists (nothing was created, so nothing else changes).
+        """
         self._require_collection(memory.scope)
         for source_id in memory.source_observation_ids:
             try:
@@ -870,14 +907,58 @@ class PostgreSQLBackend(TaskNoteStore):
         with self.engine.connect() as connection:
             existing = connection.execute(query).scalar_one_or_none()
         if existing is not None:
-            return Memory.model_validate(existing)
-        return self._insert_if_absent(
-            "memory",
-            memory,
-            identity_key=identity_key,
-            emit_events=True,
-            query=query,
+            stored = Memory.model_validate(existing)
+            return stored, self._audit_after_identity_hit(memory.scope, stored.id, audit)
+        try:
+            with self.engine.begin() as connection:
+                return memory, self._insert_memory_row(connection, memory, identity_key, audit)
+        except IntegrityError:
+            with self.engine.connect() as connection:
+                existing = connection.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise ConflictError("memory identity conflict") from None
+            stored = Memory.model_validate(existing)
+            return stored, self._audit_after_identity_hit(memory.scope, stored.id, audit)
+
+    def _insert_memory_row(
+        self,
+        connection: Connection,
+        memory: Memory,
+        identity_key: str,
+        audit: tuple[str, dict[str, Any]] | None,
+    ) -> AuditEvent | None:
+        """Insert the memory, its creation outbox event and optionally one audit row.
+
+        All three statements share the caller's transaction: the memory cannot
+        land without the event the projection needs, nor without the audit row
+        the caller asked for.
+        """
+        connection.execute(
+            records.insert().values(**self._record_values("memory", memory, identity_key=identity_key))
         )
+        if (events := self._event_models("memory", memory)) is not None:
+            event, creation_audit = events
+            connection.execute(
+                records.insert().values(**self._record_values("outbox", event, status="pending"))
+            )
+            connection.execute(records.insert().values(**self._record_values("audit", creation_audit)))
+        if audit is None:
+            return None
+        action, metadata = audit
+        return self._insert_audit_in_transaction(connection, memory.scope, action, memory.id, metadata)
+
+    def _audit_after_identity_hit(
+        self,
+        scope: Scope,
+        target_id: str,
+        audit: tuple[str, dict[str, Any]] | None,
+    ) -> AuditEvent | None:
+        """Write the requested audit row on its own when no memory insert happened."""
+        if audit is None:
+            return None
+        action, metadata = audit
+        with self.engine.begin() as connection:
+            return self._insert_audit_in_transaction(connection, scope, action, target_id, metadata)
 
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]:
         """Insert candidate memories transactionally (P0-4)."""
@@ -1472,9 +1553,11 @@ class PostgreSQLBackend(TaskNoteStore):
 
         ONE conditional UPDATE of the CURRENT payload, guarded on active state and
         the full scope (MG-4/DATA-07): a concurrent close, erase or supersede is
-        never lost to a stale read-back copy, and a memory that is already
-        superseded is refused atomically with ``ConflictError``. The
-        ``memory.supersede`` audit row lands in the same transaction.
+        never lost to a stale read-back copy. A row that does not match — absent,
+        foreign scope, erased or already superseded — is refused with
+        ``ConflictError``; there is no diagnostic read that could tell them apart
+        (owner rule 20/11). The ``memory.supersede`` audit row lands in the same
+        transaction.
         """
         self._require_scope(scope)
         if memory_id == replacement_id:
@@ -1505,11 +1588,13 @@ class PostgreSQLBackend(TaskNoteStore):
                     {"replacement_id": replacement_id},
                 )
         if result.rowcount != 1:
-            # Diagnose AFTER the failed conditional write: the read never feeds a write.
-            memory = self.get_memory(scope, memory_id)  # NotFoundError when absent in this scope
-            if memory.superseded_by_id is not None:
-                raise ConflictError("memory is already superseded")
-            raise ConflictError("memory supersede conflict")
+            # ONE conditional UPDATE, so ONE outcome class (owner rule 20/11). A
+            # row that did not match is not an active memory in this scope:
+            # absent, foreign scope, erased or already superseded. There is no
+            # diagnostic read to classify it — the read would be a second,
+            # non-atomic source of truth and could only leak the existence of a
+            # foreign-scope row.
+            raise ConflictError("memory is not an active memory in this scope")
         return self.get_memory(scope, memory_id)
 
     def revise_memory(

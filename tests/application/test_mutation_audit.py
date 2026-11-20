@@ -198,7 +198,9 @@ def test_the_curation_pass_persists_its_report_reference(bundle: ServiceBundle, 
     assert reported.target_id == markers[0].id  # the reference points at the marker it summarises
     metadata = reported.metadata
     assert metadata["report_id"]  # a durable reference to the report itself
-    assert metadata["review_marker_id"] == markers[0].id
+    # The marker is named once, by target_id (asserted above): the row and the
+    # metadata cannot disagree about which marker the reference belongs to.
+    assert "review_marker_id" not in metadata
     assert metadata["memories_scored"] >= 1
     assert old.id in metadata["low_value_ids"]  # the proposals are readable from audit
     assert metadata["low_value_candidates"] == len(metadata["low_value_ids"])

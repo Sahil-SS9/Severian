@@ -126,6 +126,29 @@ class ScopedCanonicalPort(Protocol):
         ...
 
     def add_memory(self, memory: Memory) -> Memory: ...
+    def add_memory_with_audit(
+        self,
+        memory: Memory,
+        *,
+        action: str,
+        metadata_: dict[str, Any],
+    ) -> tuple[Memory, AuditEvent]:
+        """Create ``memory`` AND one audit row for it, in a single transaction.
+
+        Creation is ``add_memory``'s and is unchanged: same identity key, same
+        dedupe against an identical memory in the scope, same ``memory.created``
+        outbox event, so the projection still sees exactly one creation. The one
+        addition is an append-only audit row — ``action`` against the stored
+        memory's id, carrying ``metadata_`` (ids, counts and times, never
+        content) — written in the SAME transaction, so neither write can land
+        without the other.
+
+        Use this instead of ``add_memory`` followed by ``append_audit``: two
+        calls are two transactions, and a failure between them leaves a claim
+        with no evidence. On an identity hit nothing is inserted, and the row
+        names the memory that is actually stored.
+        """
+        ...
     def add_memories_batch(self, memories: list[Memory]) -> list[Memory]: ...
     def publish_derivation(
         self,
@@ -208,6 +231,14 @@ class ScopedCanonicalPort(Protocol):
         dreaming/consolidation pass: the replaced memory stays in history
         (P0-1), but default reads and projection rebuilds drop it. Returns
         the superseded memory (now marked).
+
+        Implemented as ONE conditional update guarded on the active state and
+        the full scope, so a concurrent close, erase or supersede is never lost.
+        Anything the guard rejects — an absent id, a row in another scope, an
+        erased or already superseded memory — raises ``ConflictError`` and
+        changes nothing. This deliberately does not distinguish "absent" from
+        "already superseded": a diagnostic read would be a second, non-atomic
+        source of truth and could reveal that a foreign-scope row exists.
         """
         ...
     def revise_memory(

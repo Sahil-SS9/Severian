@@ -776,15 +776,29 @@ def test_supersede_memory_writes_one_audit_row_and_refuses_a_second(backend, tmp
     _audit_round_trip(backend, scope, tmp_path, "supersede")
 
 
-def test_supersede_memory_respects_scope_and_audits_nothing_elsewhere(backend) -> None:
+def test_supersede_memory_refuses_a_foreign_scope_and_an_absent_id_with_conflict(backend) -> None:
+    """One conditional UPDATE, so one outcome: nothing matched is ``ConflictError``.
+
+    Owner rule 20/11 (supersedes the old "absent ⇒ ``NotFoundError``" port
+    convention): the write is a single rowcount-guarded UPDATE, and ``rowcount
+    == 0`` means the target is not an active memory in this scope — absent,
+    foreign scope, erased or already superseded. Every one of those surfaces as
+    ``ConflictError`` on BOTH backends, with no diagnostic read to classify it
+    and nothing written.
+    """
     scope, other = _unique_scope(), _unique_scope()
     keeper = _memory_for(backend, scope, "The user prefers tea.")
     loser = _memory_for(backend, scope, "The user prefers coffee.")
 
-    with pytest.raises(NotFoundError):
-        backend.supersede_memory(other, loser.id, keeper.id)
+    with pytest.raises(ConflictError):
+        backend.supersede_memory(other, loser.id, keeper.id)  # foreign scope
+    with pytest.raises(ConflictError):
+        backend.supersede_memory(scope, "no-such-memory", keeper.id)  # absent
+    with pytest.raises(ConflictError):
+        backend.supersede_memory(scope, loser.id, loser.id)  # itself
 
     assert backend.get_memory(scope, loser.id).superseded_by_id is None
+    assert backend.get_memory(scope, keeper.id).superseded_by_id is None
     assert _audit_rows(backend, other) == []
     assert _audit_rows(backend, scope, "memory.supersede") == []
 
@@ -1094,9 +1108,8 @@ def test_relation_end_and_its_audit_row_commit_with_the_publish(backend) -> None
     assert _audit_rows(backend, scope, "relation.end") == []
 
 
-def test_curation_report_reference_is_audited_on_both_backends(backend, tmp_path) -> None:
-    """The marker claims "review proposals in audit"; the reference must persist."""
-    scope = _unique_scope()
+def _curation_corpus(backend: Any, scope: Scope) -> tuple[Memory, Memory]:
+    """A fresh memory and a stale low-confidence one, so one pass scores both."""
     fresh = _memory_for(backend, scope, "The user likes tea with breakfast.")
     stale = backend.add_memory(
         Memory(
@@ -1110,6 +1123,13 @@ def test_curation_report_reference_is_audited_on_both_backends(backend, tmp_path
             created_at=datetime.now(UTC) - timedelta(days=400),
         )
     )
+    return fresh, stale
+
+
+def test_curation_report_reference_is_audited_on_both_backends(backend, tmp_path) -> None:
+    """The marker claims "review proposals in audit"; the reference must persist."""
+    scope = _unique_scope()
+    fresh, stale = _curation_corpus(backend, scope)
 
     report = CurationService(backend).curate(scope)
 
@@ -1118,13 +1138,146 @@ def test_curation_report_reference_is_audited_on_both_backends(backend, tmp_path
     assert [row.target_id for row in rows] == report.review_marker_ids
     metadata = rows[0].metadata
     assert metadata["report_id"] == report.report_id
-    assert metadata["review_marker_id"] == report.review_marker_ids[0]
+    # The marker is named ONCE, by the row's target_id: a second copy of the id in
+    # metadata could disagree with the row it rides on (an identical marker
+    # already in the scope is reused, and the write decides which one it names).
+    assert "review_marker_id" not in metadata
     assert metadata["memories_scored"] >= 2
     assert metadata["low_value_candidates"] == len(metadata["low_value_ids"])
     assert stale.id in metadata["low_value_ids"]
     assert fresh.id not in metadata["low_value_ids"]
     assert metadata["contradiction_pairs"] == len(metadata["contradiction_ids"])
     _audit_round_trip(backend, scope, tmp_path, "curation")
+
+
+def test_add_memory_with_audit_writes_one_memory_and_one_audit_row(backend, tmp_path) -> None:
+    """The combined write: ``add_memory``'s creation, plus ONE audit row, atomically."""
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content="the user prefers tea"))
+    memory = Memory(
+        scope=scope,
+        kind="curation_review",
+        content="Curation review: 2 memories scored, 0 low-value candidates.",
+        source_observation_ids=[observation.id],
+        model_id="m",
+        prompt_version="v",
+        confidence=1.0,
+    )
+    before = _outbox_ids(backend)
+
+    stored, row = backend.add_memory_with_audit(
+        memory,
+        action="curation.report",
+        metadata_={"report_id": "r-1", "observed_at": datetime(2026, 2, 3, 9, 30, tzinfo=UTC)},
+    )
+
+    assert stored.id == memory.id
+    assert backend.get_memory(scope, memory.id).content == memory.content
+    assert (row.action, row.target_id) == ("curation.report", memory.id)
+    # The RETURNED event carries the caller's own values. What is STORED goes
+    # through pydantic's JSON encoding, so a datetime lands as the Z form
+    # ("2026-02-03T09:30:00Z"), like every other new payload field, and the
+    # export/import round-trip keeps it intact.
+    assert row.metadata["observed_at"] == datetime(2026, 2, 3, 9, 30, tzinfo=UTC)
+    assert [(r.action, r.target_id, r.metadata) for r in _audit_rows(backend, scope, "curation.report")] == [
+        ("curation.report", memory.id, {"report_id": "r-1", "observed_at": "2026-02-03T09:30:00Z"})
+    ]
+
+    # add_memory's creation semantics are kept: exactly one memory.created outbox
+    # event, which is what drives the projection.
+    new_events = [item for item in backend.pending_outbox() if item.id not in before]
+    assert [(item.kind, item.payload) for item in new_events] == [("memory.created", {"id": memory.id})]
+
+    # A repeat call dedupes onto the stored marker (one memory) and still lands its
+    # own reference row, naming the memory that is actually stored.
+    again, second = backend.add_memory_with_audit(memory, action="curation.report", metadata_={"report_id": "r-2"})
+    assert again.id == memory.id and second.target_id == memory.id
+    assert len([m for m in backend.list_memories(scope) if m.kind == "curation_review"]) == 1
+    assert len(_audit_rows(backend, scope, "curation.report")) == 2
+    _audit_round_trip(backend, scope, tmp_path, "memory-with-audit")
+
+
+def test_add_memory_with_audit_and_its_audit_row_commit_together(backend) -> None:
+    """Same transaction: no memory, no outbox event and no audit row when either write fails."""
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content="the user prefers tea"))
+    memory = Memory(
+        scope=scope,
+        kind="curation_review",
+        content="Curation review: 2 memories scored, 0 low-value candidates.",
+        source_observation_ids=[observation.id],
+        model_id="m",
+        prompt_version="v",
+        confidence=1.0,
+    )
+    before = _outbox_ids(backend)
+
+    def reject(_connection, _cursor, statement, parameters, _context, _many):
+        if _is_audit_insert(statement, parameters, "curation.report"):
+            raise RuntimeError("injected audit failure")
+
+    event.listen(backend.engine, "before_cursor_execute", reject)
+    try:
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            backend.add_memory_with_audit(memory, action="curation.report", metadata_={"report_id": "r-1"})
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", reject)
+
+    assert [m for m in backend.list_memories(scope) if m.kind == "curation_review"] == []
+    assert _audit_rows(backend, scope, "curation.report") == []
+    assert _outbox_ids(backend) == before
+
+
+def test_curation_marker_and_its_report_reference_commit_together(backend) -> None:
+    """The marker's "review proposals in audit" claim is written in ONE transaction.
+
+    The marker used to be ``add_memory`` (+ its ``memory.created`` outbox event)
+    followed by a separate ``append_audit``. A failure on the second write left a
+    marker promising evidence it does not have, so the claim was untrue exactly
+    when it mattered. Injecting the failure on the reference INSERT must now undo
+    the marker, its outbox event and the reference together.
+    """
+    scope = _unique_scope()
+    _curation_corpus(backend, scope)
+    before = _outbox_ids(backend)
+
+    def reject(_connection, _cursor, statement, parameters, _context, _many):
+        if _is_audit_insert(statement, parameters, "curation.report"):
+            raise RuntimeError("injected audit failure")
+
+    event.listen(backend.engine, "before_cursor_execute", reject)
+    try:
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            CurationService(backend).curate(scope)
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", reject)
+
+    assert [m for m in backend.list_memories(scope) if m.kind == "curation_review"] == []
+    assert _audit_rows(backend, scope, "curation.report") == []
+    assert _outbox_ids(backend) == before
+
+
+def test_the_curation_pass_creates_its_marker_the_normal_way(backend, tmp_path) -> None:
+    """Success shape: one marker, one reference, and ``add_memory``'s outbox behaviour kept."""
+    scope = _unique_scope()
+    fresh, stale = _curation_corpus(backend, scope)
+    before = _outbox_ids(backend)
+
+    report = CurationService(backend).curate(scope)
+
+    markers = [m for m in backend.list_memories(scope) if m.kind == "curation_review"]
+    assert [m.id for m in markers] == report.review_marker_ids
+    rows = _audit_rows(backend, scope, "curation.report")
+    assert [row.target_id for row in rows] == [markers[0].id]
+    assert rows[0].metadata == report.reference()
+    assert rows[0].metadata["report_id"] == report.report_id
+    assert stale.id in rows[0].metadata["low_value_ids"]
+
+    # Exactly one new outbox event: the marker's own creation. The reference adds none.
+    new_events = [item for item in backend.pending_outbox() if item.id not in before]
+    assert [(item.kind, item.payload) for item in new_events] == [("memory.created", {"id": markers[0].id})]
+    assert [item.kind for item in backend.pending_outbox() if "curation" in item.kind] == []
+    _audit_round_trip(backend, scope, tmp_path, "curation-atomic")
 
 
 def test_audit_rows_stay_append_only(backend) -> None:

@@ -161,6 +161,23 @@ class _FakeRepository:
         self._memories[self._key(memory.scope, memory.id)] = memory
         return memory
 
+    def add_memory_with_audit(
+        self,
+        memory: Memory,
+        *,
+        action: str,
+        metadata_: dict[str, Any],
+    ) -> tuple[Memory, AuditEvent]:
+        # The fake holds no audit table (``list_audit`` is empty), so the combined
+        # write is the memory insert plus the returned row: enough to satisfy the
+        # port surface without inventing storage the contract does not require.
+        return self.add_memory(memory), AuditEvent(
+            scope=memory.scope,
+            action=action,
+            target_id=memory.id,
+            metadata=dict(metadata_),
+        )
+
     def get_memory(self, scope: Scope, memory_id: str) -> Memory:
         found = self._memories.get(self._key(scope, memory_id))
         if found is None:
@@ -356,19 +373,21 @@ class _FakeRepository:
 
     def supersede_memory(self, scope: Scope, memory_id: str, replacement_id: str) -> Memory:
         for key in list(self._memories):
-            rid, *s = key
+            _rid, *s = key
             if tuple(s) != tuple(scope.model_dump().values()):
                 continue
             memory = self._memories[key]
             if memory.id == memory_id:
                 if memory.superseded_by_id is not None:
-                    raise ConflictError("memory is already superseded")
+                    raise ConflictError("memory is not an active memory in this scope")
                 if memory_id == replacement_id:
                     raise ConflictError("cannot supersede a memory by itself")
                 updated = memory.model_copy(update={"superseded_by_id": replacement_id})
                 self._memories[key] = updated
                 return updated
-        raise NotFoundError(f"memory {memory_id} not found")
+        # One outcome class, matching both real backends: absent, foreign scope,
+        # erased and already superseded are indistinguishable to the caller.
+        raise ConflictError("memory is not an active memory in this scope")
 
     def add_entity(self, scope: Scope, kind: str, name: str) -> Entity:
         return Entity(scope=scope, kind=kind, name=name)
