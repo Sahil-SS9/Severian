@@ -29,6 +29,30 @@ A gateway is marked cloud-backed with `is_cloud = True`. The derivation service 
 
 Results are scope-filtered before ranking. Hybrid ranking uses reciprocal rank fusion across lexical and vector results. Every returned result retains `Memory.source_observation_ids`; `ContextAssembler` emits these source IDs with a character budget.
 
+## Relation validity (S3)
+
+Graph relations carry an optional validity window, and `SEVERIAN_RELATION_EVENT_TIME` (off by default)
+decides whether the write path dates them.
+
+- **Start.** With the switch on, a relation the derive path creates takes
+  `message_time(observation.source, observation.created_at)` as its `valid_from` — the instant its source
+  message was written, on the same clock as the memory path. Relation identity stays free of validity, so
+  the snapshot contract and cross-backend round-trips are unchanged.
+- **End.** When a single-valued predicate (`works_at`, `located_in`, `based_in`) gets a new value, the old
+  one ends at the **newer statement's** event time, not at the wall clock. Restating the old value reopens
+  it. The replacement audit row carries the same instant in `valid_to`.
+- **Out of order.** A statement dated *before* a fact began is history arriving late, not a replacement:
+  nothing is ended. Both windows stay visible rather than hiding a current value on the strength of an
+  older statement.
+- **Boundaries.** A window is half-open, `[valid_from, valid_to)`: current at its start, gone at its end,
+  so the handover instant belongs to the new value alone. Times compare as UTC instants, so mixed zones
+  and naive save times cannot order wrongly.
+- **Existing relations.** Relations written before the switch have no start time and are left that way —
+  no backfill — because that would be a write to every store with no measured need. They are still *ended*
+  at the newer statement's instant when replaced.
+
+With the switch off, the write path and the graph's read boundary behave exactly as in 0.4.1.
+
 ## Current boundaries
 
 - No network or cloud call is made by the engine itself.
