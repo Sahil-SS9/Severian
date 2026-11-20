@@ -49,9 +49,7 @@ def _flags(stores: dict[str, Path]) -> list[str]:
 
 def _seed(runner: CliRunner, stores: dict[str, Path]) -> str:
     assert (
-        runner.invoke(
-            cli, ["ingest", *_flags(stores), *SCOPE_FLAGS, "--content", SECRET, "--source", "{}"]
-        ).exit_code
+        runner.invoke(cli, ["ingest", *_flags(stores), *SCOPE_FLAGS, "--content", SECRET, "--source", "{}"]).exit_code
         == 0
     )
     assert runner.invoke(cli, ["work", *_flags(stores), "--max-jobs", "10"]).exit_code == 0
@@ -191,9 +189,7 @@ def test_a_busy_store_reports_the_incomplete_checkpoint_and_still_exits_zero(
     reader.execute("BEGIN")
     reader.execute("SELECT count(*) FROM records").fetchone()
     try:
-        result = runner.invoke(
-            cli, ["purge", *_flags(stores), *SCOPE_FLAGS, "--observation", observation, "--confirm"]
-        )
+        result = runner.invoke(cli, ["purge", *_flags(stores), *SCOPE_FLAGS, "--observation", observation, "--confirm"])
     finally:
         reader.execute("ROLLBACK")
         reader.close()
@@ -202,9 +198,7 @@ def test_a_busy_store_reports_the_incomplete_checkpoint_and_still_exits_zero(
     payload = json.loads(result.stdout)
     assert payload["confirmed"] is True and payload["applied"]["memories"] == 1
     assert payload["compaction_complete"] is False, "an incomplete checkpoint was reported as complete"
-    canonical = [
-        entry for entry in payload["compacted"] if entry["path"] == str(stores["db"])
-    ]
+    canonical = [entry for entry in payload["compacted"] if entry["path"] == str(stores["db"])]
     assert canonical, "the canonical store was not compacted at all"
     assert canonical[0]["checkpointed"] is False
     assert canonical[0]["error"], "a busy checkpoint must say why it is incomplete"
@@ -284,9 +278,7 @@ def test_a_failed_purge_names_itself_once_and_keeps_the_rows(
 
     monkeypatch.setattr(MemoryService, "purge_observation", boom)
 
-    result = runner.invoke(
-        cli, ["purge", *_flags(stores), *SCOPE_FLAGS, "--observation", observation, "--confirm"]
-    )
+    result = runner.invoke(cli, ["purge", *_flags(stores), *SCOPE_FLAGS, "--observation", observation, "--confirm"])
 
     assert result.exit_code == 2, result.output
     assert result.output.count("cannot purge") == 1, result.output

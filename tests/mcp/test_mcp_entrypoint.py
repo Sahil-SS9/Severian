@@ -4,6 +4,7 @@ The stdio transport cannot perform interactive authentication, so launch
 must pin tenant/profile or explicitly opt into trusted single-tenant mode.
 These tests exercise the parser/resolver without opening a store.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -180,20 +181,23 @@ def test_database_paths_still_required(monkeypatch: pytest.MonkeyPatch):
 def test_path_arguments_are_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     captured = _install_fake_build(monkeypatch)
     db, fts, vectors = tmp_path / "s.db", tmp_path / "f.db", tmp_path / "v.db"
-    assert mcp_main.main(
-        [
-            "--database",
-            str(db),
-            "--fts",
-            str(fts),
-            "--vectors",
-            str(vectors),
-            "--tenant-id",
-            "acme",
-            "--profile-id",
-            "work",
-        ]
-    ) == 0
+    assert (
+        mcp_main.main(
+            [
+                "--database",
+                str(db),
+                "--fts",
+                str(fts),
+                "--vectors",
+                str(vectors),
+                "--tenant-id",
+                "acme",
+                "--profile-id",
+                "work",
+            ]
+        )
+        == 0
+    )
     assert captured["database"] == db
     assert captured["fts"] == fts
     assert captured["vectors"] == vectors

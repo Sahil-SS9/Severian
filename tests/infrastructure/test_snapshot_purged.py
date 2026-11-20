@@ -129,9 +129,7 @@ def test_a_purged_observation_with_the_marker_and_no_identity_validates() -> Non
 def test_a_purged_memory_with_the_marker_and_no_identity_validates() -> None:
     observation = _purged_observation()
     memory = _purged_memory(source_observation_ids=[observation.id])
-    validate_snapshot(
-        [_item("observation", observation, content_hash=MARKER_HASH), _item("memory", memory)]
-    )
+    validate_snapshot([_item("observation", observation, content_hash=MARKER_HASH), _item("memory", memory)])
 
 
 def test_a_purged_entity_with_the_marker_and_no_identity_validates() -> None:

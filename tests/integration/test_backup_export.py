@@ -69,9 +69,7 @@ M0_QUERIES = ("Alice works at", "deploy window", "Globex", "Acme", "Alice")
 
 
 def _m0_scope(tenant: str, collection: str) -> Scope:
-    return Scope(
-        tenant_id=tenant, profile_id="p1", collection_id=collection, agent_id="a1", session_id="s1"
-    )
+    return Scope(tenant_id=tenant, profile_id="p1", collection_id=collection, agent_id="a1", session_id="s1")
 
 
 def _m0_shape(bundle, scope) -> None:
@@ -92,10 +90,7 @@ def _m0_shape(bundle, scope) -> None:
     worker.drain(gateway=bundle.gateway)
     service.set_task_note(scope, task="m0-round-trip", state="first state", metadata={"step": 1})
     service.set_task_note(scope, task="m0-round-trip", state="second state", metadata={"step": 2})
-    active = [
-        m for m in bundle.repository.list_memories(scope)
-        if m.superseded_by_id is None and m.valid_until is None
-    ]
+    active = [m for m in bundle.repository.list_memories(scope) if m.superseded_by_id is None and m.valid_until is None]
     if len(active) >= 2:
         bundle.repository.close_memory(
             scope, active[0].id, valid_until=datetime(2026, 3, 1, tzinfo=UTC), replaced_by_id=active[1].id
@@ -109,10 +104,7 @@ def _m0_shape(bundle, scope) -> None:
 
 
 def _m0_top10(bundle, scope):
-    return [
-        [hit.memory_id for hit in bundle.service.search(scope, query=q, limit=10)]
-        for q in M0_QUERIES
-    ]
+    return [[hit.memory_id for hit in bundle.service.search(scope, query=q, limit=10)] for q in M0_QUERIES]
 
 
 def _m0_records(document: str):
@@ -120,9 +112,7 @@ def _m0_records(document: str):
 
 
 def test_derive_shaped_store_round_trips(tmp_path):
-    source = build_bundle(
-        database=tmp_path / "s.db", fts=tmp_path / "s.fts", vectors=tmp_path / "s.vec"
-    )
+    source = build_bundle(database=tmp_path / "s.db", fts=tmp_path / "s.fts", vectors=tmp_path / "s.vec")
     scope = _m0_scope("m0t", "m0c")
     source.repository.create_collection(Collection(id="m0c", tenant_id="m0t", name="M0"))
     _m0_shape(source, scope)
@@ -130,9 +120,7 @@ def test_derive_shaped_store_round_trips(tmp_path):
     before = _m0_top10(source, scope)
     source.close()
 
-    target = build_bundle(
-        database=tmp_path / "i.db", fts=tmp_path / "i.fts", vectors=tmp_path / "i.vec"
-    )
+    target = build_bundle(database=tmp_path / "i.db", fts=tmp_path / "i.fts", vectors=tmp_path / "i.vec")
     target.repository.import_json(exported)
     target.projection.rebuild(scope)
     assert _m0_top10(target, scope) == before
@@ -141,15 +129,11 @@ def test_derive_shaped_store_round_trips(tmp_path):
 
 
 def test_task_note_records_round_trip(tmp_path):
-    source = build_bundle(
-        database=tmp_path / "n.db", fts=tmp_path / "n.fts", vectors=tmp_path / "n.vec"
-    )
+    source = build_bundle(database=tmp_path / "n.db", fts=tmp_path / "n.fts", vectors=tmp_path / "n.vec")
     scope = _m0_scope("m0n", "m0nc")
     source.repository.create_collection(Collection(id="m0nc", tenant_id="m0n", name="M0 Notes"))
     source.service.ingest_observation(scope, content="M0 task note anchor")
-    DerivationWorker(source.repository, source.derivation, source.projection).drain(
-        gateway=source.gateway
-    )
+    DerivationWorker(source.repository, source.derivation, source.projection).drain(gateway=source.gateway)
     source.service.set_task_note(scope, task="m0-note", state="v1", metadata={})
     source.service.set_task_note(scope, task="m0-note", state="v2", metadata={})
     source.service.clear_task_note(scope, task="m0-note")
@@ -157,9 +141,7 @@ def test_task_note_records_round_trip(tmp_path):
     exported = source.repository.export_json()
     source.close()
 
-    target = build_bundle(
-        database=tmp_path / "ni.db", fts=tmp_path / "ni.fts", vectors=tmp_path / "ni.vec"
-    )
+    target = build_bundle(database=tmp_path / "ni.db", fts=tmp_path / "ni.fts", vectors=tmp_path / "ni.vec")
     target.repository.import_json(exported)
     assert _m0_records(target.repository.export_json()) == _m0_records(exported)
     current, history = target.service.get_task_note(scope, task="m0-note")
@@ -169,9 +151,7 @@ def test_task_note_records_round_trip(tmp_path):
 
 
 def test_manual_dated_relation_round_trips(tmp_path):
-    source = build_bundle(
-        database=tmp_path / "r.db", fts=tmp_path / "r.fts", vectors=tmp_path / "r.vec"
-    )
+    source = build_bundle(database=tmp_path / "r.db", fts=tmp_path / "r.fts", vectors=tmp_path / "r.vec")
     scope = _m0_scope("m0r", "m0rc")
     source.repository.create_collection(Collection(id="m0rc", tenant_id="m0r", name="M0 Relations"))
     alice = source.repository.add_entity(scope, "person", "M0 Dated Ada")
@@ -183,9 +163,7 @@ def test_manual_dated_relation_round_trips(tmp_path):
     exported = source.repository.export_json()
     source.close()
 
-    target = build_bundle(
-        database=tmp_path / "ri.db", fts=tmp_path / "ri.fts", vectors=tmp_path / "ri.vec"
-    )
+    target = build_bundle(database=tmp_path / "ri.db", fts=tmp_path / "ri.fts", vectors=tmp_path / "ri.vec")
     target.repository.import_json(exported)
     assert _m0_records(target.repository.export_json()) == _m0_records(exported)
     target.close()
@@ -195,15 +173,11 @@ def test_manual_dated_relation_round_trips(tmp_path):
 
 
 def _m0_exported_records(tmp_path, content="Alice works at Acme"):
-    bundle = build_bundle(
-        database=tmp_path / "f.db", fts=tmp_path / "f.fts", vectors=tmp_path / "f.vec"
-    )
+    bundle = build_bundle(database=tmp_path / "f.db", fts=tmp_path / "f.fts", vectors=tmp_path / "f.vec")
     scope = _m0_scope("m0f", "m0fc")
     bundle.repository.create_collection(Collection(id="m0fc", tenant_id="m0f", name="M0 Forged"))
     bundle.service.ingest_observation(scope, content=content)
-    DerivationWorker(bundle.repository, bundle.derivation, bundle.projection).drain(
-        gateway=bundle.gateway
-    )
+    DerivationWorker(bundle.repository, bundle.derivation, bundle.projection).drain(gateway=bundle.gateway)
     records = json.loads(bundle.repository.export_json())["records"]
     bundle.close()
     return records
@@ -218,9 +192,7 @@ def test_forged_relation_identity_is_rejected(tmp_path):
 
 
 def test_forged_task_note_key_on_retired_version_is_rejected(tmp_path):
-    bundle = build_bundle(
-        database=tmp_path / "tn.db", fts=tmp_path / "tn.fts", vectors=tmp_path / "tn.vec"
-    )
+    bundle = build_bundle(database=tmp_path / "tn.db", fts=tmp_path / "tn.fts", vectors=tmp_path / "tn.vec")
     scope = _m0_scope("m0tn", "m0tnc")
     bundle.repository.create_collection(Collection(id="m0tnc", tenant_id="m0tn", name="M0 TN"))
     bundle.service.set_task_note(scope, task="m0-forged", state="v1", metadata={})
@@ -237,9 +209,7 @@ def test_forged_task_note_key_on_retired_version_is_rejected(tmp_path):
 
 
 def test_forged_task_note_status_is_rejected(tmp_path):
-    bundle = build_bundle(
-        database=tmp_path / "ts.db", fts=tmp_path / "ts.fts", vectors=tmp_path / "ts.vec"
-    )
+    bundle = build_bundle(database=tmp_path / "ts.db", fts=tmp_path / "ts.fts", vectors=tmp_path / "ts.vec")
     scope = _m0_scope("m0ts", "m0tsc")
     bundle.repository.create_collection(Collection(id="m0tsc", tenant_id="m0ts", name="M0 TS"))
     bundle.service.set_task_note(scope, task="m0-status", state="v1", metadata={})

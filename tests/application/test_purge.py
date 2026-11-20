@@ -571,9 +571,7 @@ def test_a_legacy_erased_row_does_not_block_restating_the_same_text(tmp_path: Pa
     database, fts, vectors = tmp_path / "legacy.db", tmp_path / "legacy.fts", tmp_path / "legacy.vec"
     scoped = SCOPE.model_copy(update={"collection_id": "legacy-profile"})
     bundle = build_bundle(database=database, fts=fts, vectors=vectors)
-    bundle.repository.create_collection(
-        Collection(id=scoped.collection_id, tenant_id=scoped.tenant_id, name="L")
-    )
+    bundle.repository.create_collection(Collection(id=scoped.collection_id, tenant_id=scoped.tenant_id, name="L"))
     try:
         first = bundle.service.ingest_observation(scoped, content=SECRET, source={}).observation_id
     finally:

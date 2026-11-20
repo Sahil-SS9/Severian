@@ -49,9 +49,7 @@ def test_an_idle_store_reports_both_checkpoints_and_the_vacuum(tmp_path: Path) -
     assert result.path == str(path)
 
 
-def test_a_busy_checkpoint_is_reported_and_never_claimed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_busy_checkpoint_is_reported_and_never_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Probe D's state: the log cannot be flushed while a reader holds it open."""
     path = _store(tmp_path / "busy.db")
     monkeypatch.setattr(compact_module, "_checkpoint", lambda connection: (False, True))
@@ -64,9 +62,7 @@ def test_a_busy_checkpoint_is_reported_and_never_claimed(
     assert result.error is not None and "in use" in result.error.lower()
 
 
-def test_a_failed_final_checkpoint_is_reported_as_incomplete(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_failed_final_checkpoint_is_reported_as_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """VACUUM's own writes land in the log; a busy final checkpoint leaves them there."""
     path = _store(tmp_path / "final.db")
     steps = iter([(True, False), (False, True)])
@@ -81,9 +77,7 @@ def test_a_failed_final_checkpoint_is_reported_as_incomplete(
     assert result.error is not None and "after VACUUM" in result.error
 
 
-def test_a_failing_vacuum_is_reported_and_never_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_failing_vacuum_is_reported_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = _store(tmp_path / "vacuum.db")
     monkeypatch.setattr(compact_module, "_vacuum", lambda connection: "VACUUM failed: database is locked")
 

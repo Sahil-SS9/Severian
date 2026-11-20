@@ -16,6 +16,7 @@ Three pieces:
 * :class:`PurgePlan` / :class:`PurgeReport` / :class:`EraseOutcome` — the value objects
   the port returns. Ids and counts only; never content.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -129,8 +130,7 @@ def _cites_the_chain(relation: Relation, chain_ids: set[str]) -> bool:
     "every retracted relation in the graph" (M1 F1).
     """
     return bool(
-        chain_ids.intersection(relation.source_observation_ids)
-        or chain_ids.intersection(relation.retracted_for_ids)
+        chain_ids.intersection(relation.source_observation_ids) or chain_ids.intersection(relation.retracted_for_ids)
     )
 
 

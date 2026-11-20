@@ -26,6 +26,7 @@ the FTS5 index and the vector index. It cannot reach:
 
 So no "physically purged everywhere" claim is made anywhere in this code or its output.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -56,12 +57,7 @@ class CompactionResult:
     @property
     def complete(self) -> bool:
         """True only when every step ran and finished: the file is physically compacted."""
-        return (
-            self.checkpointed
-            and self.vacuumed
-            and self.final_checkpointed is True
-            and self.error is None
-        )
+        return self.checkpointed and self.vacuumed and self.final_checkpointed is True and self.error is None
 
 
 def _checkpoint(connection: sqlite3.Connection) -> tuple[bool, bool]:
