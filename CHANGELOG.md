@@ -3,6 +3,25 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased]
+
+### Added
+- **Relation validity from event time (S3, opt-in).** `SEVERIAN_RELATION_EVENT_TIME=1` makes the derive
+  path date graph relations from their source message, the same clock the memory path uses. A new relation
+  starts at `message_time(observation.source, observation.created_at)`; when a single-valued predicate
+  (`works_at`, `located_in`, `based_in`) gets a new value, the old one ends at the newer statement's event
+  time instead of the wall clock, so the handover instant belongs to the new value under half-open
+  `[valid_from, valid_to)` windows. A statement dated before a fact began is history, not a replacement:
+  nothing is ended. Times compare as UTC instants, so mixed zones and naive save times cannot order
+  wrongly. Relations written before the switch keep their empty start time (no backfill). The switch is off
+  by default; with it off the write path and the graph's read boundary are byte-identical to 0.4.1.
+- `publish_derivation` takes `relation_valid_from`, so the application layer owns the instant and a backend
+  only stores it: relation identity stays free of validity and the snapshot contract is unchanged.
+
+### Removed
+- `EntityExtractionService.extract_and_upsert` (S3): uncalled, and its separate `add_entity`/`add_relation`
+  writes could leave a relation without its memory — the atomicity `publish_derivation` exists to provide.
+
 ## [0.5.0] - 2026-11-20
 
 Deterministic-first dreaming producer (S2), with C1.
