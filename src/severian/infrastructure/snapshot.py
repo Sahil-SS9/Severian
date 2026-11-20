@@ -8,7 +8,11 @@ revalidates every record semantically before any write:
    round-trip (``model_dump(mode="json") == payload``) — equivalent to
    ``extra="forbid"`` plus strict typing for every field.
 2. Recompute every derived field (content hash, identity key) and
-   require equality with the exported columns.
+   require equality with the exported columns. Relations have TWO writer
+   schemes (the derive path keys ``("relation", s, p, o)``; ``add_relation``
+   keys ``(s, p, o, valid_from, valid_to)`` with datetime objects); a key is
+   accepted only if it matches one of them exactly. Task notes key only their
+   ``current`` version; retired versions must carry no key.
 3. Verify first-class scope columns match the payload's scope
    (forging ``tenant_id`` in the column while the payload names another
    scope is rejected).
@@ -28,11 +32,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any
 
 from pydantic import ValidationError
 
 from severian.domain.models import (
+    ERASED,
     AuditEvent,
     Collection,
     Entity,
@@ -41,6 +47,7 @@ from severian.domain.models import (
     Memory,
     Observation,
     Relation,
+    TaskNote,
     source_identity,
 )
 
@@ -55,10 +62,12 @@ RECORD_MODELS: dict[str, type[Any]] = {
     "job": Job,
     "outbox": Event,
     "audit": AuditEvent,
+    "task_note": TaskNote,
 }
 
 JOB_STATUSES = {"pending", "running", "done", "failed", "dead_letter"}
 OUTBOX_STATUSES = {"pending", "acked"}
+TASK_NOTE_STATUSES = {"current", "replaced", "cleared"}
 
 
 def _canonical_json(value: Any) -> str:
@@ -70,11 +79,80 @@ def identity_hash(*parts: object) -> str:
     return hashlib.sha256(_canonical_json(parts).encode()).hexdigest()
 
 
+def _as_datetime(value: Any) -> datetime | None:
+    """Parse a payload validity value back to the object the writer hashed.
+
+    Writers pass ``datetime`` objects through ``json.dumps(default=str)``
+    (space-separated ``str(dt)``); the payload carries pydantic ISO strings
+    (T-separated). Hashing the raw string would not reproduce the writer's
+    key for a dated relation, so parse first. ``None`` stays ``None``.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _relation_identities(payload: dict[str, Any]) -> tuple[str, str]:
+    """Both relation writer schemes, each recomputed exactly (M0 D1).
+
+    - derive path (``publish_derivation``): ``("relation", s, p, o)``;
+    - manual path (``add_relation``): ``(s, p, o, valid_from, valid_to)`` with
+      datetime objects, matching the writer's ``default=str`` encoding.
+
+    A key matching neither scheme is forged and is rejected. No existing row
+    is rewritten and dedupe behaviour is unchanged.
+    """
+    subject = payload["subject_id"]
+    predicate = payload["predicate"]
+    obj = payload["object_id"]
+    derive = identity_hash("relation", subject, predicate, obj)
+    manual = identity_hash(
+        subject,
+        predicate,
+        obj,
+        _as_datetime(payload.get("valid_from")),
+        _as_datetime(payload.get("valid_to")),
+    )
+    return derive, manual
+
+
+def _payload_round_trips(dumped: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Exact model round-trip, tolerating only equivalent ISO datetime encodings.
+
+    Some writers store a datetime via ``datetime.isoformat()`` ("+00:00")
+    while pydantic dumps UTC as "Z" — task-note ``replaced_at`` (``_retire``)
+    and closed-memory ``valid_until`` (``close_memory``). Both are the same
+    instant; byte-equality rejected every store holding such a record (M0
+    root causes 4 and 7). The key sets must match exactly and every other
+    field must be byte-equal, so no extra/unknown/derived field slips through.
+    """
+    if dumped == payload:
+        return True
+    if set(dumped) != set(payload):
+        return False
+    for key, value in dumped.items():
+        other = payload.get(key)
+        if value == other:
+            continue
+        if isinstance(value, str) and isinstance(other, str):
+            try:
+                if datetime.fromisoformat(value) == datetime.fromisoformat(other):
+                    continue
+            except ValueError:
+                pass
+        return False
+    return True
+
+
 def _recompute_identity(kind: str, payload: dict[str, Any]) -> str | None:
     """Recompute the identity key a write would have produced.
 
     Returns ``None`` for record kinds where the backend stores no
-    identity key (revisions, outbox, audit).
+    identity key (revisions, outbox, audit). Relations and task notes are
+    handled in ``_validate_record`` (two schemes / status-dependent key).
     """
     kind_value = str(kind)
     if kind_value == "collection":
@@ -99,14 +177,6 @@ def _recompute_identity(kind: str, payload: dict[str, Any]) -> str | None:
         )
     if kind_value == "entity":
         return identity_hash(payload["kind"], str(payload["name"]).casefold())
-    if kind_value == "relation":
-        return identity_hash(
-            payload["subject_id"],
-            payload["predicate"],
-            payload["object_id"],
-            payload.get("valid_from"),
-            payload.get("valid_to"),
-        )
     if kind_value == "job":
         return identity_hash(payload["kind"], payload["payload"])
     return None
@@ -128,7 +198,8 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
         parsed = model.model_validate(payload)
     except ValidationError as exc:
         raise ValueError(f"record {index}: invalid {kind} payload: {exc.errors()[0].get('msg')}") from exc
-    if parsed.model_dump(mode="json") != payload:
+    dumped = parsed.model_dump(mode="json")
+    if not _payload_round_trips(dumped, payload):
         raise ValueError(f"record {index}: {kind} payload does not round-trip (extra/unknown or derived fields)")
     if parsed.id != item.get("id"):
         raise ValueError(f"record {index}: payload metadata id mismatch")
@@ -161,17 +232,33 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
             if parsed.raw_hash != expected_raw:
                 raise ValueError(f"record {index}: payload metadata raw hash mismatch")
 
-    # Identity key recomputation.
-    expected_identity = _recompute_identity(kind, payload)
-    if item.get("identity_key") is not None and expected_identity is not None:
-        if item["identity_key"] != expected_identity:
+    # Identity key recomputation. Relations accept either writer scheme, each
+    # recomputed exactly; task notes key only the current version (a key on a
+    # retired version could masquerade as current, since the note lookup is by
+    # key, not status). All other kinds use the single write-path scheme.
+    key = item.get("identity_key")
+    if kind == "relation":
+        if key is not None and key not in _relation_identities(payload):
             raise ValueError(f"record {index}: payload metadata identity mismatch")
+    elif kind == "task_note":
+        if item.get("status") == "current":
+            if key != identity_hash("task_note", payload["task"]):
+                raise ValueError(f"record {index}: payload metadata identity mismatch")
+        elif key is not None:
+            raise ValueError(f"record {index}: payload metadata identity mismatch")
+    else:
+        expected_identity = _recompute_identity(kind, payload)
+        if key is not None and expected_identity is not None:
+            if key != expected_identity:
+                raise ValueError(f"record {index}: payload metadata identity mismatch")
 
     # Status values.
     if kind == "job" and item.get("status") not in JOB_STATUSES:
         raise ValueError(f"record {index}: invalid job status {item.get('status')!r}")
     if kind == "outbox" and item.get("status") not in OUTBOX_STATUSES:
         raise ValueError(f"record {index}: invalid outbox status {item.get('status')!r}")
+    if kind == "task_note" and item.get("status") not in TASK_NOTE_STATUSES:
+        raise ValueError(f"record {index}: invalid task_note status {item.get('status')!r}")
 
     return payload
 
@@ -211,10 +298,30 @@ def validate_snapshot(incoming: list[dict[str, Any]]) -> None:
         if kind in ("observation", "memory"):
             for link_field in ("revision_of_id", "superseded_by_id"):
                 target = payload.get(link_field)
-                if target is not None:
-                    target_record = by_id.get(str(target))
-                    if target_record is None or str(target_record["record_type"]) != kind:
-                        raise ValueError(f"record {record_id}: {link_field} does not reference an existing {kind}")
+                if target is None:
+                    continue
+                # Erasure tombstones are born superseded by the ERASED marker:
+                # a terminal state, not a reference to a record (M0 root cause 5).
+                if link_field == "superseded_by_id" and target == ERASED:
+                    continue
+                # Correction-propagation marker (supersede_memories_for_source):
+                # the memory is stale because its source observation was revised.
+                # The suffix must name an existing same-scope observation; a
+                # forged marker is rejected (M0 root cause 6).
+                if link_field == "superseded_by_id" and isinstance(target, str) and target.startswith("source-rev:"):
+                    source_record = by_id.get(target[len("source-rev:"):])
+                    if source_record is None or str(source_record["record_type"]) != "observation":
+                        raise ValueError(
+                            f"record {record_id}: superseded_by_id source-rev marker references no observation"
+                        )
+                    if _record_scope(source_record) != _record_scope(item):
+                        raise ValueError(
+                            f"record {record_id}: superseded_by_id source-rev marker is in a different scope"
+                        )
+                    continue
+                target_record = by_id.get(str(target))
+                if target_record is None or str(target_record["record_type"]) != kind:
+                    raise ValueError(f"record {record_id}: {link_field} does not reference an existing {kind}")
         if kind == "memory":
             for source_id in payload.get("source_observation_ids", []):
                 source = by_id.get(str(source_id))

@@ -381,6 +381,40 @@ recorded decision (M4). Do not build a trust layer speculatively.
 **Status:** could — captured 20/11, NOT scheduled. Revisit when S2/M6 evidence
 shows a need.
 
+## W-19 — Snapshot import rejects real stores (M0; REV MG-1)  (HIGH)
+
+**Source:** objective review 20/11 (REV MG-1), probe-confirmed; README l.89
+advertises export/import. Built FIRST in the Must wave (plan v2 M0).
+
+**What was broken:** `import_json` (both backends share `validate_snapshot`)
+rejected any store the engine produces through its normal paths. Seven distinct
+causes, all re-proved in code and pinned by tests:
+1. derive-path relations keyed `("relation", s, p, o)`; the validator only knew
+   the `add_relation` scheme `(s, p, o, valid_from, valid_to)`;
+2. `task_note` missing from `RECORD_MODELS`;
+3. dated manual relations: the writer hashes datetime objects (`default=str`,
+   space form), the validator hashed the payload ISO strings (T form);
+4. retired task notes: `_retire` writes `replaced_at` via `isoformat()`
+   (+00:00) while pydantic dumps Z — strict round-trip byte-equality rejected;
+5. erasure tombstones carry `superseded_by_id = ERASED` (a terminal marker, not
+   a reference) — the topology check rejected;
+6. correction propagation sets `superseded_by_id = "source-rev:<obs id>"` (a
+   synthetic marker) — the topology check rejected;
+7. closed memories: `close_memory` writes `valid_until` via `isoformat()`
+   (+00:00) vs pydantic Z — same round-trip class as (4).
+
+**Fix (import path only):** `snapshot.py` accepts both relation writer schemes
+(each recomputed exactly), adds `task_note` (status-aware identity, strict in
+both directions), tolerates equivalent ISO datetime instants in the round-trip
+check (no other field tolerated), and treats ERASED / source-rev markers as
+terminal (the source-rev suffix must name an existing same-scope observation).
+No write-path change; no migration; existing rows unchanged.
+
+**Status:** BUILT 20/11 on branch `fix/must-integrity-2026-11-20` (M0 commit;
+exact hash recorded in the evidence file and ticked here at wave close-out).
+RED-first on SQLite and live PG; forgery pins added. Wave gate (§3.9) pending.
+Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
+
 ---
 
 ### Triage table (updated 20/11/26 — owner direction: Must + Should proceed to
@@ -406,3 +440,4 @@ shows a need.
 | W-16 | upstream-failure conformance tests | low | COULD — captured 20/11, not scheduled | C4 |
 | W-17 | dashboard UI/UX rescope | low | COULD — captured 20/11, stale card needs rescope; D4 pending | C5 |
 | W-18 | stored trust tiers | low | COULD — captured 20/11, only on S2/M6 demonstrated need | C6 |
+| W-19 | snapshot import rejects real stores | high | MUST M0 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M0 / REV MG-1 |

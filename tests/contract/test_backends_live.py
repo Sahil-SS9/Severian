@@ -15,12 +15,14 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from severian.application.worker import DerivationWorker
+from severian.composition import build_bundle
 from severian.domain.models import (
     AuditEvent,
     Collection,
@@ -576,3 +578,99 @@ def test_task_notes_conform_on_both_backends(backend):
     assert backend.clear_task_note(scope, "hps") is False
     assert [n.task for n in backend.list_task_notes(scope)] == ["other"]
     assert [n.state for n in backend.get_task_note(scope, "hps")[1]] == ["first"]
+
+
+# --- M0: snapshot round-trip parity + cross-backend restore (plan v2 M0; REV MG-1) ---
+
+_M0_QUERIES = ("Alice works at", "deploy window", "Globex", "Acme", "Alice")
+
+
+def _m0_shape(bundle: Any, scope: Scope) -> None:
+    """Production-shaped store: derive relations (one ended by replacement),
+    a corrected-then-erased observation, task-note history, a manual dated relation."""
+    worker = DerivationWorker(bundle.repository, bundle.derivation, bundle.projection)
+    service = bundle.service
+    service.ingest_observation(scope, content="Alice works at Acme")
+    worker.drain(gateway=bundle.gateway)
+    service.ingest_observation(scope, content="Alice works at Globex")
+    worker.drain(gateway=bundle.gateway)
+    view = service.ingest_observation(scope, content="The deploy window is Tuesday")
+    worker.drain(gateway=bundle.gateway)
+    revision = service.revise_observation(scope, view.observation_id, "The deploy window is Thursday")
+    worker.drain(gateway=bundle.gateway)
+    service.erase_observation(scope, revision.id)
+    worker.drain(gateway=bundle.gateway)
+    service.set_task_note(scope, task="m0-round-trip", state="first state", metadata={"step": 1})
+    service.set_task_note(scope, task="m0-round-trip", state="second state", metadata={"step": 2})
+    active = [
+        m for m in bundle.repository.list_memories(scope)
+        if m.superseded_by_id is None and m.valid_until is None
+    ]
+    if len(active) >= 2:
+        bundle.repository.close_memory(
+            scope, active[0].id, valid_until=datetime(2026, 3, 1, tzinfo=UTC), replaced_by_id=active[1].id
+        )
+    alice = bundle.repository.add_entity(scope, "person", "M0 Manual Alice")
+    org = bundle.repository.add_entity(scope, "org", "M0 Manual Org")
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    bundle.repository.add_relation(
+        scope, alice.id, "visited", org.id, valid_from=start, valid_to=start + timedelta(days=1)
+    )
+
+
+def _m0_build(backend: str, tmp_path: Path, tag: str, *, target: bool = False) -> Any:
+    if backend == "sqlite":
+        return build_bundle(
+            database=tmp_path / f"{tag}.db",
+            fts=tmp_path / f"{tag}.fts",
+            vectors=tmp_path / f"{tag}.vec",
+        )
+    dsn = PG_DSN.rsplit("/", 1)[0] + "/severian_dst" if target else PG_DSN
+    return build_bundle(backend="postgresql", dsn=dsn)
+
+
+@pytest.mark.skipif(not PG_DSN, reason="SEVERIAN_PG_DSN not set; live PostgreSQL lane")
+@pytest.mark.parametrize(
+    ("source_backend", "target_backend"),
+    [("sqlite", "postgresql"), ("postgresql", "sqlite"), ("postgresql", "postgresql")],
+)
+def test_snapshot_round_trip_cross_backend(tmp_path, source_backend, target_backend) -> None:
+    unique = uuid.uuid4().hex[:10]
+    tenant, collection = f"m0x{unique}", f"m0xc{unique}"
+    scope = Scope(
+        tenant_id=tenant, profile_id="p1", collection_id=collection, agent_id="a1", session_id="s1"
+    )
+    source = _m0_build(source_backend, tmp_path, "src")
+    source.repository.create_collection(Collection(id=collection, tenant_id=tenant, name="M0X"))
+    _m0_shape(source, scope)
+    exported = source.repository.export_json()
+    # Round-trip only this test's tenant: the live PG source/target databases
+    # are shared across params, so foreign records must not ride along.
+    doc = json.loads(exported)
+    doc["records"] = [r for r in doc["records"] if r["tenant_id"] == tenant]
+    doc["checksum"] = source.repository.export_checksum(doc["records"])
+    exported = json.dumps(doc, sort_keys=True)
+    before = [
+        [hit.memory_id for hit in source.service.search(scope, query=q, limit=10)]
+        for q in _M0_QUERIES
+    ]
+    source.close()
+
+    target = _m0_build(target_backend, tmp_path, "dst", target=True)
+    target.repository.import_json(exported)
+    target.projection.rebuild(scope)
+    after = [
+        [hit.memory_id for hit in target.service.search(scope, query=q, limit=10)]
+        for q in _M0_QUERIES
+    ]
+    assert after == before
+    src_records = {
+        r["id"]: r for r in json.loads(exported)["records"] if r["tenant_id"] == tenant
+    }
+    dst_records = {
+        r["id"]: r
+        for r in json.loads(target.repository.export_json())["records"]
+        if r["tenant_id"] == tenant
+    }
+    assert dst_records == src_records
+    target.close()
