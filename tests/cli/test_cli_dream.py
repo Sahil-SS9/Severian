@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -12,6 +13,14 @@ from typer.testing import CliRunner, Result
 from severian.cli.app import cli
 from severian.composition import build_bundle
 from severian.domain.models import Collection, Memory, Observation, Scope
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """CLI output without colour codes or line wrapping (CI forces colour; rich splits option names)."""
+    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
+
 
 SCOPE_FLAGS = ["--tenant", "t1", "--profile", "p1", "--collection", "c1", "--agent", "a1", "--session", "s1"]
 
@@ -116,7 +125,7 @@ def test_the_work_tick_requires_both_scope_flags(store, monkeypatch: pytest.Monk
         ["work", "--database", str(database), "--fts", str(fts), "--vectors", str(vectors), "--dream-tenant", "t1"],
     )
     assert result.exit_code != 0
-    assert "--dream-profile" in result.output
+    assert "--dream-profile" in _plain(result.output)
 
 
 def test_the_work_tick_is_off_without_the_switch(store, monkeypatch: pytest.MonkeyPatch) -> None:
