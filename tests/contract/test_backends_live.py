@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import event
 
+from severian.application.dreaming import CurationService
 from severian.application.worker import DerivationWorker
 from severian.composition import build_bundle
 from severian.domain.models import (
@@ -674,3 +676,470 @@ def test_snapshot_round_trip_cross_backend(tmp_path, source_backend, target_back
     }
     assert dst_records == src_records
     target.close()
+
+
+# --- M2: mutation audit coverage (plan v2 M2; REV A2, MG-4) ------------------
+#
+# Every payload-mutating canonical write must leave exactly one append-only
+# audit row per affected target, inside the same transaction, with ids/time in
+# metadata and no new outbox event. ``record_memory_usage`` is exempt (read
+# path, dormant in production); task notes are out of scope (working state).
+# ``supersede_memory`` must stop writing a stale read-back copy.
+
+_M2_CLOSED_AT = datetime(2026, 2, 3, 9, 30, tzinfo=UTC)
+
+_NEW_OPERATIONS = ("supersede", "close", "source_superseded", "retract", "unsupport", "reopen")
+
+
+def _audit_rows(backend: Any, scope: Scope, action: str | None = None) -> list[AuditEvent]:
+    rows = backend.list_audit(scope)
+    return rows if action is None else [row for row in rows if row.action == action]
+
+
+def _outbox_ids(backend: Any) -> set[str]:
+    return {item.id for item in backend.pending_outbox()}
+
+
+def _assert_no_new_outbox_events(backend: Any) -> None:
+    """The audit-only helper never drives the projection: no outbox row carries these ops."""
+    kinds = [item.kind for item in backend.pending_outbox()]
+    assert [kind for kind in kinds if any(op in kind for op in _NEW_OPERATIONS)] == []
+
+
+def _audit_round_trip(backend: Any, scope: Scope, tmp_path: Path, tag: str) -> None:
+    """M0 rule: every newly audited path still exports and re-imports unchanged."""
+    document = json.loads(backend.export_json())
+    document["records"] = [row for row in document["records"] if row["tenant_id"] == scope.tenant_id]
+    document["checksum"] = backend.export_checksum(document["records"])
+    target = SQLiteRepository(tmp_path / f"m2-{tag}.db")
+    target.initialize()
+    try:
+        target.import_json(json.dumps(document, sort_keys=True))
+        want = [(row.action, row.target_id, row.metadata) for row in backend.list_audit(scope)]
+        got = [(row.action, row.target_id, row.metadata) for row in target.list_audit(scope)]
+        assert got == want
+    finally:
+        target.close()
+
+
+def test_close_memory_writes_exactly_one_audit_row(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    before = _outbox_ids(backend)
+
+    assert backend.close_memory(scope, old.id, valid_until=_M2_CLOSED_AT, replaced_by_id=new.id) is True
+
+    rows = _audit_rows(backend, scope, "memory.close")
+    assert [row.target_id for row in rows] == [old.id]
+    assert rows[0].metadata["replaced_by_id"] == new.id
+    # New datetimes in the payload use pydantic's JSON encoding (Z), not isoformat(+00:00).
+    assert rows[0].metadata["valid_until"] == "2026-02-03T09:30:00Z"
+    assert _outbox_ids(backend) == before
+    _assert_no_new_outbox_events(backend)
+    _audit_round_trip(backend, scope, tmp_path, "close")
+
+
+def test_close_memory_audits_nothing_when_it_changes_nothing(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    assert backend.close_memory(scope, old.id, valid_until=_M2_CLOSED_AT, replaced_by_id=new.id) is True
+
+    assert backend.close_memory(scope, old.id, valid_until=_M2_CLOSED_AT, replaced_by_id=new.id) is False
+    assert backend.close_memory(scope, "no-such-memory", valid_until=_M2_CLOSED_AT, replaced_by_id="x") is False
+    assert backend.close_memory(_unique_scope(), old.id, valid_until=_M2_CLOSED_AT, replaced_by_id="x") is False
+
+    assert len(_audit_rows(backend, scope, "memory.close")) == 1
+    _audit_round_trip(backend, scope, tmp_path, "close-noop")
+
+
+def test_supersede_memory_writes_one_audit_row_and_refuses_a_second(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    keeper = _memory_for(backend, scope, "The user prefers tea.")
+    loser = _memory_for(backend, scope, "The user prefers coffee.")
+    before = _outbox_ids(backend)
+
+    updated = backend.supersede_memory(scope, loser.id, keeper.id)
+    assert updated.superseded_by_id == keeper.id
+
+    rows = _audit_rows(backend, scope, "memory.supersede")
+    assert [row.target_id for row in rows] == [loser.id]
+    assert rows[0].metadata["replacement_id"] == keeper.id
+
+    with pytest.raises(ConflictError):
+        backend.supersede_memory(scope, loser.id, keeper.id)  # already superseded
+    with pytest.raises(ConflictError):
+        backend.supersede_memory(scope, keeper.id, keeper.id)  # itself
+    assert len(_audit_rows(backend, scope, "memory.supersede")) == 1
+
+    assert _outbox_ids(backend) == before
+    _assert_no_new_outbox_events(backend)
+    _audit_round_trip(backend, scope, tmp_path, "supersede")
+
+
+def test_supersede_memory_respects_scope_and_audits_nothing_elsewhere(backend) -> None:
+    scope, other = _unique_scope(), _unique_scope()
+    keeper = _memory_for(backend, scope, "The user prefers tea.")
+    loser = _memory_for(backend, scope, "The user prefers coffee.")
+
+    with pytest.raises(NotFoundError):
+        backend.supersede_memory(other, loser.id, keeper.id)
+
+    assert backend.get_memory(scope, loser.id).superseded_by_id is None
+    assert _audit_rows(backend, other) == []
+    assert _audit_rows(backend, scope, "memory.supersede") == []
+
+
+def _sibling_handle(backend: Any) -> Any:
+    """A second, independent handle on the same store (a genuine concurrent writer)."""
+    if isinstance(backend, PostgreSQLBackend):
+        return PostgreSQLBackend(dsn=PG_DSN)
+    return SQLiteRepository(backend.path)
+
+
+def test_supersede_memory_does_not_lose_a_concurrent_close(backend, tmp_path) -> None:
+    """MG-4 lost update: a close landing between the read and the write must survive.
+
+    The close is committed on a SEPARATE connection the moment supersede_memory is
+    about to issue its UPDATE — the deterministic interleaving that a stale read-back
+    copy loses. The fix writes one conditional UPDATE of the CURRENT payload, so the
+    close's ``valid_until``/``replaced_by_id`` survive.
+    """
+    scope = _unique_scope()
+    keeper = _memory_for(backend, scope, "The user prefers tea.")
+    loser = _memory_for(backend, scope, "The user prefers coffee.")
+    closer = _sibling_handle(backend)
+    interleaved: list[str] = []
+
+    def close_first(_connection, _cursor, statement, _parameters, _context, _many):
+        if interleaved or not statement.lstrip().upper().startswith("UPDATE RECORDS"):
+            return
+        interleaved.append(statement.split()[0])
+        closer.close_memory(scope, loser.id, valid_until=_M2_CLOSED_AT, replaced_by_id=keeper.id)
+
+    event.listen(backend.engine, "before_cursor_execute", close_first)
+    try:
+        backend.supersede_memory(scope, loser.id, keeper.id)
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", close_first)
+        closer.close()
+
+    assert interleaved, "the concurrent close must interleave inside supersede_memory"
+    stored = backend.get_memory(scope, loser.id)
+    assert stored.superseded_by_id == keeper.id  # the supersede landed
+    assert stored.valid_until == _M2_CLOSED_AT  # ... and the close was not lost
+    assert stored.replaced_by_id == keeper.id
+    _audit_round_trip(backend, scope, tmp_path, "race")
+
+
+def test_supersede_memories_for_source_writes_one_row_per_memory(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    observation = backend.add_observation(Observation(scope=scope, content="two facts, one source"))
+    first = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="first derived fact",
+            confidence=0.9,
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+        )
+    )
+    second = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="second derived fact",
+            confidence=0.9,
+            source_observation_ids=[observation.id],
+            model_id="m",
+            prompt_version="v",
+        )
+    )
+    untouched = _memory_for(backend, scope, "a fact with a different source")
+
+    assert backend.supersede_memories_for_source(scope, observation.id) == 2
+
+    rows = _audit_rows(backend, scope, "memory.source_superseded")
+    assert sorted(row.target_id for row in rows) == sorted([first.id, second.id])
+    assert {row.metadata["observation_id"] for row in rows} == {observation.id}
+    assert untouched.id not in {row.target_id for row in rows}
+
+    # Idempotent: a second pass changes nothing, so it audits nothing.
+    assert backend.supersede_memories_for_source(scope, observation.id) == 0
+    assert len(_audit_rows(backend, scope, "memory.source_superseded")) == 2
+    _assert_no_new_outbox_events(backend)
+    _audit_round_trip(backend, scope, tmp_path, "source-superseded")
+
+
+def test_retract_relations_for_source_audits_unsupport_then_retract(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    first_source = backend.add_observation(Observation(scope=scope, content="Alice works at Acme"))
+    second_source = backend.add_observation(Observation(scope=scope, content="Acme says Alice is here"))
+    for source in (first_source, second_source):
+        backend.publish_derivation(
+            scope,
+            entities=[("person", "Alice"), ("organisation", "Acme")],
+            relations=[("Alice", "works_at", "Acme")],
+            memories=[],
+            source_observation_id=source.id,
+        )
+    relations = [rel for rel in backend.list_relations(scope) if rel.predicate == "works_at"]
+    assert len(relations) == 1
+    relation = relations[0]
+    assert set(relation.source_observation_ids) == {first_source.id, second_source.id}
+
+    # One support lost, another remains: unsupported, not retracted.
+    backend.retract_relations_for_source(scope, first_source.id)
+    unsupported = _audit_rows(backend, scope, "relation.unsupport")
+    assert [row.target_id for row in unsupported] == [relation.id]
+    assert unsupported[0].metadata["observation_id"] == first_source.id
+    assert unsupported[0].metadata["retracted"] is False
+
+    # Last support lost: retracted.
+    backend.retract_relations_for_source(scope, second_source.id)
+    retracted = _audit_rows(backend, scope, "relation.retract")
+    assert [row.target_id for row in retracted] == [relation.id]
+    assert retracted[0].metadata["observation_id"] == second_source.id
+    assert retracted[0].metadata["retracted"] is True
+
+    _assert_no_new_outbox_events(backend)
+    _audit_round_trip(backend, scope, tmp_path, "relation-retract")
+
+
+def test_publish_derivation_audits_a_supported_relation_and_its_ending(backend, tmp_path) -> None:
+    scope = _unique_scope()
+    first = backend.add_observation(Observation(scope=scope, content="Alice works at Acme"))
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("organisation", "Acme")],
+        relations=[("Alice", "works_at", "Acme")],
+        memories=[],
+        source_observation_id=first.id,
+    )
+    acme = next(rel for rel in backend.list_relations(scope) if rel.predicate == "works_at")
+
+    second = backend.add_observation(Observation(scope=scope, content="Acme confirms Alice"))
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("organisation", "Acme")],
+        relations=[("Alice", "works_at", "Acme")],
+        memories=[],
+        source_observation_id=second.id,
+    )
+    supported = _audit_rows(backend, scope, "relation.support")
+    assert [row.target_id for row in supported] == [acme.id]
+    assert supported[0].metadata["source_observation_id"] == second.id
+
+    # A newer single-valued statement ends the old value: its end is audited.
+    third = backend.add_observation(Observation(scope=scope, content="Alice works at Globex"))
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("organisation", "Globex")],
+        relations=[("Alice", "works_at", "Globex")],
+        memories=[],
+        source_observation_id=third.id,
+    )
+    globex = next(
+        rel
+        for rel in backend.list_relations(scope)
+        if rel.predicate == "works_at" and rel.object_id != acme.object_id
+    )
+    ended = _audit_rows(backend, scope, "relation.end")
+    assert [row.target_id for row in ended] == [acme.id]
+    assert ended[0].metadata["replaced_by_id"] == globex.id
+    assert str(ended[0].metadata["valid_to"]).endswith("Z")
+
+    _assert_no_new_outbox_events(backend)
+    _audit_round_trip(backend, scope, tmp_path, "relation-end")
+
+
+def test_publish_derivation_audits_reopening_a_restated_relation(backend, tmp_path) -> None:
+    scope = _unique_scope()
+
+    def publish(content: str, subject: str, obj: str) -> None:
+        observation = backend.add_observation(Observation(scope=scope, content=content))
+        backend.publish_derivation(
+            scope,
+            entities=[("person", subject), ("organisation", obj)],
+            relations=[(subject, "works_at", obj)],
+            memories=[],
+            source_observation_id=observation.id,
+        )
+
+    publish("Alice works at Acme", "Alice", "Acme")
+    acme = next(rel for rel in backend.list_relations(scope) if rel.predicate == "works_at")
+    publish("Alice works at Globex", "Alice", "Globex")  # the Acme relation is ended
+    publish("Alice is back at Acme", "Alice", "Acme")  # ... and restated: reopened
+
+    reopened = _audit_rows(backend, scope, "relation.reopen")
+    assert [row.target_id for row in reopened] == [acme.id]
+    open_values = [rel for rel in backend.list_relations(scope) if rel.predicate == "works_at"]
+    assert [(rel.object_id, rel.valid_to) for rel in open_values if rel.id == acme.id] == [
+        (acme.object_id, None)
+    ]
+    _audit_round_trip(backend, scope, tmp_path, "relation-reopen")
+
+
+def _payload_action(payload: Any) -> str | None:
+    """The audit action inside a bound payload, whatever the driver wraps it in.
+
+    SQLite binds the JSON column as text; psycopg binds it as a ``Jsonb`` wrapper
+    whose ``repr`` is truncated, so the value must be unwrapped, never string-matched.
+    """
+    for candidate in (payload, getattr(payload, "obj", None), getattr(payload, "adapted", None)):
+        if isinstance(candidate, dict):
+            return candidate.get("action")
+        if isinstance(candidate, (str, bytes)):
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed.get("action")
+    return None
+
+
+def _is_audit_insert(statement: str, parameters: Any, action: str | None = None) -> bool:
+    """True for the INSERT of an audit record (optionally of one specific action)."""
+    if not statement.lstrip().upper().startswith("INSERT INTO RECORDS"):
+        return False
+    if isinstance(parameters, dict):
+        if parameters.get("record_type") != "audit":
+            return False
+        return action is None or _payload_action(parameters.get("payload")) == action
+    try:
+        values = list(parameters)
+    except TypeError:  # pragma: no cover - unexpected driver shape
+        return False
+    if len(values) < 2 or values[1] != "audit":
+        return False
+    return action is None or action in str(parameters)
+
+
+def test_close_memory_and_its_audit_row_commit_together(backend) -> None:
+    """Same transaction: if the audit row cannot be written, the close does not happen."""
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+
+    def reject(_connection, _cursor, statement, parameters, _context, _many):
+        if _is_audit_insert(statement, parameters, "memory.close"):
+            raise RuntimeError("injected audit failure")
+
+    event.listen(backend.engine, "before_cursor_execute", reject)
+    try:
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            backend.close_memory(scope, old.id, valid_until=_M2_CLOSED_AT, replaced_by_id=new.id)
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", reject)
+
+    stored = backend.get_memory(scope, old.id)
+    assert stored.valid_until is None and stored.replaced_by_id is None
+    assert _audit_rows(backend, scope, "memory.close") == []
+
+
+def test_supersede_memory_and_its_audit_row_commit_together(backend) -> None:
+    scope = _unique_scope()
+    keeper = _memory_for(backend, scope, "The user prefers tea.")
+    loser = _memory_for(backend, scope, "The user prefers coffee.")
+
+    def reject(_connection, _cursor, statement, parameters, _context, _many):
+        if _is_audit_insert(statement, parameters, "memory.supersede"):
+            raise RuntimeError("injected audit failure")
+
+    event.listen(backend.engine, "before_cursor_execute", reject)
+    try:
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            backend.supersede_memory(scope, loser.id, keeper.id)
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", reject)
+
+    assert backend.get_memory(scope, loser.id).superseded_by_id is None
+    assert _audit_rows(backend, scope, "memory.supersede") == []
+
+
+def test_relation_end_and_its_audit_row_commit_with_the_publish(backend) -> None:
+    scope = _unique_scope()
+    backend.publish_derivation(
+        scope,
+        entities=[("person", "Alice"), ("organisation", "Acme")],
+        relations=[("Alice", "works_at", "Acme")],
+        memories=[],
+        source_observation_id=backend.add_observation(
+            Observation(scope=scope, content="Alice works at Acme")
+        ).id,
+    )
+
+    def reject(_connection, _cursor, statement, parameters, _context, _many):
+        if _is_audit_insert(statement, parameters, "relation.end"):
+            raise RuntimeError("injected audit failure")
+
+    event.listen(backend.engine, "before_cursor_execute", reject)
+    try:
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            backend.publish_derivation(
+                scope,
+                entities=[("person", "Alice"), ("organisation", "Globex")],
+                relations=[("Alice", "works_at", "Globex")],
+                memories=[],
+                source_observation_id=backend.add_observation(
+                    Observation(scope=scope, content="Alice works at Globex")
+                ).id,
+            )
+    finally:
+        event.remove(backend.engine, "before_cursor_execute", reject)
+
+    # The whole publish rolled back: the old value is still the open one.
+    assert _open_objects(backend, scope, "works_at") == {"Acme"}
+    assert _audit_rows(backend, scope, "relation.end") == []
+
+
+def test_curation_report_reference_is_audited_on_both_backends(backend, tmp_path) -> None:
+    """The marker claims "review proposals in audit"; the reference must persist."""
+    scope = _unique_scope()
+    fresh = _memory_for(backend, scope, "The user likes tea with breakfast.")
+    stale = backend.add_memory(
+        Memory(
+            scope=scope,
+            kind="fact",
+            content="The user once mentioned a hobby.",
+            confidence=0.05,
+            source_observation_ids=list(fresh.source_observation_ids),
+            model_id="m",
+            prompt_version="v",
+            created_at=datetime.now(UTC) - timedelta(days=400),
+        )
+    )
+
+    report = CurationService(backend).curate(scope)
+
+    assert report.review_marker_ids
+    rows = _audit_rows(backend, scope, "curation.report")
+    assert [row.target_id for row in rows] == report.review_marker_ids
+    metadata = rows[0].metadata
+    assert metadata["report_id"] == report.report_id
+    assert metadata["review_marker_id"] == report.review_marker_ids[0]
+    assert metadata["memories_scored"] >= 2
+    assert metadata["low_value_candidates"] == len(metadata["low_value_ids"])
+    assert stale.id in metadata["low_value_ids"]
+    assert fresh.id not in metadata["low_value_ids"]
+    assert metadata["contradiction_pairs"] == len(metadata["contradiction_ids"])
+    _audit_round_trip(backend, scope, tmp_path, "curation")
+
+
+def test_audit_rows_stay_append_only(backend) -> None:
+    scope = _unique_scope()
+    old, new = _pair(backend, scope)
+    backend.close_memory(scope, old.id, valid_until=_M2_CLOSED_AT, replaced_by_id=new.id)
+    first = {(row.id, row.action, row.target_id) for row in backend.list_audit(scope)}
+    assert first
+
+    keeper = _memory_for(backend, scope, "The user prefers tea.")
+    loser = _memory_for(backend, scope, "The user prefers coffee.")
+    backend.supersede_memory(scope, loser.id, keeper.id)
+
+    after = {(row.id, row.action, row.target_id) for row in backend.list_audit(scope)}
+    assert first <= after
+    assert len(after) > len(first)
+    assert [row.action for row in backend.list_audit(scope) if "audit." in row.action] == []
+

@@ -31,6 +31,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import NotFoundError
@@ -108,14 +109,30 @@ class CurationReport:
     low_value_ids: list[str] = field(default_factory=list)
     contradiction_ids: list[tuple[str, str]] = field(default_factory=list)
     review_marker_ids: list[str] = field(default_factory=list)
+    # Stable identity of THIS pass, so the audit trail can name the report it
+    # summarises (the review marker keeps the prose summary).
+    report_id: str = field(default_factory=lambda: str(uuid4()))
 
     def summary(self) -> dict[str, Any]:
         return {
             "scope": self.scope.model_dump(),
+            "report_id": self.report_id,
             "memories_scored": len(self.scored),
             "low_value_candidates": len(self.low_value_ids),
             "contradiction_pairs": len(self.contradiction_ids),
             "review_markers": len(self.review_marker_ids),
+        }
+
+    def reference(self) -> dict[str, Any]:
+        """What the audit row carries: the ids and counts, never memory content."""
+        return {
+            "report_id": self.report_id,
+            "review_marker_id": self.review_marker_ids[0] if self.review_marker_ids else None,
+            "memories_scored": len(self.scored),
+            "low_value_candidates": len(self.low_value_ids),
+            "low_value_ids": list(self.low_value_ids),
+            "contradiction_pairs": len(self.contradiction_ids),
+            "contradiction_ids": [list(pair) for pair in self.contradiction_ids],
         }
 
 
@@ -757,4 +774,8 @@ class CurationService:
                 )
             )
             report.review_marker_ids.append(marker.id)
+            # The marker's text promises "review proposals in audit"; that promise
+            # is only true if the report reference is actually persisted (M2).
+            # Ids and counts only — never memory content.
+            self._repository.append_audit(scope, "curation.report", marker.id, report.reference())
         return report

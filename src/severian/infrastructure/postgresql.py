@@ -87,6 +87,12 @@ def _iso(value: datetime | None) -> str | None:
 # at 65535/statement; SQLite at 32766 (3.32+). 5000 is safely under both.
 _ACK_CHUNK = 5000
 
+# ``jsonb_set`` path for the supersede write. It MUST be a ``text[]``: passing a
+# bare ``VARCHAR`` path (the base-branch ``record_memory_usage`` bug) is what made
+# that statement unusable on PostgreSQL.
+SUPERSEDED_BY_PATH = sa_text("'{superseded_by_id}'::text[]")
+
+
 
 def _migrations_dir() -> Path:
     """Locate the Alembic migration tree relative to the package root."""
@@ -395,6 +401,26 @@ class PostgreSQLBackend(TaskNoteStore):
             records.insert().values(**PostgreSQLBackend._record_values("outbox", event, status="pending"))
         )
         connection.execute(records.insert().values(**PostgreSQLBackend._record_values("audit", audit)))
+
+    @staticmethod
+    def _insert_audit_in_transaction(
+        connection: Connection,
+        scope: Scope,
+        action: str,
+        target_id: str,
+        metadata: dict[str, Any],
+    ) -> AuditEvent:
+        """Append ONE audit row inside the caller's transaction (M2, W-11.5).
+
+        Audit only. ``_insert_events_in_transaction`` must NOT be used for these
+        paths: it also appends a pending outbox event (which drives the
+        projection) and its ``_event_models`` map knows only create/revise/
+        rollback, so a new operation name raises ``KeyError``. Audit rows are
+        append-only — never updated, never deleted.
+        """
+        audit = AuditEvent(scope=scope, action=action, target_id=target_id, metadata=metadata)
+        connection.execute(records.insert().values(**PostgreSQLBackend._record_values("audit", audit)))
+        return audit
 
     # -- collections -------------------------------------------------------
 
@@ -1033,6 +1059,16 @@ class PostgreSQLBackend(TaskNoteStore):
                             .where(records.c.id == existing["id"])
                             .values(payload=updated.model_dump(mode="json"))
                         )
+                        self._insert_audit_in_transaction(
+                            connection,
+                            scope,
+                            "relation.reopen" if reopened is not None else "relation.support",
+                            existing["id"],
+                            {
+                                "source_observation_id": source_observation_id,
+                                "supported": supported is not current,
+                            },
+                        )
                     self._end_replaced_relations(connection, scope, updated or current)
                     continue
                 connection.execute(
@@ -1127,6 +1163,8 @@ class PostgreSQLBackend(TaskNoteStore):
 
         One conditional UPDATE against the CURRENT payload: a concurrent supersede, erase or earlier
         close makes it match nothing (returns False), and it never rewrites a stale read-back copy.
+        The ``memory.close`` audit row lands in that same transaction, so a committed close always
+        has its audit and a rolled-back one has neither.
         """
         self._require_scope(scope)
         change = {"valid_until": valid_until.isoformat(), "replaced_by_id": replaced_by_id}
@@ -1142,6 +1180,14 @@ class PostgreSQLBackend(TaskNoteStore):
                 )
                 .values(payload=records.c.payload.op("||")(literal(change, type_=JSONB)))
             )
+            if result.rowcount == 1:
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "memory.close",
+                    memory_id,
+                    {"valid_until": valid_until, "replaced_by_id": replaced_by_id},
+                )
         return result.rowcount == 1
 
     def count_memories(self, scope: Scope) -> int:
@@ -1292,7 +1338,12 @@ class PostgreSQLBackend(TaskNoteStore):
         return revision_lineage(chain, memory_id)
 
     def retract_relations_for_source(self, scope: Scope, observation_id: str) -> int:
-        """Drop ``observation_id`` from relation lineage; retract relations left unsupported."""
+        """Drop ``observation_id`` from relation lineage; retract relations left unsupported.
+
+        A relation that keeps another support is audited as ``relation.unsupport``;
+        one that loses its last support is audited as ``relation.retract``. One row
+        per affected relation, in the same transaction.
+        """
         self._require_scope(scope)
         sql = sa_text(
             """
@@ -1318,10 +1369,18 @@ class PostgreSQLBackend(TaskNoteStore):
                 changed = relation.unsupported_by(observation_id, at=stamp)
                 if changed is None:
                     continue
-                if relation.retracted_at is None and changed.retracted_at is not None:
+                became_retracted = relation.retracted_at is None and changed.retracted_at is not None
+                if became_retracted:
                     retracted += 1
                 connection.execute(
                     update(records).where(records.c.id == row["id"]).values(payload=changed.model_dump(mode="json"))
+                )
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "relation.retract" if became_retracted else "relation.unsupport",
+                    row["id"],
+                    {"observation_id": observation_id, "retracted": became_retracted},
                 )
         return retracted
 
@@ -1354,9 +1413,20 @@ class PostgreSQLBackend(TaskNoteStore):
                 connection.execute(
                     update(records).where(records.c.id == row["id"]).values(payload=ended.model_dump(mode="json"))
                 )
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "relation.end",
+                    row["id"],
+                    {"replaced_by_id": newer.id, "valid_to": ended.valid_to},
+                )
 
     def supersede_memories_for_source(self, scope: Scope, observation_id: str) -> int:
-        """Mark active memories derived from an observation as superseded (P0-5)."""
+        """Mark active memories derived from an observation as superseded (P0-5).
+
+        One ``memory.source_superseded`` audit row per affected memory, in the same
+        transaction.
+        """
         self._require_scope(scope)
         superseded = 0
         with self.engine.begin() as connection:
@@ -1375,14 +1445,20 @@ class PostgreSQLBackend(TaskNoteStore):
                 memory = Memory.model_validate(row["payload"])
                 if observation_id not in memory.source_observation_ids:
                     continue
+                marker = f"source-rev:{observation_id}"
                 connection.execute(
                     update(records)
                     .where(records.c.id == row["id"])
                     .values(
-                        payload=memory.model_copy(
-                            update={"superseded_by_id": f"source-rev:{observation_id}"}
-                        ).model_dump(mode="json")
+                        payload=memory.model_copy(update={"superseded_by_id": marker}).model_dump(mode="json")
                     )
+                )
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "memory.source_superseded",
+                    row["id"],
+                    {"observation_id": observation_id, "superseded_by_id": marker},
                 )
                 superseded += 1
         return superseded
@@ -1393,19 +1469,47 @@ class PostgreSQLBackend(TaskNoteStore):
         Used by the dreaming/consolidation pass to retire duplicate heads
         in favour of a survivor. Non-destructive: the memory remains in
         history (P0-1); active reads and projection rebuilds drop it.
+
+        ONE conditional UPDATE of the CURRENT payload, guarded on active state and
+        the full scope (MG-4/DATA-07): a concurrent close, erase or supersede is
+        never lost to a stale read-back copy, and a memory that is already
+        superseded is refused atomically with ``ConflictError``. The
+        ``memory.supersede`` audit row lands in the same transaction.
         """
         self._require_scope(scope)
-        memory = self.get_memory(scope, memory_id)
-        if memory.superseded_by_id is not None:
-            raise ConflictError("memory is already superseded")
         if memory_id == replacement_id:
             raise ConflictError("cannot supersede a memory by itself")
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 update(records)
-                .where(records.c.id == memory_id)
-                .values(payload=memory.model_copy(update={"superseded_by_id": replacement_id}).model_dump(mode="json"))
+                .where(
+                    records.c.record_type == "memory",
+                    records.c.id == memory_id,
+                    *self._scope_predicates(scope),
+                    records.c.payload["superseded_by_id"].astext.is_(None),
+                )
+                .values(
+                    payload=func.jsonb_set(
+                        records.c.payload,
+                        SUPERSEDED_BY_PATH,
+                        func.to_jsonb(literal(replacement_id, type_=String)),
+                    )
+                )
             )
+            if result.rowcount == 1:
+                self._insert_audit_in_transaction(
+                    connection,
+                    scope,
+                    "memory.supersede",
+                    memory_id,
+                    {"replacement_id": replacement_id},
+                )
+        if result.rowcount != 1:
+            # Diagnose AFTER the failed conditional write: the read never feeds a write.
+            memory = self.get_memory(scope, memory_id)  # NotFoundError when absent in this scope
+            if memory.superseded_by_id is not None:
+                raise ConflictError("memory is already superseded")
+            raise ConflictError("memory supersede conflict")
         return self.get_memory(scope, memory_id)
 
     def revise_memory(

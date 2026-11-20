@@ -450,7 +450,11 @@ class DerivationWorker:
             if mode == "consolidate":
                 self._consolidation.consolidate(job.scope)
             elif mode == "curate":
-                self._curation.curate(job.scope)
+                # M2: the report is the pass's evidence — it is no longer thrown
+                # away. CurationService persists the audit reference itself (so
+                # every caller gets it); the worker records the pass summary.
+                curation_report = self._curation.curate(job.scope)
+                logger.info("curation pass %s", curation_report.summary())
             elif mode == "retention":
                 policy = dict(job.payload.get("policy", {}) or {})
                 self._retention.evaluate(job.scope, policy)

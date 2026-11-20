@@ -90,6 +90,38 @@ marker's claim true or remove it.
 in method bodies). Fifth most likely `record_memory_usage` (sqlite l.946,
 PG l.1091) — confirm at build by sweeping every payload-mutating method.
 
+**Corrected 20/11 by the independent review (REV §2.1 A2, plan rule 12 — REV wins
+over WT).** The true list of payload-mutating writes with no audit row is SIX, not
+five, and the fifth-path guess was wrong:
+
+1. `close_memory`
+2. `supersede_memory`
+3. `supersede_memories_for_source`
+4. `retract_relations_for_source`
+5. `_end_replaced_relations` (ends the older single-valued relation; called from
+   `publish_derivation`)
+6. `publish_derivation`'s update of an EXISTING relation (support or reopen)
+
+**Exempt, reason recorded:** `record_memory_usage` (the old fifth-path guess).
+Nothing in `src/` passes `search(track_usage=True)`, so it never runs in
+production; auditing it would write audit rows on the read path. Revisit only if
+S2 turns usage tracking on deliberately.
+**Out of scope:** task notes (`task_notes.py`) — working state, not canonical
+memory.
+
+**Status:** BUILT 20/11 on `fix/must-integrity-2026-11-20` (plan v2 M2, evidence
+`must-should-2026-11-20/M2.md`). Every path above now writes one append-only
+audit row per affected target in the same transaction, through a new audit-only
+in-transaction helper (never `_insert_events_in_transaction`, which would append
+an outbox event and raise `KeyError` on an unknown op). Actions: `memory.close`,
+`memory.supersede`, `memory.source_superseded`, `relation.retract`,
+`relation.unsupport`, `relation.end`, `relation.support`, `relation.reopen`,
+`curation.report`. The MG-4 stale-write race is fixed in the same item:
+`supersede_memory` is now one conditional UPDATE of the current payload guarded on
+active state and the full scope. The curation marker's "review proposals in
+audit" claim is now true: the pass persists a `curation.report` row (ids and
+counts, never content) and the worker no longer discards the report.
+
 ## W-4 — Dreaming is a job kind with no producer  (MEDIUM)
 
 `ConsolidationService`, `CurationService` and `RetentionPolicyService` only run
@@ -424,7 +456,7 @@ Evidence: `~/docs/severian-programme/evidence/must-should-2026-11-20/M0.md`.
 |----|------|----------|-------------------|----------|
 | W-1 | erasure keeps text | high | MUST — approved | M1 |
 | W-2 | second-order correction | high | WON'T — owner decision 14/11 (t_54fb0317), documented; reopen on owner call | N1 |
-| W-3 | five unaudited paths | high | MUST — approved (fifth path confirm at build) | M2 |
+| W-3 | five unaudited paths (SIX after REV A2; `record_memory_usage` exempt) | high | MUST M2 — BUILT 20/11 (branch fix/must-integrity-2026-11-20), wave gate pending | M2 / REV A2, MG-4 |
 | W-4 | dream jobs have no producer | medium | MUST docs now + SHOULD producer | M4 + S2 |
 | W-5 | MCP scope chosen by model | medium | MUST — approved | M3 |
 | W-6 | relation validity is record time | medium | SHOULD | S3 |
