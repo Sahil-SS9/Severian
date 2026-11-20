@@ -3,7 +3,9 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-20
+
+Release candidate for the Must integrity wave. Not tagged, pushed or deployed.
 
 ### Breaking
 - **MCP stdio launches now fail closed.** `python -m severian.mcp` refuses to start unless tenant/profile are
