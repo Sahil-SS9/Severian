@@ -243,9 +243,11 @@ def migrate_message_units(
     written = 0
     if confirm:
         before = present
+        all_units: list[Memory] = []
         for observation in observations:
             units = message_unit_memories(observation, scope, enabled=True)
             if units:
+                all_units.extend(units)
                 repository.publish_derivation(
                     scope,
                     entities=[],
@@ -253,8 +255,11 @@ def migrate_message_units(
                     memories=units,
                     source_observation_id=observation.id,
                 )
-        if rebuild is not None:
-            rebuild.rebuild(scope)
+        if rebuild is not None and all_units:
+            # Index only the units; a full scope rebuild would re-encode every
+            # existing memory and turn a backfill into an hours-long model job.
+            rebuild.lexical.upsert_many(all_units)
+            rebuild.vector.upsert_many(all_units)
         written = max(0, _unit_count(repository, scope) - before)
     after = present + written
     return MessageUnitMigration(
