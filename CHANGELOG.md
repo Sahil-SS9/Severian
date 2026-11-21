@@ -3,7 +3,7 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased]
+## [0.6.1] - 2026-11-21
 
 ### Fixed
 - **Restoring a snapshot of a store that holds older rows.** Memories and relations written by earlier releases lack
