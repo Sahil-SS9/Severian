@@ -3,6 +3,24 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [Unreleased]
+
+### Fixed
+- **Restoring a snapshot of a store that holds older rows.** Memories and relations written by earlier releases lack
+  keys that later models added with a default (memories: `occurred_at`, `occurred_until`, `cues`, `trigger`,
+  `valid_until`, `replaced_by_id`, `purged`; relations: `source_observation_ids`, `retracted_at`,
+  `retracted_for_ids`). Such a store worked and exported, but `import_json` refused those rows, so its own snapshot
+  could not be restored. Import now fills exactly those keys with the model default while validating, on both
+  backends; every other missing or extra key and every hash, identity, scope and reference check still fails closed,
+  and the rows are stored as given, so a restored store exports identical to its source.
+- **Plugin manifest.** `plugins/hermes/severian/plugin.yaml` declares its (empty) hooks as `provides_hooks`, the key
+  Hermes and the plugin catalog read; the bare `hooks:` key blocked the catalog preflight.
+
+### Documentation
+- The plugin README documents `SEVERIAN_DREAM_URL`, its loopback-only default and `SEVERIAN_DREAM_ALLOW_REMOTE`.
+- The 0.4.0 entry now lists the integrity fixes that shipped in it: snapshot round-trip, audit rows for every
+  mutation, the supersede race, atomic erase and `severian purge`.
+
 ## [0.6.0] - 2026-11-21
 
 Message-level indexing units (S1). Off by default.
@@ -99,6 +117,29 @@ Must integrity wave. Released on GitHub as v0.4.0.
 - `docs/integrations.md` gives each harness its own profile (`standalone`, `claude-code`, `codex`, `opencode`,
   `claude-desktop`) and includes the launch flags in every recipe. `docs/threat-model.md` and the README MCP
   section state the boundary plainly.
+
+### Added
+- **`severian purge` (operator removal).** `severian purge --observation <id>` lists, as a dry run by default, every
+  record id it would scrub; `--confirm` replaces the text of the observation's whole revision chain, every memory
+  derived from it, the relations that lose their last support and the entity names nothing else supports with the
+  fixed marker `[purged]`, recomputes their hashes, releases their identity keys, writes one audit row per target
+  (ids and counts, no content), rebuilds the projection and compacts the SQLite stores. Backups outside the store
+  and PostgreSQL dead tuples are out of its reach; `docs/operator-runbook.md` says so.
+
+### Fixed
+- **Snapshot export/import round-trip.** `import_json` (shared by both backends) rejected real stores. It now accepts
+  derive-path and manual relation identity keys (each recomputed exactly), task notes, dated manual relations,
+  retired task notes and closed memories whose datetimes were written as `+00:00`, erasure tombstones and
+  correction (`source-rev:`) markers. Forged identity keys, scope columns and references are still rejected.
+- **An audit row for every payload mutation.** Closing, superseding and source-superseding a memory, retracting,
+  ending, supporting and reopening a relation, and a curation pass each now append exactly one audit row per target
+  in the same transaction (ids and times only), on both backends.
+- **Supersede race.** `supersede_memory` wrote back a stale copy, so a concurrent close could be lost. It is now one
+  conditional update of the current row, scoped to all five dimensions; any non-match raises `ConflictError`. The
+  curation marker and its audit reference are written in one transaction.
+- **Atomic erase.** Erasing an observation is one transaction (its tombstone, every derived memory's tombstone and
+  the relation retractions), so a crash cannot leave a derived memory active under an erased source; the erasure
+  releases the observation's dedupe identity so the same fact stated again is stored as new evidence.
 
 ## [0.3.13] - 2026-10-25
 
