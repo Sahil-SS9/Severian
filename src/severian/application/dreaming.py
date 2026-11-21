@@ -28,12 +28,26 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Collection, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from severian.application.dreamtriage import NEGATIONS, PairVerdict, Triage, classify_pair, proper_tokens
+from severian.application.dreamtriage import (
+    COMPATIBLE,
+    CONTRADICT,
+    MAX_EDITS_PER_PAIR,
+    MAX_FRAME_VALUES,
+    NEGATIONS,
+    PairVerdict,
+    Statement,
+    Triage,
+    ValueEdit,
+    classify_pair,
+    proper_tokens,
+    statements,
+    value_edits,
+)
 from severian.application.dreamwriter import DreamWriter
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import ConflictError, NotFoundError
@@ -647,6 +661,15 @@ def triage(
     tokens = _tokens_cached([m.content for m in memories])
     proper_by_index = [proper_tokens(m.content) for m in memories]
     verdicts = Triage()
+    # 0.6.2: statements are read lazily, only for memories in a value-bearing pair.
+    statements_by_index: dict[int, tuple[Statement, ...]] = {}
+    edits_by_verdict: dict[int, list[ValueEdit]] = {}
+
+    def statements_of(index: int) -> tuple[Statement, ...]:
+        if index not in statements_by_index:
+            statements_by_index[index] = statements(memories[index].content)
+        return statements_by_index[index]
+
     for a_idx, b_idx in _lsh_candidates(memories):
         tokens_a = tokens[a_idx]
         tokens_b = tokens[b_idx]
@@ -667,6 +690,15 @@ def triage(
         )
         if kind is None:
             continue
+        if kind == CONTRADICT:
+            # A value-bearing difference is a contradiction only when one value changes inside ONE
+            # shared statement (dreamtriage.value_edits). Anything else can be true together. The
+            # demotion is to COMPATIBLE, never to DUPLICATE: duplicate decisions do not move.
+            edits = value_edits(statements_of(a_idx), statements_of(b_idx))
+            if not edits or len(edits) > MAX_EDITS_PER_PAIR:
+                kind = COMPATIBLE
+            else:
+                edits_by_verdict[len(verdicts.verdicts)] = edits
         verdicts.verdicts.append(
             PairVerdict(
                 memory_a_id=memories[a_idx].id,
@@ -676,7 +708,24 @@ def triage(
                 differing=tuple(sorted(differing)),
             )
         )
+    _demote_running_figures(verdicts, edits_by_verdict)
     return verdicts
+
+
+def _demote_running_figures(verdicts: Triage, edits_by_verdict: dict[int, list[ValueEdit]]) -> None:
+    """A frame seen with more than MAX_FRAME_VALUES distinct values in this pass is a log, not a fact.
+
+    "the disk usage reached _ percent" with twenty readings is a series; flagging every pair of
+    readings is how one log line became hundreds of "contradictions". A pair stays a contradiction
+    while at least one of its edits sits in a frame with few values (a fact that changed a few times).
+    """
+    values_by_frame: dict[tuple[tuple[str, ...], tuple[str, ...]], set[tuple[str, ...]]] = {}
+    for edits in edits_by_verdict.values():
+        for edit in edits:
+            values_by_frame.setdefault(edit.frame, set()).update((edit.value_a, edit.value_b))
+    for index, edits in edits_by_verdict.items():
+        if all(len(values_by_frame[edit.frame]) > MAX_FRAME_VALUES for edit in edits):
+            verdicts.verdicts[index] = replace(verdicts.verdicts[index], kind=COMPATIBLE)
 
 
 def _content_digest(content: str) -> str:

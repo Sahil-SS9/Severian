@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from severian.application.dreamtriage import (
+    COMPATIBLE,
     CONTRADICT,
     DUPLICATE,
     RESTATE,
@@ -104,7 +105,8 @@ def test_triage_counts_are_per_class() -> None:
             PairVerdict("a", "b", DUPLICATE, 0.9),
             PairVerdict("c", "d", CONTRADICT, 0.7),
             PairVerdict("e", "f", RESTATE, 0.65),
+            PairVerdict("g", "h", COMPATIBLE, 0.7),
         ]
     )
-    assert triage.counts() == {DUPLICATE: 1, CONTRADICT: 1, RESTATE: 1}
+    assert triage.counts() == {DUPLICATE: 1, CONTRADICT: 1, RESTATE: 1, COMPATIBLE: 1}
     assert [verdict.memory_a_id for verdict in triage.duplicates] == ["a"]
