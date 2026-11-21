@@ -28,8 +28,10 @@ recomputed and compared), the payload metadata that could hold text (``source``,
 ``attachments``, ``cues``, ``trigger``) must be empty, and ``identity_key`` must be
 ``NULL``. A ``NULL`` identity key on a record that is *not* purged is rejected — that
 is what stops "purged" from becoming a generic way to opt out of dedupe and of this
-check. A snapshot written before M1 has no ``purged`` key; that single missing key is
-tolerated (its model default is ``False``) and nothing else is.
+check. A row written before a later model key existed lacks that key; exactly the keys in
+``LEGACY_DEFAULTED_KEYS`` (``purged`` on observations/memories/entities, the event-time,
+anticipation and truth-resolution keys on memories, the lineage keys on relations) are
+filled with their model default for validation, and nothing else is.
 
 All checks run before the write transaction opens. Any mismatch raises
 ``ValueError``; the caller's transaction never starts.
@@ -80,14 +82,36 @@ JOB_STATUSES = {"pending", "running", "done", "failed", "dead_letter"}
 OUTBOX_STATUSES = {"pending", "acked"}
 TASK_NOTE_STATUSES = {"current", "replaced", "cleared"}
 
-# Record kinds that carry the M1 ``purged`` flag. Only for these is a missing key
-# tolerated (a snapshot written before M1 predates the field), and only for a row whose
-# flag is true are the text/identity checks relaxed.
+# Record kinds that carry the M1 ``purged`` flag. Only for a row whose flag is true are
+# the text/identity checks relaxed.
 _PURGE_AWARE_KINDS = frozenset({"observation", "memory", "entity"})
-# M1 correction (F1): ``Relation.retracted_for_ids`` is a later payload key, so a snapshot
-# written before it has none. Its absence means "no evidence of a withdrawn support" - the
-# empty default - and is the only missing key tolerated on a relation.
+# M1 correction (F1): ``Relation.retracted_for_ids`` is the withdrawn-support provenance.
 RELATION_PROVENANCE_KEY = "retracted_for_ids"
+# Payload keys a later release added to a model WITH a default, while stores already held
+# rows of that kind. A row written before the key existed simply lacks it (the live store
+# holds memories and relations from Aug-Oct 2026 shaped exactly like this) and the read
+# path gives it the model default. Validation fills exactly these keys, with the model's
+# own default, before the strict round-trip; every other missing or extra key, and every
+# hash / identity / scope / reference check, still fails closed. The filled copy is used
+# for validation only: the imported row is stored as given, so a restored store exports
+# byte-identical to its source.
+LEGACY_DEFAULTED_KEYS: dict[str, tuple[str, ...]] = {
+    "observation": ("purged",),
+    "entity": ("purged",),
+    "memory": ("purged", "occurred_at", "occurred_until", "cues", "trigger", "valid_until", "replaced_by_id"),
+    "relation": (RELATION_PROVENANCE_KEY, "retracted_at", "source_observation_ids"),
+}
+
+
+def _with_legacy_defaults(kind: str, model: type[Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """``payload`` with any absent :data:`LEGACY_DEFAULTED_KEYS` filled from the model default."""
+    missing = [key for key in LEGACY_DEFAULTED_KEYS.get(kind, ()) if key not in payload]
+    if not missing:
+        return payload
+    filled = dict(payload)
+    for key in missing:
+        filled[key] = model.model_fields[key].get_default(call_default_factory=True)
+    return filled
 # Payload metadata that can carry text: a purged row must have emptied it.
 _PURGE_EMPTY_FIELDS: dict[str, tuple[tuple[str, Any], ...]] = {
     "observation": (("source", {}), ("attachments", [])),
@@ -245,13 +269,10 @@ def _validate_record(item: dict[str, Any], index: int) -> dict[str, Any]:
     payload = item.get("payload")
     if not isinstance(payload, dict):
         raise ValueError(f"record {index}: payload is not an object")
-    # A snapshot written before M1 has no ``purged`` key at all. Its absence means
-    # ``False``, so the one tolerated missing key is inserted before the round-trip
-    # comparison; every other missing or extra key still fails closed.
-    if kind in _PURGE_AWARE_KINDS and "purged" not in payload:
-        payload = {**payload, "purged": False}
-    if kind == "relation" and RELATION_PROVENANCE_KEY not in payload:
-        payload = {**payload, RELATION_PROVENANCE_KEY: []}
+    # A row written before a later model key existed lacks it; its absence means the model
+    # default. Exactly the listed keys are filled before the round-trip comparison; every
+    # other missing or extra key still fails closed.
+    payload = _with_legacy_defaults(kind, model, payload)
     try:
         parsed = model.model_validate(payload)
     except ValidationError as exc:
