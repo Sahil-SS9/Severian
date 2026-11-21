@@ -26,6 +26,12 @@ See the repo root [README](../../README.md) for features, benchmark results and 
   - `SEVERIAN_USER_FACTS=1`: sends conversation turns to the model backend Hermes is already configured with, in the
     background worker you run, to short facts.
   - `SEVERIAN_RERANK`: loads a cross-encoder locally (weights download from huggingface.co on first use).
+  - `SEVERIAN_DREAM_URL` (with `SEVERIAN_DREAMING=1`): the maintenance pass (`severian dream --confirm` or the
+    `severian work --dream-tenant` tick, both run by you) sends the text of each group of duplicate memories to this
+    OpenAI-compatible chat endpoint to word one merge summary. Default `http://127.0.0.1:8091/v1/chat/completions`
+    (model `SEVERIAN_DREAM_MODEL`, default `active:aux`). Loopback only: a URL whose host is not `127.0.0.1`, `::1` or
+    `localhost` is refused unless you also set `SEVERIAN_DREAM_ALLOW_REMOTE=1`, because a remote model can cost
+    money. If nothing answers, the pass keeps its deterministic summary text; a dry run never calls it.
   - `severian serve`: starts the HTTP API yourself; not started by the plugin.
 - **Background worker is yours.** The plugin never spawns hidden processes; the derivation worker runs when you or
   your cron run `severian work`.
