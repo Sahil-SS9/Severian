@@ -300,6 +300,17 @@ class _FakeRepository:
     def requeue_job(self, job_id: str) -> Job:
         raise NotFoundError(f"dead-letter job {job_id!r} not found")
 
+    def release_job(self, job_id: str, *, worker_id: str | None = None) -> Job:
+        raise NotFoundError("job not claimed")
+
+    def list_jobs(self, *, status: str, kind: str | None = None) -> list[Job]:
+        return []
+
+    def requeue_jobs(self, job_ids: Sequence[str], *, from_status: str = "failed") -> list[Job]:
+        if from_status not in ("failed", "dead_letter"):
+            raise ValueError("only failed or dead_letter jobs can be requeued")
+        return []
+
     def ack_outbox(self, event_id: str) -> None:
         raise NotFoundError("outbox event not found or already acked")
 
@@ -556,6 +567,15 @@ class _FakeRepository:
 
 def test_fake_backend_satisfies_contract() -> None:
     assert isinstance(_FakeRepository(), CanonicalRepository)
+
+
+def test_job_recovery_is_part_of_the_contract() -> None:
+    """0.6.3: dead-letter completion, release without an attempt, listing and bulk requeue."""
+    from severian.application.ports import JobQueuePort
+
+    for name in ("release_job", "list_jobs", "requeue_jobs"):
+        assert name in JobQueuePort.__dict__, name
+    assert isinstance(SQLiteRepository, JobQueuePort) and isinstance(PostgreSQLBackend, JobQueuePort)
 
 
 def test_fake_backend_accepts_the_relation_start_time() -> None:

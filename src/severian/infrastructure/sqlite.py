@@ -14,6 +14,7 @@ from sqlalchemy import JSON, Column, Index, MetaData, String, Table, create_engi
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
+from severian.application.jobrecovery import REQUEUEABLE_JOB_STATUSES, requeue_audit, requeue_reset
 from severian.application.purge import (
     EraseOutcome,
     PurgePlan,
@@ -2337,9 +2338,12 @@ class SQLiteRepository(TaskNoteStore):
         On failure the error is recorded; the job may be retried (still
         ``pending`` with ``retry_after`` set) or dead-lettered by
         ``reap_expired_jobs`` once attempts are exhausted.
+
+        0.6.3: ``dead_letter`` ends the job where ``requeue_job`` and the drain alarm see it, with the
+        error kept (for work that outlasted its retries only because something it needs was away).
         """
-        if status not in ("done", "failed"):
-            raise ValueError("job status must be 'done' or 'failed'")
+        if status not in ("done", "failed", "dead_letter"):
+            raise ValueError("job status must be 'done', 'failed' or 'dead_letter'")
         if retry_in is not None and status != "failed":
             raise ValueError("only a failed job can be retried later")
         with self.engine.begin() as connection:
@@ -2357,8 +2361,10 @@ class SQLiteRepository(TaskNoteStore):
                 raise ConflictError("job is owned by another worker")
             update_fields: dict[str, Any] = {
                 "status": status,
-                "last_error": error if status == "failed" else None,
+                "last_error": error if status != "done" else None,
             }
+            if status == "dead_letter":
+                update_fields.update(dead_letter=True, lease_until=None)
             if status == "failed":
                 wait = 5.0 if retry_in is None else retry_in
                 update_fields["retry_after"] = datetime.now(UTC) + timedelta(seconds=wait)
@@ -2480,6 +2486,78 @@ class SQLiteRepository(TaskNoteStore):
                 .where(records.c.id == job_id, records.c.record_type == "job", records.c.status == "dead_letter")
                 .values(status="pending", payload=requeued.model_dump(mode="json"))
             )
+        return requeued
+
+    def release_job(self, job_id: str, *, worker_id: str | None = None) -> Job:
+        """Give a claimed job back to ``pending`` without using up an attempt (0.6.3)."""
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(records.c.payload).where(
+                    records.c.id == job_id, records.c.record_type == "job", records.c.status == "running"
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                raise NotFoundError("job not claimed")
+            job = Job.model_validate(row["payload"])
+            if worker_id is not None and job.worker_id != worker_id:
+                raise ConflictError("job is owned by another worker")
+            released = job.model_copy(
+                update={
+                    "status": "pending",
+                    "attempts": max(0, job.attempts - 1),
+                    "worker_id": None,
+                    "lease_until": None,
+                }
+            )
+            result = connection.execute(
+                update(records)
+                .where(records.c.id == job_id, records.c.record_type == "job", records.c.status == "running")
+                .values(status="pending", payload=released.model_dump(mode="json"), lease_until=None)
+            )
+            if result.rowcount != 1:
+                raise ConflictError("job release conflict")
+        return released
+
+    def list_jobs(self, *, status: str, kind: str | None = None) -> list[Job]:
+        """Jobs in one state (and of one kind), oldest first (0.6.3)."""
+        filters = [records.c.record_type == "job", records.c.status == status]
+        if kind is not None:
+            filters.append(func.json_extract(records.c.payload, "$.kind") == kind)
+        query = (
+            select(records.c.payload)
+            .where(*filters)
+            .order_by(func.json_extract(records.c.payload, "$.created_at"), records.c.id)
+        )
+        with self.engine.connect() as connection:
+            return [Job.model_validate(value) for value in connection.execute(query).scalars()]
+
+    def requeue_jobs(self, job_ids: Sequence[str], *, from_status: str = "failed") -> list[Job]:
+        """Put ``failed``/``dead_letter`` jobs back to ``pending`` with a fresh budget, audited (0.6.3)."""
+        if from_status not in REQUEUEABLE_JOB_STATUSES:
+            raise ValueError("only failed or dead_letter jobs can be requeued")
+        requeued: list[Job] = []
+        with self.engine.begin() as connection:
+            for job_id in dict.fromkeys(job_ids):
+                value = connection.execute(
+                    select(records.c.payload).where(
+                        records.c.id == job_id, records.c.record_type == "job", records.c.status == from_status
+                    )
+                ).scalar_one_or_none()
+                if value is None:
+                    continue
+                job = Job.model_validate(value)
+                fresh = requeue_reset(job)
+                result = connection.execute(
+                    update(records)
+                    .where(records.c.id == job_id, records.c.record_type == "job", records.c.status == from_status)
+                    .values(status="pending", payload=fresh.model_dump(mode="json"), retry_after=None, lease_until=None)
+                )
+                if result.rowcount != 1:
+                    continue
+                self._insert_audit_in_transaction(
+                    connection, job.scope, "job.requeue", job.id, requeue_audit(job, from_status)
+                )
+                requeued.append(fresh)
         return requeued
 
     def append_outbox(self, scope: Scope, kind: str, payload: dict[str, Any]) -> Event:

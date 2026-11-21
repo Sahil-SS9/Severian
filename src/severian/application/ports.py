@@ -373,7 +373,27 @@ class JobQueuePort(Protocol):
         error: str | None = None,
         retry_in: float | None = None,
     ) -> Job:
-        """``retry_in`` (failed only): put the job back to ``pending``, claimable after that many seconds."""
+        """``status`` is ``done``, ``failed`` or ``dead_letter`` (0.6.3: kept apart for ``requeue_job``
+        and the drain alarm). ``retry_in`` (failed only): put the job back to ``pending``, claimable
+        after that many seconds."""
+        ...
+    def release_job(self, job_id: str, *, worker_id: str | None = None) -> Job:
+        """Give a claimed job back (``running`` -> ``pending``) WITHOUT using up an attempt (0.6.3).
+
+        For work never attempted, e.g. the model server was found down before the call; the error
+        and retry time are left as they were. Owner-checked like ``complete_job``.
+        """
+        ...
+    def list_jobs(self, *, status: str, kind: str | None = None) -> list[Job]:
+        """Jobs in one state (and of one kind), oldest first: what recovery plans from."""
+        ...
+    def requeue_jobs(self, job_ids: Sequence[str], *, from_status: str = "failed") -> list[Job]:
+        """Put ``failed`` or ``dead_letter`` jobs back to ``pending`` with a fresh attempt budget (0.6.3).
+
+        ONE transaction. Ids not in ``from_status`` are skipped (idempotent). Each requeued job gets
+        one ``job.requeue`` audit row through the audit-only helper: kind, from-state and attempts;
+        never the error text, which can quote a reply. Returns the requeued jobs.
+        """
         ...
     def list_profile_scopes(self, tenant_id: str, profile_id: str) -> list[Scope]:
         """Every scope holding turns, memories or jobs for one profile (for per-profile operations)."""
