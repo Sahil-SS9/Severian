@@ -112,6 +112,8 @@ class _HashingGateway:
 cli = typer.Typer(help="Severian memory platform CLI (Phase 3 vertical slice).")
 migrate_app = typer.Typer(help="Additive, rehearsed store migrations.")
 cli.add_typer(migrate_app, name="migrate")
+jobs_app = typer.Typer(help="Recover queued jobs that ended failed or dead-lettered.")
+cli.add_typer(jobs_app, name="jobs")
 
 
 def _scope_from_flags(
@@ -572,6 +574,53 @@ def dead_letter(
             ],
         }
     )
+
+
+@jobs_app.command("requeue")
+def jobs_requeue(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    kind: str = typer.Option(..., "--kind", help="Job kind, e.g. extract_facts."),
+    status: str = typer.Option("failed", "--status", help="The state to requeue from: failed or dead_letter."),
+    transient: bool = typer.Option(
+        False,
+        "--transient",
+        help="Only jobs whose error says the model server was down, busy or slow (never an unreadable reply).",
+    ),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="Requeue them. Without it this is a dry run: the plan is printed, nothing changes."
+    ),
+    dsn: str | None = typer.Option(None, "--dsn"),
+) -> None:
+    """Put failed or dead-lettered jobs of one kind back in the queue (0.6.3), dry run by default.
+
+    Each requeued job returns to ``pending`` with a fresh attempt budget and gets one ``job.requeue``
+    audit row (kind, state, attempts; never the error text). The next ``work`` pass retries them.
+    """
+    from severian.application.jobrecovery import REQUEUEABLE_JOB_STATUSES, plan_requeue, requeue
+
+    if status not in REQUEUEABLE_JOB_STATUSES:
+        raise typer.BadParameter("--status must be failed or dead_letter")
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        plan = plan_requeue(bundle.repository, kind=kind, status=status, transient_only=transient)
+        done = requeue(bundle.repository, plan) if confirm else []
+        _emit(
+            {
+                "action": "requeue",
+                "confirmed": bool(confirm),
+                "kind": kind,
+                "status": status,
+                "error_class": "transient" if transient else "any",
+                "matched": plan.matched,
+                "skipped_other_errors": plan.skipped_other_errors,
+                "requeued": len(done),
+                "job_ids": list(plan.job_ids),
+            }
+        )
+    finally:
+        bundle.close()
 
 
 @cli.command("export")
