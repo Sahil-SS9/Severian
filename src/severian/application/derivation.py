@@ -26,6 +26,7 @@ from severian.application.truthresolution import TruthResolver
 from severian.application.userfacts import (
     FACT_KIND,
     PROMPT_VERSION,
+    EndpointStatus,
     Extraction,
     facts_skip_profiles,
     time_label,
@@ -55,12 +56,14 @@ class FactSource(Protocol):
 class UserFacts:
     """What one fact batch gave: the facts published, and the turns given up on (observation id -> why).
 
-    ``retryable`` names the given-up turns whose only problem was a busy or unreachable model server.
+    ``retryable`` names the given-up turns whose only problem was a busy or unreachable model server;
+    ``endpoint_down`` (0.6.3) says that server was away (refused, timed out, 502/503/504), not busy.
     """
 
     published: list[Memory] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
     retryable: frozenset[str] = frozenset()
+    endpoint_down: bool = False
 
 
 class CloudPolicyError(PermissionError):
@@ -122,6 +125,22 @@ class DerivationService:
     def fact_extractor(self) -> FactSource | None:
         """The background fact pass's model (Round 2 idea 1); its call and token counters are the cost record."""
         return self._fact_extractor
+
+    def facts_endpoint(self) -> EndpointStatus:
+        """The fact model's endpoint check before a pass (0.6.3); ``unchecked`` when it has none.
+
+        An extractor without ``probe`` (test fakes, custom sources) is never checked, and a check that
+        raises counts as ``unknown`` so the pass still runs: facts are optional, the check is a saving.
+        """
+        probe = getattr(self._fact_extractor, "probe", None)
+        if probe is None:
+            return EndpointStatus("unchecked")
+        try:
+            status = probe()
+        except Exception as exc:  # the production check never raises; a custom one must not stop the pass
+            logger.warning("fact endpoint check raised; running the pass anyway", exc_info=True)
+            return EndpointStatus("unknown", f"check raised {type(exc).__name__}")
+        return status if isinstance(status, EndpointStatus) else EndpointStatus("unchecked")
 
     def _effective_policy(self, scope: Scope, caller_policy: dict[str, object]) -> dict[str, object]:
         """Merge canonical collection policy with caller hints (deny-dominant).
@@ -355,4 +374,9 @@ class DerivationService:
                 self._resolve(scope, saved)
         failed = {turns[number - 1][1].id: why for number, why in found.failed.items() if 1 <= number <= len(turns)}
         retryable = frozenset(turns[n - 1][1].id for n in found.retryable if 1 <= n <= len(turns))
-        return UserFacts(published=published, failed=failed, retryable=retryable)
+        return UserFacts(
+            published=published,
+            failed=failed,
+            retryable=retryable,
+            endpoint_down=bool(getattr(found, "endpoint_down", False)) and bool(retryable),
+        )

@@ -28,6 +28,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -51,6 +52,11 @@ JSON_ONLY = "Reply with only the JSON object described above: no list, no other 
 MAX_KEPT_REPLIES = 50  # bad replies kept per extractor, so failures can be read later
 MAX_KEPT_REPLY_CHARS = 4000
 _TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+# 0.6.3: the server is away, not busy. A gateway with no model behind it (503 no_backend), a model still
+# loading (503 Loading model) and a broken proxy (502/504) say so with these; 409/429/500 stay "busy".
+DOWN_STATUSES = frozenset({502, 503, 504})
+PROBE_TIMEOUT_S = 3.0  # the endpoint check before a facts pass: a cheap GET, never a model call
 
 
 def user_facts_enabled(env: Mapping[str, str] | None = None) -> bool:
@@ -196,12 +202,32 @@ class Extraction:
     """Facts per message number (1-based) and, for messages given up on, why.
 
     ``retryable`` holds the given-up messages that failed only because the model server was down, busy or
-    slow (never an unreadable reply): sending them again later can still work.
+    slow (never an unreadable reply): sending them again later can still work. ``endpoint_down`` (0.6.3)
+    says the server was away (refused, reset, timed out, 502/503/504) rather than busy: the rest of a
+    pass should wait instead of spending attempts on it.
     """
 
     facts: dict[int, list[str]] = field(default_factory=dict)
     failed: dict[int, str] = field(default_factory=dict)
     retryable: frozenset[int] = frozenset()
+    endpoint_down: bool = False
+
+
+@dataclass(frozen=True)
+class EndpointStatus:
+    """What the check before a facts pass found (0.6.3).
+
+    ``state``: ``up`` (it answered ready), ``down`` (refused, timed out, or a 5xx such as ``no_backend`` or
+    ``Loading model``), ``unknown`` (it answered, but neither route says whether a model is ready: the pass
+    runs and the mid-pass rule still guards it) or ``unchecked`` (no check: switched off or not supported).
+    """
+
+    state: str
+    reason: str = ""
+
+    @property
+    def down(self) -> bool:
+        return self.state == "down"
 
 
 _DESCRIBED_REPLY_CHARS = 300
@@ -213,14 +239,18 @@ class FactCallError(Exception):
     ``reply`` keeps what came back (the model's text, or the server's error body; may be empty).
     ``transient`` marks a server or network fault: a pause might help, a smaller batch would not.
     ``cut_off`` marks a reply that hit the token limit: more room might help.
+    ``down`` (transient only) marks a server that is away rather than busy (0.6.3).
     """
 
-    def __init__(self, reason: str, *, reply: str = "", transient: bool = False, cut_off: bool = False) -> None:
+    def __init__(
+        self, reason: str, *, reply: str = "", transient: bool = False, cut_off: bool = False, down: bool = False
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.reply = reply
         self.transient = transient
         self.cut_off = cut_off
+        self.down = down
 
     def describe(self) -> str:
         """The reason and the start of the reply: what a given-up turn's job keeps as its error."""
@@ -243,10 +273,15 @@ class FactExtractor:
         timeout: float = 60.0,
         opener: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        probe: bool = True,
+        probe_timeout: float = PROBE_TIMEOUT_S,
     ) -> None:
         self.url = url
         self.model = model
         self.timeout = timeout
+        self.probe_enabled = probe
+        self.probe_timeout = probe_timeout
+        self._down_seen = False
         self._open = opener or urllib.request.urlopen
         self._sleep = sleep
         self.calls = 0
@@ -269,7 +304,46 @@ class FactExtractor:
             values.get("SEVERIAN_FACTS_URL", DEFAULT_FACTS_URL),
             model=values.get("SEVERIAN_FACTS_MODEL", DEFAULT_FACTS_MODEL),
             timeout=float(values.get("SEVERIAN_FACTS_TIMEOUT", "60")),
+            probe=values.get("SEVERIAN_FACTS_PROBE", "").strip().lower() not in _FALSE,
+            probe_timeout=float(values.get("SEVERIAN_FACTS_PROBE_TIMEOUT", str(PROBE_TIMEOUT_S))),
         )
+
+    def probe(self) -> EndpointStatus:
+        """Check once, cheaply, that the facts server is there and ready (0.6.3). Never raises.
+
+        GETs ``/health`` at the root of ``url`` (llama.cpp-style servers answer 200 when a model is ready
+        and 503 while it loads); a server without that route is asked ``<url base>/models`` instead
+        (``/v1/models`` for ``/v1/chat/completions``). Refused, timed out or a 5xx is ``down``; a 2xx is
+        ``up``; two 4xx answers are ``unknown``. No model is called, so it costs nothing.
+        """
+        if not self.probe_enabled:
+            return EndpointStatus("unchecked", "SEVERIAN_FACTS_PROBE is off")
+        parts = urllib.parse.urlsplit(self.url)
+        root = f"{parts.scheme}://{parts.netloc}"
+        base = parts.path.rstrip("/")
+        for suffix in ("/chat/completions", "/completions"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        reasons = []
+        for route in (f"{root}/health", f"{root}{base}/models"):
+            state, reason = self._check(route)
+            if state != "unknown":
+                return EndpointStatus(state, f"{route}: {reason}")
+            reasons.append(f"{route}: {reason}")
+        return EndpointStatus("unknown", "; ".join(reasons))
+
+    def _check(self, route: str) -> tuple[str, str]:
+        request = urllib.request.Request(route, method="GET")  # noqa: S310 - operator-configured local URL
+        try:
+            with self._open(request, timeout=self.probe_timeout) as response:
+                return "up", f"HTTP {getattr(response, 'status', 200)}"
+        except urllib.error.HTTPError as exc:
+            if exc.code >= 500:
+                return "down", f"{exc} {_error_body(exc)[:_DESCRIBED_REPLY_CHARS]}".strip()
+            return "unknown", str(exc)
+        except (OSError, http.client.HTTPException, ValueError) as exc:  # refused, reset, timed out, bad URL
+            return "down", str(exc) or type(exc).__name__
 
     def extract(self, messages: list[str]) -> Extraction:
         """Facts per message number (1-based, in the order given), and the messages given up on.
@@ -286,12 +360,13 @@ class FactExtractor:
         facts: dict[int, list[str]] = {}
         failed: dict[int, str] = {}
         retryable: set[int] = set()
+        self._down_seen = False
         self._attempt(messages, 0, facts, failed, retryable, top=True)
         if failed:
             self.failed_batches += 1
             self.given_up += len(failed)
         return Extraction(facts=dict(sorted(facts.items())), failed=dict(sorted(failed.items())),
-                          retryable=frozenset(retryable))
+                          retryable=frozenset(retryable), endpoint_down=self._down_seen and bool(retryable))
 
     def _attempt(
         self,
@@ -338,6 +413,7 @@ class FactExtractor:
             failed.update({number: error.describe() for number in numbers})
             if error.transient:
                 retryable.update(numbers)
+                self._down_seen = self._down_seen or error.down
             return
         self.splits += 1
         half = (len(messages) + 1) // 2
@@ -384,9 +460,11 @@ class FactExtractor:
         except urllib.error.HTTPError as exc:  # the server answered with an error status
             # 409 = the gateway is still serving an identical request (our timed-out first try): busy, not bad.
             transient = exc.code >= 500 or exc.code in (409, 429)
-            raise FactCallError(str(exc), reply=_error_body(exc), transient=transient) from exc
-        except (OSError, http.client.HTTPException) as exc:  # refused, reset or timed out
-            raise FactCallError(str(exc) or type(exc).__name__, transient=True) from exc
+            raise FactCallError(
+                str(exc), reply=_error_body(exc), transient=transient, down=exc.code in DOWN_STATUSES
+            ) from exc
+        except (OSError, http.client.HTTPException) as exc:  # refused, reset or timed out: the server is away
+            raise FactCallError(str(exc) or type(exc).__name__, transient=True, down=True) from exc
         usage = payload.get("usage") or {}
         self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
         self.completion_tokens += int(usage.get("completion_tokens") or 0)

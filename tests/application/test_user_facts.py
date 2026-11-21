@@ -584,7 +584,8 @@ def test_a_busy_model_defers_the_turn_with_backoff_instead_of_failing_it(tmp_pat
     bundle.close()
 
 
-def test_a_turn_still_unserved_after_the_attempt_limit_fails_with_its_reason(tmp_path, monkeypatch):
+def test_a_turn_still_unserved_after_the_attempt_limit_is_dead_lettered_with_its_reason(tmp_path, monkeypatch):
+    """0.6.3: dead_letter, not failed, so ``requeue_job`` and the drain alarm see it (21/11: 451 silent losses)."""
     fake = BusyExtractor()
     bundle = make_bundle(tmp_path, monkeypatch, on=True, extractor=fake)
     say(bundle, ("I moved to York", "ok"))
@@ -593,11 +594,13 @@ def test_a_turn_still_unserved_after_the_attempt_limit_fails_with_its_reason(tmp
         assert extract(bundle).deferred == 1
         _due_now(bundle)
     summary = extract(bundle)
-    assert (summary.deferred, summary.gave_up) == (0, 1) and len(fake.calls) == FACTS_MAX_ATTEMPTS
+    assert (summary.deferred, summary.gave_up, summary.dead_lettered) == (0, 0, 1)
+    assert len(fake.calls) == FACTS_MAX_ATTEMPTS
     [job] = fact_jobs(bundle)
-    assert job.status == "failed" and job.last_error == "timed out" and job.attempts == FACTS_MAX_ATTEMPTS
+    assert job.status == "dead_letter" and job.last_error == "timed out" and job.attempts == FACTS_MAX_ATTEMPTS
+    assert [dead.id for dead in bundle.repository.list_dead_letter_jobs()] == [job.id]
     _due_now(bundle)
-    assert extract(bundle).total == 0  # a failed job is never picked up again
+    assert extract(bundle).total == 0  # a dead-lettered job is never picked up again by itself
     bundle.close()
 
 

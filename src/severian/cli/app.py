@@ -391,6 +391,7 @@ def work(
             max_jobs=None if max_jobs == 0 else max_jobs,
         )
         facts_processed = facts_failed = facts_projection_failed = facts_gave_up = facts_deferred = 0
+        facts_outage: dict[str, Any] = {}  # 0.6.3 keys, only when the fact pass runs (switch-off output unchanged)
         if bundle.derivation.fact_extractor is not None:  # wired only while SEVERIAN_USER_FACTS is on
             batch = 8 if max_jobs == 0 else min(8, max_jobs)
             facts = worker.extract_facts(
@@ -401,6 +402,10 @@ def work(
             facts_processed, facts_failed = facts.processed, facts.failed
             facts_projection_failed = facts.projection_failed
             facts_gave_up, facts_deferred = facts.gave_up, facts.deferred
+            facts_outage = {
+                "facts_dead_lettered": facts.dead_lettered,  # still unserved after every try: see dead-letter
+                "facts_endpoint": facts.endpoint,  # down = nothing sent, no attempt spent; jobs wait
+            }
         dream_payload: dict[str, Any] = {"dream_scopes": 0, "dream_jobs": [], "dream_processed": 0, "dream_failed": 0}
         if dream_tenant:
             # The opt-in dreaming tick: queue one job per (active scope, mode), then run them. No cron
@@ -429,7 +434,8 @@ def work(
                 "facts_failed": facts_failed,
                 "facts_projection_failed": facts_projection_failed,
                 "facts_gave_up": facts_gave_up,  # the model could not serve them: failed with the reason
-                "facts_deferred": facts_deferred,  # the model was busy: waiting to be tried again
+                "facts_deferred": facts_deferred,  # the model was busy or away: waiting to be tried again
+                **facts_outage,
                 **dream_payload,
             }
         )

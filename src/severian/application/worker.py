@@ -60,7 +60,9 @@ logger = logging.getLogger(__name__)
 _MAX_BACKLOG_EVENTS_PER_PASS = 500
 # 16/10/2026: a busy local model (timeouts, "identical request already running", restarts) failed ~13% of fact
 # jobs for good. A turn the model could not serve ONLY because the server was busy now waits and is tried again:
-# 5, 10, 20, 40, 60 min apart (about 2 h 15 m in all), and fails with its reason after the last attempt.
+# 5, 10, 20, 40, 60 min apart (about 2 h 15 m in all). 0.6.3: after the last attempt it is dead-lettered with
+# its reason (not failed), so ``requeue_job`` and the drain alarm see it; and a pass that finds the model server
+# away (21/11: 451 jobs lost to an outage of hours) leaves its jobs waiting without spending these attempts.
 FACTS_MAX_ATTEMPTS = 6
 FACTS_RETRY_BASE_S = 300.0
 FACTS_RETRY_MAX_S = 3600.0
@@ -83,12 +85,18 @@ class WorkerSummary:
     # Round 2 idea 1: fact jobs the model could not serve (after its retry and split) are completed
     # as failed with the reason; counted apart from ``failed`` (storage faults) so callers can tell.
     gave_up: int = 0
-    # Fact jobs sent back to wait for a busy model (FACTS_MAX_ATTEMPTS bounds it); not failures yet.
+    # Fact jobs sent back to wait for a busy model (FACTS_MAX_ATTEMPTS bounds it); not failures yet. 0.6.3: when
+    # the pass found the model server away, every fact job left waiting for it (none of those spent an attempt
+    # on the outage beyond the one call that met it).
     deferred: int = 0
+    # 0.6.3: fact jobs a busy or absent model still could not serve after FACTS_MAX_ATTEMPTS: dead-lettered.
+    dead_lettered: int = 0
+    # 0.6.3: the fact model's endpoint as the pass saw it: up / down / unknown / unchecked (no check made).
+    endpoint: str = "unchecked"
 
     @property
     def total(self) -> int:
-        return self.processed + self.failed + self.gave_up
+        return self.processed + self.failed + self.gave_up + self.dead_lettered
 
 
 class DerivationWorker:
@@ -271,14 +279,31 @@ class DerivationWorker:
         job's error (``gave_up``); they are not retried in a loop, and their raw turns were saved
         and made searchable by the normal pass. The exception is a turn that failed only because
         the model server was busy or down: it goes back to wait (``deferred``) and is tried again
-        later, up to ``FACTS_MAX_ATTEMPTS`` tries in all (``facts_retry_wait``). ``max_batches`` bounds
-        the pass; ``None`` empties
-        the queue.
+        later, up to ``FACTS_MAX_ATTEMPTS`` tries in all (``facts_retry_wait``), then is
+        dead-lettered with its reason (``dead_lettered``). ``max_batches`` bounds the pass; ``None``
+        empties the queue.
+
+        0.6.3 (21/11: an outage of hours failed 451 jobs for good): before claiming anything the pass
+        checks the fact model's endpoint once (``DerivationService.facts_endpoint``, a cheap GET). When
+        it is down nothing is claimed, so no attempt is spent, and ``endpoint`` says ``down``. When a
+        call in the pass meets the server away (refused, timed out, 502/503/504), that call's turns keep
+        the backoff above, the rest of the batch goes back unclaimed (``release_job``: no attempt spent)
+        and the pass stops. In both cases ``deferred`` counts every fact job left waiting.
         """
         if self._derivation is None:
             raise RuntimeError("fact extraction needs a derivation service")
-        processed = failed = gave_up = deferred = batches = projection_failed = 0
+        processed = failed = gave_up = deferred = dead_lettered = batches = projection_failed = 0
         touched_all: dict[str, Scope] = {}
+        waiting = len(self._repository.list_jobs(status="pending", kind=FACTS_JOB))
+        if not waiting:
+            return WorkerSummary()  # nothing queued: the endpoint is not even checked
+        status = self._derivation.facts_endpoint()
+        if status.down:
+            logger.warning(
+                "fact model endpoint is down (%s); %d fact jobs wait, no attempt spent", status.reason, waiting
+            )
+            return WorkerSummary(deferred=waiting, endpoint="down")
+        endpoint = status.state
         while max_batches is None or batches < max_batches:
             claimed: list[Job] = []
             while len(claimed) < batch_size:
@@ -295,7 +320,15 @@ class DerivationWorker:
             done: list[Job] = []
             unserved: list[tuple[Job, str, bool]] = []
             touched: dict[str, Scope] = {}
+            went_away = False
             for key, jobs in groups.items():
+                if went_away:  # the server went away earlier in this batch: these were never sent
+                    for job in jobs:
+                        try:
+                            self._repository.release_job(job.id, worker_id=worker_id)
+                        except Exception:
+                            logger.warning("failed to release fact job %s", job.id, exc_info=True)
+                    continue
                 ids = [str(job.payload.get("observation_id", "")) for job in jobs]
                 try:
                     result = self._derivation.derive_user_facts(jobs[0].scope, ids)
@@ -315,6 +348,7 @@ class DerivationWorker:
                     else:
                         unserved.append((job, reason, observation_id in result.retryable))
                 touched[key] = jobs[0].scope
+                went_away = went_away or result.endpoint_down
             applied = self._project_outbox(touched, worker_id)
             if applied is None:
                 projection_failed = 1
@@ -326,6 +360,9 @@ class DerivationWorker:
                         job.id, "failed", worker_id=worker_id, error=reason, retry_in=facts_retry_wait(job.attempts)
                     )
                     deferred += 1
+                elif busy:  # still unserved by a busy or absent server after every try: where requeue sees it
+                    self._repository.complete_job(job.id, "dead_letter", worker_id=worker_id, error=reason)
+                    dead_lettered += 1
                 else:
                     self._repository.complete_job(job.id, "failed", worker_id=worker_id, error=reason)
                     gave_up += 1
@@ -336,6 +373,11 @@ class DerivationWorker:
                     logger.warning("failed to ack outbox batch", exc_info=True)
             processed += len(done)
             touched_all.update(touched)
+            if went_away:
+                endpoint = "down"
+                deferred = len(self._repository.list_jobs(status="pending", kind=FACTS_JOB))
+                logger.warning("fact model endpoint went away mid-pass; %d fact jobs wait", deferred)
+                break
         return WorkerSummary(
             processed=processed,
             failed=failed,
@@ -343,6 +385,8 @@ class DerivationWorker:
             projection_failed=projection_failed,
             gave_up=gave_up,
             deferred=deferred,
+            dead_lettered=dead_lettered,
+            endpoint=endpoint,
         )
 
     def dream_pass(
