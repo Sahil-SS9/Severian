@@ -50,3 +50,23 @@ def test_same_date_updates_follow_message_order(tmp_path: Path, monkeypatch) -> 
     bundle.close()
     assert context.index("early: deadline April 1") < context.index("later: deadline April 5")
     assert "later message" in context
+
+
+def test_live_shaped_turns_without_turn_still_order_by_observation_position(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SEVERIAN_MESSAGE_UNITS", "1")
+    bundle = build_bundle(database=tmp_path / "live.db", fts=tmp_path / "live.fts", vectors=tmp_path / "live.vec")
+    scope = _scope()
+    bundle.repository.create_collection(Collection(id="c1", tenant_id="t1", name="S1 live"))
+    for text in ("early: deadline April 1", "later: deadline April 5"):
+        bundle.service.ingest_observation(
+            scope,
+            content=f"[2024/03/15 (Fri)] user: {text}\nassistant: noted",
+            source={},
+        )
+    DerivationWorker(bundle.repository, bundle.derivation, bundle.projection).drain(gateway=bundle.gateway)
+    hits = bundle.service.search(scope, query="deadline", limit=10)
+    context = bundle.service.assemble_context(scope, hits, max_chars=8_000, query="deadline")
+    bundle.close()
+    assert context.index("early: deadline April 1") < context.index("later: deadline April 5")
+    later_line = next(line for line in context.splitlines() if "later: deadline April 5" in line)
+    assert later_line.endswith("[later message]")

@@ -14,7 +14,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, cast
 
 from severian.domain.models import Memory, Observation, Scope
 
@@ -47,7 +47,7 @@ def unit_date(content: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _message_order(observation: Observation, role: str) -> int:
+def _message_order(observation: Observation, role: str, order_position: int | None = None) -> int:
     source = observation.source or {}
     explicit = source.get("message_order")
     if explicit is not None:
@@ -55,11 +55,15 @@ def _message_order(observation: Observation, role: str) -> int:
             return int(explicit)
         except (TypeError, ValueError):
             pass
-    try:
-        turn = int(source.get("turn", 1))
-    except (TypeError, ValueError):
-        turn = 1
-    return max(1, turn) * 2 + (1 if role == "assistant" else 0)
+    turn = source.get("turn")
+    if turn is not None:
+        try:
+            return max(1, int(turn)) * 2 + (1 if role == "assistant" else 0)
+        except (TypeError, ValueError):
+            pass
+    if order_position is not None:
+        return max(1, order_position) * 2 + (1 if role == "assistant" else 0)
+    return 2 + (1 if role == "assistant" else 0)
 
 
 def _sentences(text: str) -> list[str]:
@@ -125,6 +129,7 @@ def message_unit_memories(
     scope: Scope | None = None,
     *,
     enabled: bool | None = None,
+    order_position: int | None = None,
 ) -> list[Memory]:
     """Deterministic unit memories for one turn; empty when the switch is off."""
     if enabled is None:
@@ -138,7 +143,7 @@ def message_unit_memories(
         date = match.group(1).strip()
     units: list[Memory] = []
     for role, text in _roles(observation):
-        base_order = _message_order(observation, role)
+        base_order = _message_order(observation, role, order_position)
         chunks = _chunks(text)
         for part, chunk in enumerate(chunks, 1):
             part_label = f" part {part}" if len(chunks) > 1 else ""
@@ -251,14 +256,21 @@ def migrate_message_units(
     memory identity is deterministic), so a second apply writes nothing.
     """
     observations = [obs for obs in repository.list_observations(scope) if obs.superseded_by_id is None]
-    planned = sum(len(message_unit_memories(obs, scope, enabled=True)) for obs in observations)
+    positions_fn = getattr(repository, "observation_positions", None)
+    positions = cast(dict[str, int], positions_fn(scope)) if callable(positions_fn) else {}
+    planned = sum(
+        len(message_unit_memories(obs, scope, enabled=True, order_position=positions.get(obs.id)))
+        for obs in observations
+    )
     present = _unit_count(repository, scope)
     written = 0
     if confirm:
         before = present
         all_units: list[Memory] = []
         for observation in observations:
-            units = message_unit_memories(observation, scope, enabled=True)
+            units = message_unit_memories(
+                observation, scope, enabled=True, order_position=positions.get(observation.id)
+            )
             if units:
                 all_units.extend(units)
                 repository.publish_derivation(

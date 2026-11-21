@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, cast
 
 from severian.application.anticipation import anticipation_enabled, extract_trigger
 from severian.application.datestamps import date_stamps_enabled, dated
@@ -253,7 +253,14 @@ class DerivationService:
             scope,
             entities=extracted_entities,
             relations=extracted_relations,
-            memories=[*validated, *message_unit_memories(observation, scope)],
+            memories=[
+                *validated,
+                *message_unit_memories(
+                    observation,
+                    scope,
+                    order_position=self._observation_position(scope, observation.id),
+                ),
+            ],
             source_observation_id=observation.id,
             # S3: the graph is dated on the same clock as the memory path — when the source
             # message was written — so a replaced value's window ends where the new one starts.
@@ -263,6 +270,13 @@ class DerivationService:
         )
         self._resolve(scope, published)
         return published
+
+    def _observation_position(self, scope: Scope, observation_id: str) -> int | None:
+        positions_fn = getattr(self.repository, "observation_positions", None)
+        if not callable(positions_fn):
+            return None
+        positions = cast(dict[str, int], positions_fn(scope))
+        return int(positions[observation_id]) if observation_id in positions else None
 
     def _cues_for(self, content: str) -> list[str]:
         """Cues for one memory: ``[]`` when anticipation is off, no generator is set, or it fails."""

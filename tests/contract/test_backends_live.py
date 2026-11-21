@@ -127,6 +127,18 @@ def test_blank_scope_bypassing_pydantic_is_refused_at_storage(backend: Any) -> N
         backend.list_observations(broken)
 
 
+def test_observation_positions_follow_created_at(backend: Any) -> None:
+    scope = _unique_scope()
+    early = backend.add_observation(
+        Observation(scope=scope, content="early turn", created_at=datetime(2026, 3, 15, 9, 0, tzinfo=UTC))
+    )
+    late = backend.add_observation(
+        Observation(scope=scope, content="later turn", created_at=datetime(2026, 3, 15, 10, 0, tzinfo=UTC))
+    )
+    positions = backend.observation_positions(scope)
+    assert positions[early.id] < positions[late.id]
+
+
 def test_observation_revision_is_immutable_chain(backend: Any) -> None:
     scope = _unique_scope()
     original = backend.add_observation(Observation(scope=scope, content="v1"))

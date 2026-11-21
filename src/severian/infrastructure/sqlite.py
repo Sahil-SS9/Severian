@@ -637,6 +637,26 @@ class SQLiteRepository(TaskNoteStore):
             results.append(self._stored_pair(stored, job_kind, ()))
         return results
 
+    def observation_positions(self, scope: Scope) -> dict[str, int]:
+        """Insertion positions for every observation in scope.
+
+        Live Hermes turns carry no ``turn`` in source, so message units fall
+        back to the observation's place in the conversation. ``created_at``
+        first, then SQLite's stable insertion ``rowid``; the same date and
+        scope therefore preserves conversational order.
+        """
+        self._require_scope(scope)
+        query = (
+            select(records.c.id)
+            .where(records.c.record_type == "observation", *self._scope_predicates(scope))
+            .order_by(text("json_extract(payload, '$.created_at')"), text("rowid"))
+        )
+        with self.engine.connect() as connection:
+            return {
+                str(record_id): position
+                for position, record_id in enumerate(connection.execute(query).scalars(), 1)
+            }
+
     def list_observations(self, scope: Scope) -> list[Observation]:
         """All observations in scope, including superseded revisions.
 
