@@ -70,8 +70,8 @@ role, linked to the parent observation by `source_observation_ids`:
 - each unit carries its role and stable message order in its content, e.g.
   `[2024/03/15 (Fri)] user message 6: ...`;
 - long messages are chunked at sentence boundaries, 1,200 characters with a
-  120-character sentence overlap; a single oversized sentence is kept whole
-  rather than cut mid-sentence;
+  120-character sentence overlap; a single sentence longer than the sidecar's
+  encodable limit is split at a word boundary as the only exception;
 - when search returns a turn's units, the generic turn-level derived memory is
   dropped from that result set; `user_fact` memories are kept;
 - units on the same displayed date are rendered in message order, and all but
