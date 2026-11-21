@@ -131,9 +131,16 @@ now reachable two ways, both behind `SEVERIAN_DREAMING` (off by default):
   nothing. No cron is created or enabled by this release.
 
 **Code decides, a model may only write.** Every candidate pair is classified deterministically as a
-*duplicate* (supersede the older head), a *contradiction* (value-bearing difference: a number, a
-negation or a name — reported, never resolved) or a *restatement* (different words, same fact — no
-write). A model is optional and its only job is the text of a merge summary: batches of eight, one
+*duplicate* (supersede the older head), a *contradiction* (reported, never resolved), a
+*restatement* (different words, same fact — no write) or *compatible* (values differ, but both can be
+true — no write). Since 0.6.2 a contradiction is one value changing inside one shared statement: after
+leading `[...]` labels and date-times are removed, both memories share a sentence frame (at least two
+opening words, one of them a content word) and only one span of at most three words differs. That span
+holds a negation, or a number or name on both sides. A letter+digit id of six or more characters is not
+a value. A pair with more than three such changes, or whose every frame carries more than five values in
+the pass (a running figure or log line), is *compatible*. On a 29k-memory store this cut the report from
+128,901 pairs to 1,019. The *compatible* class never merges, so duplicate decisions are unchanged.
+A model is optional and its only job is the text of a merge summary: batches of eight, one
 retry per the busy-model rules, a failed batch falls back to the deterministic summary text and is
 counted, and the pass stops calling the model once ~10% of its batches have failed. The writer must
 be loopback unless `SEVERIAN_DREAM_ALLOW_REMOTE=1`, so the default path cannot spend money.
