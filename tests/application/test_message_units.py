@@ -53,6 +53,18 @@ def test_long_messages_chunk_on_sentence_boundaries(monkeypatch) -> None:
         assert body.endswith(".")
 
 
+def test_oversized_single_sentence_is_split_at_word_boundary(monkeypatch) -> None:
+    monkeypatch.setenv("SEVERIAN_MESSAGE_UNITS", "1")
+    observation = Observation(
+        scope=_scope(),
+        content="[2024/03/15 (Fri)] user: " + "word " * 2000 + "end.",
+        source={"turn": 1},
+    )
+    units = message_unit_memories(observation)
+    assert len(units) > 1
+    assert all(len(unit.content) < 2_000 for unit in units)
+
+
 def test_same_date_units_are_ordered_and_marked_later() -> None:
     early = SearchHitView(
         memory_id="early",

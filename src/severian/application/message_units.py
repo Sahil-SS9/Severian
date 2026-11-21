@@ -68,21 +68,34 @@ def _sentences(text: str) -> list[str]:
 
 
 def _chunks(text: str) -> list[str]:
-    """Sentence-boundary chunks; an oversized single sentence is never split."""
+    """Sentence-boundary chunks; an oversized single sentence is split at a word boundary."""
     chunks: list[str] = []
     current: list[str] = []
     for sentence in _sentences(text):
-        candidate = " ".join([*current, sentence])
-        if current and len(candidate) > MAX_UNIT_CHARS:
-            chunks.append(" ".join(current))
-            overlap: list[str] = []
-            for previous in reversed(current):
-                if sum(len(item) + 1 for item in overlap) + len(previous) > UNIT_OVERLAP_CHARS:
-                    break
-                overlap.insert(0, previous)
-            current = [*overlap, sentence]
-        else:
-            current.append(sentence)
+        pieces = [sentence]
+        if len(sentence) > MAX_UNIT_CHARS:
+            pieces = []
+            remaining = sentence
+            while len(remaining) > MAX_UNIT_CHARS:
+                cut = remaining.rfind(" ", 0, MAX_UNIT_CHARS)
+                if cut <= 0:
+                    cut = MAX_UNIT_CHARS
+                pieces.append(remaining[:cut].strip())
+                remaining = remaining[cut:].strip()
+            if remaining:
+                pieces.append(remaining)
+        for piece in pieces:
+            candidate = " ".join([*current, piece])
+            if current and len(candidate) > MAX_UNIT_CHARS:
+                chunks.append(" ".join(current))
+                overlap: list[str] = []
+                for previous in reversed(current):
+                    if sum(len(item) + 1 for item in overlap) + len(previous) > UNIT_OVERLAP_CHARS:
+                        break
+                    overlap.insert(0, previous)
+                current = [*overlap, piece]
+            else:
+                current.append(piece)
     if current:
         chunks.append(" ".join(current))
     return chunks
