@@ -3,7 +3,9 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-21
+
+Message-level indexing units (S1). Off by default.
 
 ### Added
 - **Message-level indexing units (S1, opt-in).** `SEVERIAN_MESSAGE_UNITS=1` makes user and assistant messages

@@ -1,6 +1,6 @@
 [project]
 name = "severian"
-version = "0.5.1"
+version = "0.6.0"
 description = "Local-first long-term memory for AI agents: scoped, cited, correctable, with hybrid recall"
 readme = "README.md"
 requires-python = ">=3.11"
