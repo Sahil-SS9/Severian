@@ -6,4 +6,4 @@ requires_env:
   - name: SEVERIAN_DSN
     description: "Optional: a PostgreSQL connection string. Leave blank to use the local SQLite store."
     secret: true
-hooks: []
+provides_hooks: []

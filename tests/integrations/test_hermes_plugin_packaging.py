@@ -62,3 +62,21 @@ def test_manifest_and_provider_report_the_package_version():
     version = _package()["version"]
     assert _manifest_version() == version
     assert SeverianMemoryProvider.PROVIDER_VERSION == version
+
+
+def _manifest_top_level_keys() -> dict[str, str]:
+    keys: dict[str, str] = {}
+    for line in (PLUGIN / "plugin.yaml").read_text(encoding="utf-8").splitlines():
+        if line and not line[0].isspace() and not line.startswith("#") and ":" in line:
+            key, value = line.split(":", 1)
+            keys[key.strip()] = value.strip()
+    return keys
+
+
+def test_manifest_declares_hooks_under_the_key_hermes_reads():
+    # Hermes' manifest parser and the catalog validator read ``provides_hooks``; a bare
+    # ``hooks:`` is ignored by Hermes and BLOCKs the catalog preflight. The provider
+    # registers no hooks, so the declaration stays empty.
+    keys = _manifest_top_level_keys()
+    assert "hooks" not in keys
+    assert keys.get("provides_hooks") == "[]"
