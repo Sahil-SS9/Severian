@@ -238,7 +238,7 @@ uv run python examples/quickstart.py
 | **MCP** | full seven-tool surface over stdio for Claude Code, Codex, OpenCode and Claude Desktop: [docs/integrations.md](docs/integrations.md). Tools: ingest, search, get, correct, forget, task progress, shared search. Launch is fail-closed: pin `--tenant-id`/`--profile-id` (or the `SEVERIAN_MCP_*` pair), or pass `--trusted-single-tenant` on a trusted single-user host. |
 | **Python** | `severian.composition.build_bundle(...)`; see [examples/quickstart.py](examples/quickstart.py) |
 | **HTTP** | `uv run severian serve` (dev server); client in `severian.sdk.client` |
-| **CLI** | `severian ingest / search / work / export / import / audit / rebuild-vectors / ...` (`--help` lists all) |
+| **CLI** | `severian ingest / search / work / export / import / audit / rebuild-vectors / jobs requeue / ...` (`--help` lists all) |
 
 The MCP launch binding pins **tenant and profile only**; `collection_id`, `agent_id` and `session_id` stay
 caller-chosen for each tool call. Give every harness its own profile in [docs/integrations.md](docs/integrations.md).
@@ -251,6 +251,7 @@ Behaviour switches are environment variables, so the same code serves benchmarks
 |---|---|---|
 | `SEVERIAN_EMBEDDING` | `hash` | `qwen` (local Qwen3-Embedding-0.6B) or `remote-qwen` (shared sidecar at `SEVERIAN_EMBED_SOCKET`) |
 | `SEVERIAN_USER_FACTS` | off (**recommended on**) | Short facts per conversation turn, extracted by a local model in the background |
+| `SEVERIAN_FACTS_URL` / `SEVERIAN_FACTS_MODEL` | `http://127.0.0.1:8091/v1/chat/completions` / `active:aux` | The local model the fact pass calls. Before each pass the worker checks it once (`/health`, else `<base>/models`); when it is down the fact jobs wait without spending attempts. `SEVERIAN_FACTS_PROBE=0` skips the check, `SEVERIAN_FACTS_PROBE_TIMEOUT` (3 s) bounds it |
 | `SEVERIAN_DATE_STAMPS` | off (**recommended on**) | Writes real dates next to relative times when saving |
 | `SEVERIAN_TRUTH_RESOLUTION` | off (**recommended on**) | Memories a newer fact replaced leave the current view and stay in history |
 | `SEVERIAN_RELATION_EVENT_TIME` | off | Dates graph relations from their source message: a relation starts when that message was written and a replaced value ends at the newer statement's time, with half-open windows |

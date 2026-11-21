@@ -3,6 +3,32 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.6.3] - 2026-11-21
+
+### Fixed
+- **User-fact jobs no longer die silently while the local facts model is down.** On 21/11 an outage of hours left
+  451 `extract_facts` jobs `failed` for good: every worker pass called the dead endpoint and spent an attempt, and
+  after the ~2 h 15 m retry window the jobs failed outside the drain alarm, which counts only dead-letter rows. Now:
+  - before a facts pass (only when fact jobs are queued) the worker checks the endpoint once with a cheap GET
+    (`/health` at the root of `SEVERIAN_FACTS_URL`, else `<base>/models`; `SEVERIAN_FACTS_PROBE_TIMEOUT`, default 3 s;
+    `SEVERIAN_FACTS_PROBE=0` skips it). When it is down nothing is claimed and no attempt is spent;
+  - a call that meets the server away mid-pass (refused, reset, timed out, HTTP 502/503/504) keeps the backoff for
+    its own turns, puts the rest of the batch back without spending their attempts, and ends the pass. A busy server
+    (409/429/500) keeps the previous behaviour;
+  - a turn a busy or absent model still could not serve after the last attempt is dead-lettered with its reason
+    instead of failed, so `severian dead-letter` and the dead-letter alarm see it. Unreadable or cut-off replies
+    stay `failed`;
+  - `severian work` reports `facts_endpoint` (`up`/`down`/`unknown`/`unchecked`) and `facts_dead_lettered` when the
+    fact pass runs; `facts_deferred` counts the fact jobs left waiting. With `SEVERIAN_USER_FACTS` off the output is
+    unchanged.
+
+### Added
+- **`severian jobs requeue`.** Puts `failed` (or, with `--status dead_letter`, dead-lettered) jobs of one `--kind`
+  back in the queue with a fresh attempt budget. `--transient` keeps only jobs whose error says the server was down,
+  busy or slow. It is a dry run unless `--confirm`; each requeued job gets one `job.requeue` audit row with its kind,
+  state and attempts and no content. The repository gains `release_job`, `list_jobs`, `requeue_jobs` and a
+  `dead_letter` status for `complete_job`, on both backends.
+
 ## [0.6.2] - 2026-11-21
 
 ### Fixed

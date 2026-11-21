@@ -368,6 +368,26 @@ Severian is designed **local-first**. The current posture:
   work` pass retries it). This is the only supported recovery path for
   exhausted jobs — do not edit the database directly.
 
+- **User-fact jobs and the facts model (0.6.3).** With `SEVERIAN_USER_FACTS`
+  on, `severian work` checks the facts endpoint (`SEVERIAN_FACTS_URL`) once
+  before the fact pass: `GET /health`, else `GET <base>/models`, 3 s
+  (`SEVERIAN_FACTS_PROBE_TIMEOUT`; `SEVERIAN_FACTS_PROBE=0` skips the check).
+  If it is down the pass claims nothing and spends no attempt; the summary
+  shows `"facts_endpoint": "down"` and `facts_deferred` = jobs waiting. Alarm
+  on a `down` that lasts, not on one pass. A server that goes away mid-pass
+  (refused, timed out, 502/503/504) ends the pass the same way. Turns still
+  unserved by a busy or absent model after 6 tries (~2 h 15 m) are
+  dead-lettered, so the dead-letter count rises; unreadable replies stay
+  `failed`.
+
+- **Bulk requeue (0.6.3).** `severian jobs requeue --database … --fts …
+  --vectors … --kind extract_facts --transient` prints which `failed` jobs
+  would go back (a dry run; nothing changes). Add `--confirm` to requeue
+  them: pending, fresh attempt budget, one `job.requeue` audit row each (no
+  content). `--status dead_letter` does the same for dead-lettered jobs of
+  that kind. Back the store up first, and run it once the model is serving
+  again. This replaces hand-written SQL resets.
+
 ## 6. systemd unit example (API + worker)
 
 ```ini
