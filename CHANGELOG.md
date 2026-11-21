@@ -3,6 +3,18 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.6.2] - 2026-11-21
+
+### Fixed
+- **Contradiction reports are precise at store scale (R062).** The dreaming triage called any differing
+  number, name or negation between two similar memories a contradiction: on a 29k-memory store that was
+  128,901 pairs, about four per memory, almost all from provenance labels, date-times, ids, values in
+  different sentences, different subjects or slots, added details and running figures. A contradiction is
+  now one value changing inside one shared statement (see `docs/memory-engine.md`); other value
+  differences get the new `compatible` triage class. On the same store the report drops to 1,019 pairs.
+  `compatible` never merges, so consolidation merges exactly the same duplicates as before; search and
+  assembled context do not use the triage and are unchanged.
+
 ## [0.6.1] - 2026-11-21
 
 ### Fixed
