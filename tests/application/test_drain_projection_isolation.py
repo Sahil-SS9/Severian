@@ -1,8 +1,9 @@
 """Regression tests for the 2026-08-22 dead-letter incident.
 
 Pins two behaviours:
-1. Texts longer than MAX_TEXT_CHARS are rejected client-side without a
-   socket round-trip (the >5s encode wedge class).
+1. Texts longer than MAX_TEXT_CHARS never reach the sidecar at full length (the >5s encode
+   wedge class). Since 0.6.4 the client cuts them to MAX_TEXT_CHARS and sends the cut text;
+   rejecting them dropped the vector and, inside a scope rebuild, emptied the scope.
 2. A projection failure during drain does NOT abort job completion —
    derived jobs still complete and outbox events stay pending (no more
    lease-expiry dead-letter cascades).
@@ -24,7 +25,6 @@ from severian.domain.models import Collection, Scope
 from severian.infrastructure.fts import FTS5Index
 from severian.infrastructure.remote_qwen_embedding import (
     MAX_TEXT_CHARS,
-    RemoteEmbeddingTextTooLongError,
     RemoteEmbeddingTransportError,
     RemoteQwenEmbedding,
 )
@@ -96,10 +96,13 @@ def _make_worker_with_flaky_projection(bundle, monkeypatch):
     return worker, flaky
 
 
-def test_text_over_hard_cap_rejected_without_socket(tmp_path):
+def test_text_over_hard_cap_is_cut_not_rejected(tmp_path):
+    # 0.6.4: an over-cap text is cut and sent (here the missing socket fails the transport);
+    # it is never refused with RemoteEmbeddingTextTooLongError any more.
     provider = RemoteQwenEmbedding(tmp_path / "missing.sock")
-    with pytest.raises(RemoteEmbeddingTextTooLongError):
+    with pytest.raises(RemoteEmbeddingTransportError):
         provider.encode("x" * (MAX_TEXT_CHARS + 1))
+    assert provider.truncated == 1
 
 
 def test_text_at_cap_reaches_transport(tmp_path):

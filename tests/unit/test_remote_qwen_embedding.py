@@ -682,3 +682,43 @@ def test_sidecar_device_switch_moves_embedding_and_rerank_together(monkeypatch: 
     monkeypatch.setattr(embedding_daemon, "QwenEmbedding", lambda device: made.append(device) or object())
     embedding_daemon.EmbeddingSocketDaemon("/tmp/x.sock")
     assert made == ["cuda:1"]
+
+
+# -- 0.6.4 B: long texts are cut to the sidecar limit, never refused ------------------------------
+
+
+def test_remote_truncates_a_long_document_instead_of_refusing_it(tmp_path: Path) -> None:
+    """0.6.3 raised RemoteEmbeddingTextTooLongError for > 8000 chars, which emptied whole scopes on rebuild."""
+    from severian.infrastructure.remote_qwen_embedding import MAX_TEXT_CHARS
+
+    path = tmp_path / "long.sock"
+    embedding = _FakeEmbedding()
+    text = "word " * 1847 + "tail"  # 9,239 characters: the 20/11 memory was 9,238
+    assert len(text) > MAX_TEXT_CHARS
+    with _running_daemon(path, embedding):
+        remote = RemoteQwenEmbedding(path)
+        vector = remote.encode(text)
+        query_vector = remote.encode_query(text)
+    assert vector == _unit_vector(0)
+    assert query_vector == _unit_vector(1)
+    assert embedding.calls == [("encode", text[:MAX_TEXT_CHARS]), ("encode_query", text[:MAX_TEXT_CHARS])]
+    assert remote.truncated == 2
+
+
+def test_remote_sends_normal_length_text_unchanged(tmp_path: Path) -> None:
+    from severian.infrastructure.remote_qwen_embedding import MAX_TEXT_CHARS
+
+    path = tmp_path / "normal.sock"
+    embedding = _FakeEmbedding()
+    exact = "x" * MAX_TEXT_CHARS
+    with _running_daemon(path, embedding):
+        remote = RemoteQwenEmbedding(path)
+        remote.encode("a normal memory")
+        remote.encode(exact)
+    assert embedding.calls == [("encode", "a normal memory"), ("encode", exact)]
+    assert remote.truncated == 0
+
+
+def test_truncation_keeps_the_space_fingerprint(tmp_path: Path) -> None:
+    remote = RemoteQwenEmbedding(tmp_path / "unused.sock")
+    assert resolve_embedding_metadata(remote).fingerprint == resolve_embedding_metadata(QwenEmbedding()).fingerprint

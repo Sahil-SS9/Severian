@@ -10,6 +10,7 @@ embedding provider.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import socket
@@ -20,14 +21,20 @@ from typing import Any
 
 from severian.infrastructure.qwen_embedding import QwenEmbedding
 
+logger = logging.getLogger(__name__)
+
 MAX_REQUEST_BYTES = 64 * 1024
 # A rerank request carries up to a pool of candidate texts, so it gets its own larger budget; each text is cut to
 # about what the cross-encoder reads anyway (512 tokens), then shortened further only if the request is still too big.
 RERANK_REQUEST_BYTES = 256 * 1024
 RERANK_TEXT_CHARS = 2000
 # Encode cost scales linearly with characters (~1.3ms/char pinned CPU): texts
-# beyond this cap cannot complete inside any sane socket timeout, so they are
-# rejected up front instead of wedging a drain pass into dead-letter territory.
+# beyond this cap cannot complete inside any sane socket timeout. 0.6.4: a longer
+# text is CUT to its first MAX_TEXT_CHARS characters (deterministically, the same
+# cut for documents and queries) instead of refused. Refusing it dropped the
+# memory's vector, and a refused text inside a scope rebuild emptied the whole
+# scope (20/11/2026). Texts at or under the cap are sent unchanged, so existing
+# vectors and the space fingerprint stay valid.
 MAX_TEXT_CHARS = 8000
 # Linear backoff between transport retries: 0.25s, 0.5s, 0.75s, ...
 _RETRY_BACKOFF_SECONDS = 0.25
@@ -64,7 +71,12 @@ class RemoteEmbeddingProtocolError(RemoteEmbeddingTransportError):
 
 
 class RemoteEmbeddingTextTooLongError(ValueError):
-    """The supplied text exceeds the sidecar's encodable length contract."""
+    """Kept for callers that still catch it; since 0.6.4 the client cuts long texts instead of raising."""
+
+
+def cut_to_limit(text: str) -> str:
+    """The deterministic cut applied to every text before encoding (0.6.4)."""
+    return text if len(text) <= MAX_TEXT_CHARS else text[:MAX_TEXT_CHARS]
 
 
 def _validated_absolute_socket_path(socket_path: str | Path) -> Path:
@@ -97,6 +109,8 @@ class RemoteQwenEmbedding(QwenEmbedding):
         self.socket_path = _validated_absolute_socket_path(socket_path)
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
+        # 0.6.4: how many texts this client cut to MAX_TEXT_CHARS (each cut is also logged).
+        self.truncated = 0
 
     def load(self) -> bool:
         """Refuse a local model load: this provider is sidecar-only."""
@@ -122,10 +136,12 @@ class RemoteQwenEmbedding(QwenEmbedding):
         if not isinstance(text, str):
             raise TypeError("remote Qwen embedding text must be a string")
         if len(text) > MAX_TEXT_CHARS:
-            raise RemoteEmbeddingTextTooLongError(
-                f"remote Qwen embedding text exceeds {MAX_TEXT_CHARS} characters "
-                f"(got {len(text)}); truncate before encoding"
+            self.truncated += 1
+            logger.info(
+                "embedding text of %d characters cut to %d (%s; %d cut by this client)",
+                len(text), MAX_TEXT_CHARS, operation, self.truncated,
             )
+            text = cut_to_limit(text)
         response = self._request({"op": operation, "text": text})
         return self._validated_vector(response)
 
@@ -251,4 +267,5 @@ __all__ = [
     "RemoteEmbeddingTransportError",
     "RemoteQwenEmbedding",
     "RemoteReranker",
+    "cut_to_limit",
 ]
