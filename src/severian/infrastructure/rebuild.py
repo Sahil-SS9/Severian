@@ -1,6 +1,18 @@
-"""Side-by-side atomic vector rebuild (zero-debt plan, Task 2.3).
+"""Vector rebuild: in-place repair (0.6.4, the default) and side-by-side atomic swap.
 
-`severian rebuild-vectors` NEVER rebuilds in place. It:
+0.6.4 in-place repair (``repair_vectors_in_place``): for a projection that already uses the active
+embedding space and storage format, write the missing or changed vectors into the SAME index, in
+chunks of one transaction each, delete rows that belong to no active memory, and fix kind labels.
+Running gateways and the drain keep using the same file/table and see every chunk as it commits;
+an interrupted run keeps the chunks it finished and a re-run continues where it stopped.
+``plan_vector_repair`` counts the same work without writing anything (``--dry-run``).
+
+The side-by-side swap below remains for a projection that cannot be opened as-is (legacy format,
+other embedding space). It replaces the file with ``os.replace``: every process that has the old
+file open keeps reading and writing the OLD inode, so stop or restart every store opener (gateways,
+drain, MCP) around a swap.
+
+Side-by-side swap (zero-debt plan, Task 2.3):
 
 1. Builds the new projection SIDE-BY-SIDE (new sqlite file, or new PG
    table + meta) — the live index is untouched during the build.
@@ -19,15 +31,18 @@ programme exists to prevent).
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from severian.domain.models import Memory, Scope
+from severian.infrastructure.vector import plan_scope_sync
 
 
 @runtime_checkable
@@ -280,6 +295,293 @@ def verify_candidate(
         canary_total=canary_total,
         deterministic=deterministic,
     )
+
+
+# --- in-place repair (0.6.4) --------------------------------------------
+
+
+@runtime_checkable
+class RepairableIndex(Protocol):
+    """A vector index the in-place repair can read and write (LocalVectorIndex, PGVectorIndex)."""
+
+    embedding: Any
+
+    def scope_state(self, scope: Scope) -> dict[str, tuple[str, str]]: ...
+    def write_encoded(
+        self,
+        rows: list[tuple[Memory, list[float]]],
+        delete_ids: list[str],
+        relabel: list[tuple[str, str]] | None = None,
+    ) -> None: ...
+    def index_scopes(self) -> list[Scope]: ...
+    def digest(self, scope: Scope) -> str: ...
+
+
+@dataclass(frozen=True)
+class RepairPlan:
+    """What an in-place repair would do, in counts only (never content)."""
+
+    scopes: int = 0
+    active: int = 0
+    present: int = 0
+    missing: int = 0
+    stale: int = 0  # a row exists but its content no longer matches the memory
+    orphans: int = 0  # rows that belong to no active memory (incl. scopes with none left)
+    relabel: int = 0
+    to_encode: int = 0
+    to_encode_chars: int = 0
+    long_texts: int = 0  # over the remote embedding limit: encoded from their first 8000 characters
+    low_scopes: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    @property
+    def coverage(self) -> float:
+        return 1.0 if self.active == 0 else self.present / self.active
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scopes": self.scopes,
+            "active": self.active,
+            "present": self.present,
+            "missing": self.missing,
+            "stale": self.stale,
+            "orphans": self.orphans,
+            "relabel": self.relabel,
+            "to_encode": self.to_encode,
+            "to_encode_chars": self.to_encode_chars,
+            "long_texts": self.long_texts,
+            "coverage": round(self.coverage, 6),
+            "low_scopes": self.low_scopes,
+        }
+
+
+@dataclass(frozen=True)
+class RepairResult:
+    status: str  # repaired | partial
+    plan: RepairPlan
+    encoded: int
+    deleted: int
+    relabelled: int
+    failed: tuple[str, ...]
+    seconds: float
+    coverage_after: float
+    verified: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "mode": "in-place",
+            "plan": self.plan.as_dict(),
+            "encoded": self.encoded,
+            "deleted": self.deleted,
+            "relabelled": self.relabelled,
+            "failed": list(self.failed),
+            "seconds": round(self.seconds, 1),
+            "coverage_after": round(self.coverage_after, 6),
+            "verified": self.verified,
+        }
+
+
+_LONG_TEXT_CHARS = 8000  # remote_qwen_embedding.MAX_TEXT_CHARS; counted only, the client does the cut
+
+
+def _repair_targets(
+    index: RepairableIndex, repository: RebuildSource, scope: Scope | None
+) -> tuple[list[Scope], list[Scope]]:
+    """(scopes with active memories to repair, index-only scopes whose rows are all orphans)."""
+    scopes = _rebuild_scopes(repository, scope)
+    if scope is not None:
+        return scopes, []
+    wanted = {_scope_key(item) for item in scopes}
+    leftovers = [item for item in index.index_scopes() if _scope_key(item) not in wanted]
+    return scopes, sorted(leftovers, key=_scope_key)
+
+
+def plan_vector_repair(index: RepairableIndex, repository: RebuildSource, scope: Scope | None) -> RepairPlan:
+    """Count what ``repair_vectors_in_place`` would change. Reads only; writes nothing."""
+    scopes, leftovers = _repair_targets(index, repository, scope)
+    totals = dict.fromkeys(
+        ("active", "present", "missing", "stale", "orphans", "relabel", "to_encode", "chars", "long"), 0
+    )
+    low: dict[str, dict[str, int]] = {}
+    for item in scopes:
+        sync = plan_scope_sync(index.scope_state(item), list(repository.list_memories(item)))
+        totals["active"] += sync.active
+        totals["present"] += sync.present
+        totals["missing"] += sync.missing
+        totals["stale"] += sync.changed_content
+        totals["orphans"] += len(sync.stale)
+        totals["relabel"] += len(sync.relabel)
+        totals["to_encode"] += len(sync.to_encode)
+        totals["chars"] += sum(min(len(m.content), _LONG_TEXT_CHARS) for m in sync.to_encode)
+        totals["long"] += sum(1 for m in sync.to_encode if len(m.content) > _LONG_TEXT_CHARS)
+        if sync.active and sync.present < 0.99 * sync.active:
+            low["/".join(_scope_key(item))] = {"active": sync.active, "present": sync.present}
+    for item in leftovers:
+        totals["orphans"] += len(index.scope_state(item))
+    return RepairPlan(
+        scopes=len(scopes),
+        active=totals["active"],
+        present=totals["present"],
+        missing=totals["missing"],
+        stale=totals["stale"],
+        orphans=totals["orphans"],
+        relabel=totals["relabel"],
+        to_encode=totals["to_encode"],
+        to_encode_chars=totals["chars"],
+        long_texts=totals["long"],
+        low_scopes=low,
+    )
+
+
+def repair_vectors_in_place(
+    index: RepairableIndex,
+    repository: RebuildSource,
+    scope: Scope | None,
+    *,
+    chunk: int = 256,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> RepairResult:
+    """Repair a live vector index in place, chunk by chunk (0.6.4).
+
+    Per scope: delete orphan rows and fix kind labels (one transaction), then encode the missing or
+    changed memories ``chunk`` at a time, each chunk one transaction. Every vector that is already
+    right is kept. A memory the embedding refuses (``ValueError``) is skipped and reported in
+    ``failed``; any other error (sidecar gone, timeout) stops the run with the finished chunks
+    committed, and a re-run continues from what is still missing.
+    """
+    if chunk < 1:
+        raise ValueError("chunk must be at least 1")
+    started = time.monotonic()
+    plan = plan_vector_repair(index, repository, scope)
+    scopes, leftovers = _repair_targets(index, repository, scope)
+    encoded_total = deleted = relabelled = 0
+    failed: list[str] = []
+    for item in leftovers:
+        orphan_ids = sorted(index.scope_state(item))
+        index.write_encoded([], orphan_ids)
+        deleted += len(orphan_ids)
+    verified = True
+    for position, item in enumerate(scopes, 1):
+        memories = list(repository.list_memories(item))
+        sync = plan_scope_sync(index.scope_state(item), memories)
+        index.write_encoded([], sync.stale, sync.relabel)
+        deleted += len(sync.stale)
+        relabelled += len(sync.relabel)
+        for start in range(0, len(sync.to_encode), chunk):
+            rows: list[tuple[Memory, list[float]]] = []
+            for memory in sync.to_encode[start : start + chunk]:
+                try:
+                    rows.append((memory, index.embedding.encode(memory.content)))
+                except ValueError:
+                    failed.append(memory.id)
+            index.write_encoded(rows, [])
+            encoded_total += len(rows)
+            if progress is not None:
+                progress(
+                    {
+                        "scope": position,
+                        "scopes": len(scopes),
+                        "encoded": encoded_total,
+                        "to_encode": plan.to_encode,
+                        "seconds": round(time.monotonic() - started, 1),
+                    }
+                )
+        if not failed:
+            verified = verified and index.digest(item) == _canonical_digest(memories)
+    after = plan_vector_repair(index, repository, scope)
+    return RepairResult(
+        status="partial" if failed else "repaired",
+        plan=plan,
+        encoded=encoded_total,
+        deleted=deleted,
+        relabelled=relabelled,
+        failed=tuple(failed),
+        seconds=time.monotonic() - started,
+        coverage_after=after.coverage,
+        verified=verified and not failed and after.orphans == 0 and after.to_encode == 0,
+    )
+
+
+class ReadOnlySqliteVectors:
+    """Read-only view of a SQLite vector file for ``--dry-run`` (opens ``mode=ro``; never writes)."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        columns = {str(row[1]) for row in self.connection.execute("PRAGMA table_info(memory_vectors)")}
+        self._kind = "kind" if "kind" in columns else "''"
+        self.embedding: Any = None
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def scope_state(self, scope: Scope) -> dict[str, tuple[str, str]]:
+        rows = self.connection.execute(
+            f"""SELECT memory_id, content, {self._kind} FROM memory_vectors
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?""",  # noqa: S608 - fixed column choice
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        return {str(row[0]): (str(row[1]), str(row[2])) for row in rows}
+
+    def index_scopes(self) -> list[Scope]:
+        keys = _sqlite_vector_scope_keys(self.path)
+        return [
+            Scope(tenant_id=k[0], profile_id=k[1], collection_id=k[2], agent_id=k[3], session_id=k[4])
+            for k in sorted(keys)
+        ]
+
+    def write_encoded(
+        self,
+        rows: list[tuple[Memory, list[float]]],
+        delete_ids: list[str],
+        relabel: list[tuple[str, str]] | None = None,
+    ) -> None:  # pragma: no cover - a dry run never writes
+        raise PermissionError("read-only vector view")
+
+    def digest(self, scope: Scope) -> str:  # pragma: no cover - unused by the plan
+        raise NotImplementedError
+
+
+def sqlite_vectors_compatible(path: str | Path, embedding: Any) -> tuple[bool, str]:
+    """Whether ``path`` can be repaired in place with ``embedding`` (read-only check).
+
+    In place needs the packed-float32 format and the same embedding space (or an empty index).
+    A missing file is compatible (the repair creates it).
+    """
+    from severian.infrastructure.embedding_metadata import metadata_from_dict
+    from severian.infrastructure.embedding_registry import resolve_embedding_metadata
+    from severian.infrastructure.vector import VECTOR_STORAGE_FORMAT
+
+    target = Path(path)
+    if not target.exists():
+        return True, "no index yet"
+    try:
+        connection = sqlite3.connect(f"file:{target}?mode=ro", uri=True)
+        try:
+            tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "memory_vectors" not in tables:
+                return True, "no vector table yet"
+            rows = int(connection.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0])
+            meta = (
+                dict(connection.execute("SELECT key, value FROM vector_space_meta").fetchall())
+                if "vector_space_meta" in tables
+                else {}
+            )
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        return False, f"cannot read the index: {exc}"
+    if rows == 0:
+        return True, "empty index"
+    if meta.get("vector_storage_format") != VECTOR_STORAGE_FORMAT:
+        return False, "legacy or unversioned storage format"
+    stored = meta.get("embedding_metadata")
+    if stored is None:
+        return False, "index has no recorded embedding space"
+    if metadata_from_dict(json.loads(stored)).fingerprint != resolve_embedding_metadata(embedding).fingerprint:
+        return False, "index uses a different embedding space"
+    return True, "same embedding space and format"
 
 
 # --- sqlite ------------------------------------------------------------

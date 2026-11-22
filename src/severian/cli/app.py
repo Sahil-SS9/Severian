@@ -827,16 +827,31 @@ def rebuild_vectors(
     keep_rollback: bool = typer.Option(
         True,
         "--keep-rollback/--no-keep-rollback",
-        help="Keep the pre-swap index as rollback until explicit cleanup.",
+        help="Keep the pre-swap index as rollback until explicit cleanup (--swap only).",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Count what would change (missing, stale, orphan rows) and write nothing."
+    ),
+    swap: bool = typer.Option(
+        False,
+        "--swap",
+        help="Force the side-by-side rebuild + file/table swap (stop every store opener first).",
+    ),
+    chunk: int = typer.Option(256, "--chunk", min=1, help="In-place repair: memories encoded per transaction."),
 ) -> None:
-    """Rebuild vector projections side-by-side, verify, then swap atomically.
+    """Repair or rebuild the vector projection.
 
-    This is an operator maintenance command.  Unlike normal CLI commands it
-    opens only canonical storage: a legacy or mismatched projection is the
-    object being replaced and must never be opened before the side-by-side
-    rebuild begins.  ``--all-scopes`` is required when a shared projection
-    holds multiple memory scopes.
+    0.6.4 default (in place): when the existing index already uses the active embedding space and
+    storage format, the missing or changed vectors are written into the SAME index in chunks (one
+    transaction each), rows of memories that are no longer active are deleted, and every vector
+    that is still right is kept. Running gateways and the drain see the rows as they land; an
+    interrupted run keeps its finished chunks, and running it again continues. Progress lines go
+    to stderr. ``--dry-run`` prints the counts and writes nothing.
+
+    Swap (``--swap``, or automatically when the index cannot be opened as it is: legacy format or
+    another embedding space): build a new index side by side, verify it, then swap it in. A
+    swapped SQLite file is a new inode: stop or restart every store opener around it.
+    ``--all-scopes`` is required when a shared projection holds multiple memory scopes.
     """
     del fts  # Retained as an explicit legacy CLI flag; vector rebuild does not open lexical projections.
     from severian.infrastructure.embedding_resolver import embedding_from_env
@@ -883,6 +898,13 @@ def rebuild_vectors(
         # stated explicitly (fail closed on unset/hash — the 2026-08-22
         # live-index incident class).
         embedding = embedding_from_env(require_explicit=True)
+        mode, reason = ("swap", "--swap given") if swap else _in_place_mode(vectors, dsn, embedding)
+        if dry_run or mode == "in-place":
+            _repair_in_place(
+                vectors=vectors, dsn=dsn, repository=repository, scope=scope, embedding=embedding,
+                mode=mode, reason=reason, dry_run=dry_run, chunk=chunk,
+            )
+            return
         if dsn:
             result = rebuild_pg_vectors(dsn, repository, scope, embedding, keep_rollback=keep_rollback)
         else:
@@ -913,6 +935,92 @@ def rebuild_vectors(
             raise typer.Exit(code=1)
     finally:
         repository.close()
+
+
+def _in_place_mode(vectors: Path, dsn: str | None, embedding: Any) -> tuple[str, str]:
+    """``in-place`` when the existing index can be repaired as it is, else ``swap`` (0.6.4)."""
+    if dsn:
+        from severian.infrastructure.embedding_metadata import EmbeddingSpaceMismatchError
+        from severian.infrastructure.pgvector_index import PGVectorIndex
+
+        index = PGVectorIndex(dsn, embedding)
+        try:
+            index.initialize()
+        except EmbeddingSpaceMismatchError:
+            return "swap", "index uses a different embedding space"
+        finally:
+            index.close()
+        return "in-place", "same embedding space"
+    from severian.infrastructure.rebuild import sqlite_vectors_compatible
+
+    compatible, reason = sqlite_vectors_compatible(vectors, embedding)
+    return ("in-place" if compatible else "swap"), reason
+
+
+def _repair_in_place(
+    *,
+    vectors: Path,
+    dsn: str | None,
+    repository: Any,
+    scope: Scope | None,
+    embedding: Any,
+    mode: str,
+    reason: str,
+    dry_run: bool,
+    chunk: int,
+) -> None:
+    from severian.infrastructure.rebuild import (
+        ReadOnlySqliteVectors,
+        plan_vector_repair,
+        repair_vectors_in_place,
+    )
+
+    index: Any
+    if dsn:
+        from severian.infrastructure.pgvector_index import PGVectorIndex
+
+        index = PGVectorIndex(dsn, embedding)
+        if mode == "in-place":
+            index.initialize()
+    elif dry_run and mode == "in-place" and vectors.exists():
+        index = ReadOnlySqliteVectors(vectors)
+    elif dry_run:
+        index = None
+    else:
+        from severian.infrastructure.vector import LocalVectorIndex
+
+        index = LocalVectorIndex(vectors, embedding)
+    base: dict[str, Any] = {
+        "format": "severian-v1",
+        "mode": mode,
+        "mode_reason": reason,
+        "scope": "all-active-memory-scopes" if scope is None else str(scope),
+    }
+    try:
+        if dry_run:
+            if index is None or mode == "swap":
+                # A swap re-encodes every active memory into a new index.
+                from severian.infrastructure.rebuild import _canonical_rows, _rebuild_scopes
+
+                rows = _canonical_rows(repository, _rebuild_scopes(repository, scope))
+                plan = {"active": len(rows), "to_encode": len(rows),
+                        "to_encode_chars": sum(min(len(m.content), 8000) for m in rows),
+                        "long_texts": sum(1 for m in rows if len(m.content) > 8000)}
+                _emit({**base, "status": "planned", "plan": plan})
+            else:
+                _emit({**base, "status": "planned", "plan": plan_vector_repair(index, repository, scope).as_dict()})
+            return
+
+        def progress(update: dict[str, Any]) -> None:
+            typer.echo(json.dumps({"progress": update}, sort_keys=True), err=True)
+
+        result = repair_vectors_in_place(index, repository, scope, chunk=chunk, progress=progress)
+        _emit({**base, **result.as_dict()})
+        if result.status != "repaired":
+            raise typer.Exit(code=1)
+    finally:
+        if index is not None:
+            index.close()
 
 
 @cli.command("rollback")

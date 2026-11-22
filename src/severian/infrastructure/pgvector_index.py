@@ -324,6 +324,15 @@ class PGVectorIndex:
         with self.engine.connect() as connection:
             return {str(row[0]): (str(row[1]), str(row[2])) for row in connection.execute(statement).all()}
 
+    def index_scopes(self) -> list[Scope]:
+        """Every scope that has at least one vector row (operator repair)."""
+        columns = [self._table.c[key] for key in ("tenant_id", "profile_id", "collection_id", "agent_id", "session_id")]
+        with self.engine.connect() as connection:
+            rows = connection.execute(select(*columns).distinct().order_by(*columns)).all()
+        return [
+            Scope(tenant_id=r[0], profile_id=r[1], collection_id=r[2], agent_id=r[3], session_id=r[4]) for r in rows
+        ]
+
     def write_encoded(
         self,
         rows: list[tuple[Memory, list[float]]],

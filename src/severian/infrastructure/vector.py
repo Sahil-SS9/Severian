@@ -576,6 +576,16 @@ class LocalVectorIndex:
         ).fetchall()
         return {str(row[0]): (str(row[1]), str(row[2])) for row in rows}
 
+    def index_scopes(self) -> list[Scope]:
+        """Every scope that has at least one vector row (operator repair)."""
+        rows = self.connection.execute(
+            """SELECT DISTINCT tenant_id, profile_id, collection_id, agent_id, session_id
+               FROM memory_vectors ORDER BY 1, 2, 3, 4, 5"""
+        ).fetchall()
+        return [
+            Scope(tenant_id=r[0], profile_id=r[1], collection_id=r[2], agent_id=r[3], session_id=r[4]) for r in rows
+        ]
+
     def write_encoded(
         self,
         rows: list[tuple[Memory, list[float]]],
