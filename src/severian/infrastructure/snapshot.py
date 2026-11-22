@@ -79,7 +79,7 @@ RECORD_MODELS: dict[str, type[Any]] = {
 }
 
 JOB_STATUSES = {"pending", "running", "done", "failed", "dead_letter"}
-OUTBOX_STATUSES = {"pending", "acked"}
+OUTBOX_STATUSES = {"pending", "acked", "failed"}  # 0.6.4: "failed" = projection dead-lettered
 TASK_NOTE_STATUSES = {"current", "replaced", "cleared"}
 
 # Record kinds that carry the M1 ``purged`` flag. Only for a row whose flag is true are

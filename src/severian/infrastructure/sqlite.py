@@ -2628,6 +2628,67 @@ class SQLiteRepository(TaskNoteStore):
                 .values(status="pending", lease_until=None)
             )
 
+    def fail_outbox(self, event_ids: list[str], *, error: str, max_attempts: int) -> list[str]:
+        """Record one failed projection attempt per event; return the ids now ``failed`` (0.6.4).
+
+        An event under ``max_attempts`` goes back to ``pending`` (a later pass retries it, e.g. after a
+        sidecar outage). At ``max_attempts`` it moves to ``failed``: the drain stops retrying it, the
+        audit and ``severian outbox`` show it, and ``requeue_failed_outbox`` puts it back. It is never
+        acked, so a memory whose vector could not be written can no longer disappear silently. The
+        attempt count and the last error are kept in the event's payload.
+        """
+        if not event_ids:
+            return []
+        dead: list[str] = []
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                select(records.c.id, records.c.payload).where(
+                    records.c.id.in_(event_ids),
+                    records.c.record_type == "outbox",
+                    records.c.status.in_(("pending", "projecting")),
+                )
+            ).mappings().all()
+            for row in rows:
+                payload = dict(row["payload"])
+                attempts = int(payload.get("projection_attempts", 0) or 0) + 1
+                payload["projection_attempts"] = attempts
+                payload["projection_error"] = error[:500]
+                status = "failed" if attempts >= max_attempts else "pending"
+                connection.execute(
+                    update(records)
+                    .where(records.c.id == row["id"])
+                    .values(status=status, payload=payload, lease_until=None)
+                )
+                if status == "failed":
+                    dead.append(str(row["id"]))
+        return dead
+
+    def failed_outbox(self) -> list[Event]:
+        """Outbox events whose projection failed ``max_attempts`` times (0.6.4)."""
+        with self.engine.connect() as connection:
+            values = connection.execute(
+                select(records.c.payload)
+                .where(records.c.record_type == "outbox", records.c.status == "failed")
+                .order_by(records.c.id)
+            ).scalars()
+            return [Event.model_validate(value) for value in values]
+
+    def requeue_failed_outbox(self, event_ids: list[str] | None = None) -> int:
+        """Put ``failed`` outbox events (all, or the given ids) back to ``pending`` with fresh attempts."""
+        with self.engine.begin() as connection:
+            query = select(records.c.id, records.c.payload).where(
+                records.c.record_type == "outbox", records.c.status == "failed"
+            )
+            if event_ids is not None:
+                query = query.where(records.c.id.in_(event_ids))
+            rows = connection.execute(query).mappings().all()
+            for row in rows:
+                payload = {**dict(row["payload"]), "projection_attempts": 0}
+                connection.execute(
+                    update(records).where(records.c.id == row["id"]).values(status="pending", payload=payload)
+                )
+        return len(rows)
+
     def ack_outbox(self, event_id: str) -> None:
         with self.engine.begin() as connection:
             result = connection.execute(

@@ -443,6 +443,20 @@ class OutboxPort(Protocol):
     def ack_outbox(self, event_id: str) -> None: ...
     def ack_outbox_many(self, event_ids: list[str]) -> None:
         """Ack a batch in ONE transaction (zero-debt 3.3); idempotent."""
+    def fail_outbox(self, event_ids: list[str], *, error: str, max_attempts: int) -> list[str]:
+        """Count one failed projection attempt per event (0.6.4).
+
+        Under ``max_attempts`` the event returns to ``pending``; at ``max_attempts`` it moves to
+        ``failed`` (never acked) and its id is returned. Attempts and the last error live in the
+        event's stored payload.
+        """
+        ...
+    def failed_outbox(self) -> list[Event]:
+        """Events whose projection kept failing (status ``failed``)."""
+        ...
+    def requeue_failed_outbox(self, event_ids: list[str] | None = None) -> int:
+        """Return ``failed`` events (all, or the given ids) to ``pending``; returns how many."""
+        ...
 
 
 @runtime_checkable

@@ -58,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 # OPS-01b: upper bound on outbox events applied per idle backlog sweep.
 _MAX_BACKLOG_EVENTS_PER_PASS = 500
+# 0.6.4: an outbox event whose projection fails this many passes in a row stops being retried and
+# moves to the visible ``failed`` outbox state (``severian outbox``; ``--requeue`` puts it back).
+# Before that it is retried every pass, so a sidecar outage of a few passes loses nothing. 0.6.3
+# acked such events with their batch, so the memory silently got no vector.
+OUTBOX_MAX_ATTEMPTS = 5
 # 16/10/2026: a busy local model (timeouts, "identical request already running", restarts) failed ~13% of fact
 # jobs for good. A turn the model could not serve ONLY because the server was busy now waits and is tried again:
 # 5, 10, 20, 40, 60 min apart (about 2 h 15 m in all). 0.6.3: after the last attempt it is dead-lettered with
@@ -93,6 +98,8 @@ class WorkerSummary:
     dead_lettered: int = 0
     # 0.6.3: the fact model's endpoint as the pass saw it: up / down / unknown / unchecked (no check made).
     endpoint: str = "unchecked"
+    # 0.6.4: outbox events this pass moved to the ``failed`` state after OUTBOX_MAX_ATTEMPTS failed projections.
+    outbox_dead_lettered: int = 0
 
     @property
     def total(self) -> int:
@@ -197,9 +204,8 @@ class DerivationWorker:
         # idempotently. Aborting here instead left jobs ``running`` with
         # expired leases, which reaped into dead-letter (the 2026-08-20
         # fleet incident) while stranding every touched scope's outbox.
-        applied_events = self._project_outbox(touched, worker_id)
-        projection_failed = 1 if applied_events is None else 0
-        applied_events = applied_events or []
+        applied_events, failed_events, outbox_dead = self._project_outbox(touched, worker_id)
+        projection_failed = 1 if failed_events else 0
         backlog_attempted = False
         # OPS-01b: idle-pass backlog sweep. Events stranded by earlier
         # failing passes belong to scopes whose jobs ALREADY completed;
@@ -222,21 +228,18 @@ class DerivationWorker:
             backlog = [e for e in backlog if e not in applied_events]
             backlog_attempted = bool(backlog)
             if backlog:
-                converged = self._apply_batch(backlog)
+                errors: dict[str, str] = {}
+                converged = self._apply_batch(backlog, errors)
                 if converged:
                     applied_events = applied_events + converged
                 if converged is None or len(converged) < len(backlog):
                     projection_failed = 1
-                    # Release whatever did not converge (poison events
-                    # isolated by bisection) so they retry next pass
-                    # instead of holding projecting claims until lease
-                    # expiry.
+                    # Whatever did not converge (poison events isolated by bisection) counts one failed
+                    # attempt: it goes back to pending for the next pass, or to the visible failed state
+                    # once it has failed OUTBOX_MAX_ATTEMPTS times (0.6.4). Never acked.
                     applied_ids = {e.id for e in (converged or [])}
                     stranded = [e for e in backlog if e.id not in applied_ids]
-                    try:
-                        self._repository.release_outbox([e.id for e in stranded])
-                    except Exception:
-                        logger.warning("failed to release outbox claims", exc_info=True)
+                    outbox_dead += self._fail_events(stranded, errors)
         for job in pending_done:
             self._repository.complete_job(job.id, "done", worker_id=worker_id)
         # OPS-01: the outbox projector. Ack only events whose projections
@@ -260,6 +263,7 @@ class DerivationWorker:
             failed=failed,
             touched_scopes=tuple(touched.values()),
             projection_failed=projection_failed,
+            outbox_dead_lettered=outbox_dead,
         )
 
     def extract_facts(
@@ -292,7 +296,7 @@ class DerivationWorker:
         """
         if self._derivation is None:
             raise RuntimeError("fact extraction needs a derivation service")
-        processed = failed = gave_up = deferred = dead_lettered = batches = projection_failed = 0
+        processed = failed = gave_up = deferred = dead_lettered = batches = projection_failed = outbox_dead = 0
         touched_all: dict[str, Scope] = {}
         waiting = len(self._repository.list_jobs(status="pending", kind=FACTS_JOB))
         if not waiting:
@@ -349,8 +353,9 @@ class DerivationWorker:
                         unserved.append((job, reason, observation_id in result.retryable))
                 touched[key] = jobs[0].scope
                 went_away = went_away or result.endpoint_down
-            applied = self._project_outbox(touched, worker_id)
-            if applied is None:
+            applied, failed_events, dead_now = self._project_outbox(touched, worker_id)
+            outbox_dead += dead_now
+            if failed_events:
                 projection_failed = 1
             for job in done:
                 self._repository.complete_job(job.id, "done", worker_id=worker_id)
@@ -387,6 +392,7 @@ class DerivationWorker:
             deferred=deferred,
             dead_lettered=dead_lettered,
             endpoint=endpoint,
+            outbox_dead_lettered=outbox_dead,
         )
 
     def dream_pass(
@@ -429,8 +435,8 @@ class DerivationWorker:
                 except Exception:
                     logger.warning("failed to mark dream job %s as failed: %s", job.id, exc, exc_info=True)
                 failed += 1
-        applied = self._project_outbox(touched, worker_id)
-        projection_failed = 1 if applied is None else 0
+        applied, failed_events, outbox_dead = self._project_outbox(touched, worker_id)
+        projection_failed = 1 if failed_events else 0
         if applied:
             try:
                 self._repository.ack_outbox_many([event.id for event in applied])
@@ -441,6 +447,7 @@ class DerivationWorker:
             failed=failed,
             touched_scopes=tuple(touched.values()),
             projection_failed=projection_failed,
+            outbox_dead_lettered=outbox_dead,
         )
 
     def dream_tick(
@@ -455,23 +462,25 @@ class DerivationWorker:
         queued = DreamProducer(self._repository).queue_profile(tenant_id, profile_id)
         return queued, self.dream_pass(worker_id="dream", writer=writer, max_jobs=max_jobs)
 
-    def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> list[Event] | None:
+    def _project_outbox(self, touched: dict[str, Scope], worker_id: str) -> tuple[list[Event], list[Event], int]:
         """Apply pending outbox events for touched scopes incrementally.
 
         The outbox is the projection delta contract (zero-debt 3.2):
         each pending event is applied as a bounded upsert/delete, never
         a scope-wide clear+reinsert. Events for scopes NOT touched this
         pass remain pending (a later pass that touches them will apply
-        them). Returns the applied events so the caller can ack them
-        only after the projections converged (crash between apply and
-        ack → event stays pending → next pass re-applies, idempotent).
+        them).
 
-        Returns ``None`` when projection failed outright: the caller
-        completes the already-derived jobs (canonical records are
-        durable) but acks nothing — events stay pending for retry.
+        Returns ``(applied, failed, dead_lettered)``. The caller acks exactly ``applied``, and only
+        after the projections converged (crash between apply and ack → event stays pending → next
+        pass re-applies, idempotent). 0.6.4: ``failed`` events (bisection isolated them, or the whole
+        batch failed) are NEVER acked — 0.6.3 acked the whole claimed batch whenever bisection saved
+        any of it, so a memory the embedding refused got no vector and no alarm. Each failed event
+        counts one attempt: back to pending for the next pass, or to the visible ``failed`` state
+        after OUTBOX_MAX_ATTEMPTS (``dead_lettered`` counts those).
         """
         if not touched:
-            return []
+            return [], [], 0
         touched_set = set(touched.keys())
         # HG follow-up (2026-08-22): claim instead of peek. Only events
         # this worker atomically claimed (pending -> projecting) are
@@ -488,18 +497,45 @@ class DerivationWorker:
             except Exception:
                 logger.warning("failed to release unclaimed outbox events", exc_info=True)
         if not pending:
-            return []
-        result = pending if self._apply_batch(pending) else None
-        if result is None:
-            # Batch failed: release claims so events retry next pass
-            # rather than stalling until lease expiry.
+            return [], [], 0
+        errors: dict[str, str] = {}
+        applied = self._apply_batch(pending, errors) or []
+        applied_ids = {event.id for event in applied}
+        failed = [event for event in pending if event.id not in applied_ids]
+        dead = self._fail_events(failed, errors) if failed else 0
+        return applied, failed, dead
+
+    def _fail_events(self, events: list[Event], errors: Mapping[str, str]) -> int:
+        """Count one failed projection attempt for each event; return how many became ``failed``.
+
+        If recording the attempt itself fails, the claims are released instead (0.6.3 behaviour), so
+        the events can never stay stuck in ``projecting`` until lease expiry.
+        """
+        if not events:
+            return 0
+        by_error: dict[str, list[str]] = {}
+        for event in events:
+            by_error.setdefault(errors.get(event.id, "projection failed"), []).append(event.id)
+        dead: list[str] = []
+        try:
+            for error, ids in by_error.items():
+                dead.extend(self._repository.fail_outbox(ids, error=error, max_attempts=OUTBOX_MAX_ATTEMPTS))
+        except Exception:
+            logger.warning("failed to record failed outbox attempts; releasing the claims", exc_info=True)
             try:
-                self._repository.release_outbox([e.id for e in pending])
+                self._repository.release_outbox([event.id for event in events])
             except Exception:
                 logger.warning("failed to release outbox claims", exc_info=True)
-        return result
+            return 0
+        if dead:
+            logger.error(
+                "%d outbox event(s) failed to project %d times and moved to the failed outbox state; "
+                "inspect with `severian outbox`, requeue with `severian outbox --requeue`",
+                len(dead), OUTBOX_MAX_ATTEMPTS,
+            )
+        return len(dead)
 
-    def _apply_batch(self, events: list[Event]) -> list[Event] | None:
+    def _apply_batch(self, events: list[Event], errors: dict[str, str] | None = None) -> list[Event] | None:
         """Apply one bounded batch of outbox events to the projections.
 
         Shared by both projection paths (touched-scope delta and idle
@@ -512,20 +548,23 @@ class DerivationWorker:
 
         Returns the subset of ``events`` whose projection converged
         (caller acks exactly those); ``None`` means NOTHING applied and
-        even isolation failed. Canonical data is safe on every path:
-        failed events simply stay pending for later passes.
+        even isolation failed. ``errors`` (when given) receives the error
+        text of each event that failed on its own. Canonical data is safe
+        on every path.
         """
         try:
             if not events:
                 return []
             self._projection.apply(events)
             return events
-        except Exception:
+        except Exception as exc:
             if len(events) == 1:
                 logger.warning(
-                    "projection apply failed for event %s; leaving it pending",
+                    "projection apply failed for event %s; leaving it unacked",
                     events[0].id, exc_info=True,
                 )
+                if errors is not None:
+                    errors[events[0].id] = f"{type(exc).__name__}: {exc}"
                 return None
             logger.warning(
                 "projection batch of %d failed; bisecting to isolate the "
@@ -535,10 +574,10 @@ class DerivationWorker:
         # half still converges; only genuinely poisoned events stay.
         mid = len(events) // 2
         applied: list[Event] = []
-        left = self._apply_batch(events[:mid])
+        left = self._apply_batch(events[:mid], errors)
         if left is not None:
             applied.extend(left)
-        right = self._apply_batch(events[mid:])
+        right = self._apply_batch(events[mid:], errors)
         if right is not None:
             applied.extend(right)
         return applied or None

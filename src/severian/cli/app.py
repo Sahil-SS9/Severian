@@ -431,6 +431,10 @@ def work(
                 "processed": summary.processed,
                 "failed": summary.failed,
                 "projection_failed": summary.projection_failed,
+                # 0.6.4: index events that failed OUTBOX_MAX_ATTEMPTS passes are kept (never acked) in a
+                # failed state; any non-zero count is an alarm (inspect/requeue with `severian outbox`).
+                "outbox_dead_lettered": summary.outbox_dead_lettered,
+                "outbox_failed": len(bundle.repository.failed_outbox()),
                 "touched_scopes": [scope.model_dump() for scope in summary.touched_scopes],
                 "facts_processed": facts_processed,
                 "facts_failed": facts_failed,
@@ -536,6 +540,39 @@ def dream(
         raise
     except Exception as exc:
         raise typer.BadParameter(f"cannot dream: {exc}") from exc
+    finally:
+        bundle.close()
+
+
+@cli.command("outbox")
+def outbox(
+    database: Path = typer.Option(..., "--database"),
+    fts: Path = typer.Option(..., "--fts"),
+    vectors: Path = typer.Option(..., "--vectors"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    requeue: bool = typer.Option(False, "--requeue", help="Put every failed index event back in the queue."),
+) -> None:
+    """Show index (outbox) events that kept failing, or requeue them (0.6.4).
+
+    An event whose projection failed OUTBOX_MAX_ATTEMPTS drain passes in a row (e.g. a text the
+    embedding sidecar could not encode) is never acked: it waits here, visible, with its last
+    error. After fixing the cause, ``--requeue`` returns them to the queue; the next ``severian
+    work`` pass indexes them. Output never includes memory text.
+    """
+    bundle = build_default_service(database=database, fts=fts, vectors=vectors, dsn=dsn)
+    try:
+        failed = bundle.repository.failed_outbox()
+        payload: dict[str, Any] = {
+            "failed_count": len(failed),
+            "failed": [
+                {"id": event.id, "kind": event.kind, "memory_id": str(event.payload.get("id", "")),
+                 "scope": event.scope.model_dump()}
+                for event in failed
+            ],
+        }
+        if requeue:
+            payload["requeued"] = bundle.repository.requeue_failed_outbox()
+        _emit(payload)
     finally:
         bundle.close()
 

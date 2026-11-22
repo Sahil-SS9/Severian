@@ -130,3 +130,25 @@ def test_requeue_jobs_takes_dead_letter_rows_and_refuses_other_states(backend: A
     assert backend.list_dead_letter_jobs() == []
     with pytest.raises(ValueError):
         backend.requeue_jobs([job.id], from_status="done")
+
+
+
+def test_outbox_fail_dead_letters_after_max_attempts_and_requeues(backend: Any) -> None:
+    """0.6.4: an index event that keeps failing is counted, then parked in ``failed``, never acked."""
+    first = backend.append_outbox(SCOPE, "memory.created", {"id": "m-poison"})
+    second = backend.append_outbox(SCOPE, "memory.created", {"id": "m-fine"})
+    claimed = {event.id for event in backend.claim_outbox("w1")}
+    assert claimed == {first.id, second.id}
+    assert backend.fail_outbox([first.id], error="ValueError: refused", max_attempts=2) == []
+    assert first.id in {event.id for event in backend.pending_outbox()}, "under the budget: back to pending"
+    backend.claim_outbox("w2")
+    assert backend.fail_outbox([first.id], error="ValueError: refused", max_attempts=2) == [first.id]
+    failed = backend.failed_outbox()
+    assert [event.id for event in failed] == [first.id]
+    assert first.id not in {event.id for event in backend.pending_outbox()}
+    assert first.id not in {event.id for event in backend.claim_outbox("w3")}
+    backend.ack_outbox_many([first.id])  # an ack never touches a failed event
+    assert [event.id for event in backend.failed_outbox()] == [first.id]
+    assert backend.requeue_failed_outbox() == 1
+    assert backend.failed_outbox() == []
+    assert first.id in {event.id for event in backend.pending_outbox()}

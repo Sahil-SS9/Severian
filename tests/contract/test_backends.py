@@ -465,6 +465,16 @@ class _FakeRepository:
         # No-op: the fake holds no outbox claims to release.
         return None
 
+    def fail_outbox(self, event_ids: list[str], *, error: str, max_attempts: int) -> list[str]:
+        # The fake holds no outbox state, so no event can be dead-lettered.
+        return []
+
+    def failed_outbox(self) -> list[Event]:
+        return []
+
+    def requeue_failed_outbox(self, event_ids: list[str] | None = None) -> int:
+        return 0
+
     def export_json(self) -> str:
         return "{}"
 
