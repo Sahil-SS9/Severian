@@ -50,7 +50,9 @@ prompts and metrics, not an official board entry. 🥇 marks the best score in e
 **Configuration for the Severian row above and every Severian number below:** 0.3.11, commit `4467853`, board depth (top-20, no
 character cap), answer `gpt-4.1-mini`, judge `gpt-4o-mini-2024-07-18`. The Hermes-default comparison uses
 top-10 with an 8,000-character cap; the 16,000-character side test is labelled where it appears. 0.3.12 and
-0.3.13 are byte-identical with their switches off, so the results stay labelled 0.3.11.
+0.3.13 are byte-identical with their switches off, so the results stay labelled 0.3.11. Every later release
+(0.4.0 to 0.6.3) was checked to return byte-identical search results and context on 50 fixed benchmark queries with
+its new switches off.
 
 ![OmniMemEval standings](docs/benchmarks/img/board.svg)
 
@@ -97,10 +99,12 @@ Mem0, Mnemosyne, Hindsight and Honcho (different harness and marker) is in
   off by default; with it off search and context are byte-identical.
 - **Local-first.** No network call from the engine; cloud derivation needs an explicit per-collection opt-in. Qwen3
   0.6B embeddings run locally or in a shared sidecar; a deterministic hash embedding needs nothing at all.
-- **Offline maintenance is available, not automatic.** Consolidation, curation and retention services are
-  non-destructive and can process dream-mode work, but **no production path queues dream jobs yet**, so they do not run
-  on their own. Curation's usage term is inert until retrieval usage tracking is deliberately enabled; salience
-  weighting in ranking is opt-in and off by default.
+- **Offline maintenance ("dreaming"), opt-in.** With `SEVERIAN_DREAMING=1`, `severian dream --mode <m>` merges
+  duplicate memories, scores and reviews them, applies a retention policy or reports contradictions. It is a dry run
+  unless you add `--confirm`, every write is audited, repeat runs converge, and erased or purged content never comes
+  back. Code decides what is a duplicate, a restatement or a contradiction before any model is involved. Run it from
+  your own scheduler or switch on the worker tick; nothing runs unless you ask. Salience weighting in ranking is opt-in
+  and off by default.
 - **Operable.** Crash-safe leased worker jobs, dead-letter recovery, export/import, side-by-side vector rebuilds, an
   integrity audit, per-profile fact rollback and an optional Rust acceleration module.
 - **Harness-agnostic.** The same engine serves any agent framework through the CLI, the Python SDK, the HTTP API or
@@ -203,7 +207,8 @@ More: [architecture](docs/architecture.md), [memory engine](docs/memory-engine.m
 
 ## Quick start
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Install from PyPI with `pip install severian` (or `uv add severian`). To work from source, you need Python 3.11+
+and [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/Sahil-SS9/Severian.git
