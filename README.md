@@ -261,7 +261,7 @@ Behaviour switches are environment variables, so the same code serves benchmarks
 | `SEVERIAN_TRUTH_RESOLUTION` | off (**recommended on**) | Memories a newer fact replaced leave the current view and stay in history |
 | `SEVERIAN_RELATION_EVENT_TIME` | off | Dates graph relations from their source message: a relation starts when that message was written and a replaced value ends at the newer statement's time, with half-open windows |
 | `SEVERIAN_RERANK` | off (**recommended**: `cross-encoder/ms-marco-MiniLM-L6-v2`) | Re-ranks the fused candidates |
-| `SEVERIAN_OPT_NUMPY` | off (**recommended on**) | Fast exact vector scoring on large scopes |
+| `SEVERIAN_OPT_NUMPY` | on (0.6.4: NumPy is a dependency) | Fast exact vector scoring; `0` forces the pure-Python path (same results, slower) |
 | `SEVERIAN_CONFLICT_NOTES` | **on** | Adds a short note when two returned memories disagree (`0` turns it off) |
 | `SEVERIAN_FILL_BUDGET` | off | Search over-fetches a bounded pool and the context keeps adding ranked items until its character budget is full, instead of stopping at `limit` |
 | `SEVERIAN_COMPACT_CITES` | off | Cites the source observation ids in one bracket and drops the trailing `source:` line: about 45 characters less per item, every citation still resolvable through `severian_get_observation` |

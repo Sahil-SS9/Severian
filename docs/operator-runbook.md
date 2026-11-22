@@ -388,6 +388,46 @@ Severian is designed **local-first**. The current posture:
   that kind. Back the store up first, and run it once the model is serving
   again. This replaces hand-written SQL resets.
 
+- **Vector coverage: check it, and repair it safely (0.6.4).** Search uses words
+  and vectors together; a memory with no vector is found by words only, and
+  nothing errors. Check coverage with the read-only audit:
+
+  ```bash
+  severian audit --database … --fts … --vectors … | jq '.vector_coverage'
+  ```
+
+  `coverage` is the share of active memories that have a vector; any scope
+  under 99% is listed in `low_scopes` and raises a `low_vector_coverage`
+  finding. `severian work` also prints `outbox_failed`: index events that
+  failed 5 passes in a row and are parked (never marked done). Any non-zero
+  value is an alarm. See them with `severian outbox`, fix the cause (usually
+  the embedding sidecar), then `severian outbox --requeue`.
+
+  To repair, first count, then repair in place. The embedding must be named
+  explicitly (`SEVERIAN_EMBEDDING`, plus `SEVERIAN_EMBED_SOCKET` for the
+  sidecar):
+
+  ```bash
+  severian rebuild-vectors --database … --fts … --vectors … --all-scopes --dry-run
+  severian rebuild-vectors --database … --fts … --vectors … --all-scopes
+  ```
+
+  The dry run opens the vector file read-only and prints `missing`, `stale`,
+  `orphans`, `to_encode`, `to_encode_chars` and `long_texts`. The repair
+  writes into the same file in chunks (`--chunk`, default 256), one
+  transaction each. Bots and the drain can keep running and see the rows as
+  they land. Progress lines go to stderr. If the run is interrupted (for
+  example the sidecar restarts), the finished chunks stay; run the same
+  command again to continue. The result shows `coverage_after` and `verified`.
+  It exits 1 with status `partial` and lists the ids if the embedding refused
+  a memory. On a GPU sidecar, plan about 15-20 minutes for ~31k memories. Run
+  heavy embedding on a throwaway sidecar on a GPU that is not reserved.
+
+  `--swap` (also chosen by itself when the index is in an old format or
+  another embedding space) builds a new file and swaps it in. Processes that
+  have the old file open keep writing to it, so stop or restart every store
+  opener (gateways, drain, MCP) before a swap and start them after it.
+
 ## 6. systemd unit example (API + worker)
 
 ```ini

@@ -3,6 +3,51 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
+## [0.6.4] - unreleased
+
+### Fixed
+- **A failed vector rebuild no longer empties a scope.** On 20/11 four `severian_forget` calls on the main scope
+  each cleared about 28,000 vectors, re-encoded for ~20 minutes and then stopped on one 9,238-character memory,
+  leaving the scope with almost no vectors; search quietly ran on words alone. Now:
+  - a scope rebuild keeps every vector that is still right, encodes only missing or changed memories, and does
+    all the encoding before one write, so a failure leaves the scope exactly as it was (SQLite and pgvector);
+  - forget/erase, purge, revise, rollback and the correct fallback update only the memories they change. They
+    no longer re-encode the whole scope inside the bot.
+- **Texts over 8,000 characters get a vector.** The embedding client used to refuse them. It now embeds their first
+  8,000 characters, the same cut for saving and searching, and logs and counts each cut. Shorter texts are sent
+  unchanged, so existing vectors stay valid.
+- **The drain no longer marks failed index events as done.** When one memory in a batch could not be indexed, the
+  whole batch was acknowledged and that memory silently got no vector (596 live memories). Now only events that
+  were indexed are acknowledged. A failed event is retried on each pass. After 5 failed passes it is parked in a
+  visible `failed` state: `severian work` reports `outbox_failed`, `severian audit` flags it, and
+  `severian outbox --requeue` puts it back.
+- **`SEVERIAN_MESSAGE_UNITS` off now really means off.** Message units already in the store used to stay in search
+  (in the S1 rehearsal 154 of 200 hits were units with the switch off). With the switch off they are now left out of
+  every search route (words, vectors, neighbours, list-all), and hits and context are byte-identical to the same store
+  before the units were added. To make that exact, units get their own word index table, because the word scores
+  depend on every row in a table. Units indexed by 0.6.3 move there automatically on first open, and vector rows get
+  a `kind` label. With the switch on, units still compete for the same places. Their word scores now use the unit
+  table's statistics, so re-measure S1 before switching it on.
+- **Re-running the message-unit backfill adds nothing.** `severian migrate message-units` indexed every unit again
+  under new ids on a second run (orphan rows). It now indexes what was stored, and only what that run wrote.
+
+### Changed
+- **Vector search is much faster.** Each search now scores the whole scope as one NumPy matrix instead of unpacking
+  every vector in Python. NumPy is now a required dependency, so the bots' plugin environments have it. Scores and
+  order are byte-identical to the Python path, ties included; `SEVERIAN_OPT_NUMPY=0` forces the Python path.
+- **`severian rebuild-vectors` repairs the live index in place.** When the index already uses the right embedding
+  model and format, it writes the missing vectors into the same file in chunks, one transaction each (`--chunk`,
+  default 256), and deletes rows of memories that are gone. Running bots and the drain see the new rows as they
+  land, and an interrupted run continues where it stopped. `--dry-run` only counts. The old build-and-swap runs with
+  `--swap`, or by itself when the index cannot be used as it is. Stop every process that has the store open around a
+  swap.
+
+### Added
+- **Vector coverage in `severian audit`:** active memories, memories with a vector, missing, coverage, and each scope
+  under 99% (`low_vector_coverage`, with the repair command). The audit also flags unit vectors without their label
+  and parked index events.
+- **`severian outbox [--requeue]`** lists parked index events (ids only) and puts them back in the queue.
+
 ## [0.6.3] - 2026-11-21
 
 ### Fixed

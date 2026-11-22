@@ -7,7 +7,7 @@
 # tests/integrations/test_hermes_plugin_packaging.py checks it against the package version.
 [project]
 name = "severian-plugin"
-version = "0.6.3"
+version = "0.6.4"
 description = "Severian memory provider for Hermes Agent, catalog wrapper"
 requires-python = ">=3.11"
-dependencies = ["severian==0.6.3"]
+dependencies = ["severian==0.6.4"]
