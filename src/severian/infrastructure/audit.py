@@ -59,12 +59,19 @@ class AuditFinding:
         }
 
 
+# 0.6.4: a scope whose active memories have vectors for less than this share is flagged
+# (``low_vector_coverage``). On 20/11/2026 the live main scope fell from ~28k vectors to ~1.7k and
+# search silently ran on words alone; this check makes that loss loud.
+COVERAGE_FLOOR = 0.99
+
+
 @dataclass
 class AuditReport:
     counts: dict[str, dict[str, int]] = field(default_factory=dict)
     jobs: dict[str, int] = field(default_factory=dict)
     findings: list[AuditFinding] = field(default_factory=list)
     scope_keys: dict[str, ScopeKey] = field(default_factory=dict)
+    vector_coverage: dict[str, Any] = field(default_factory=dict)
 
     def label(self, key: ScopeKey) -> str:
         """The readable name of a scope; remembers the real values so repair never has to split a string."""
@@ -86,6 +93,7 @@ class AuditReport:
             "findings_by_kind": dict(sorted(by_kind.items())),
             "repairable_count": sum(1 for f in self.findings if f.repairable),
             "scopes": self.counts,
+            "vector_coverage": self.vector_coverage,
             "jobs": self.jobs,
             "findings": [finding.to_dict() for finding in self.findings],
         }
@@ -135,6 +143,7 @@ def audit_store(database: Path, fts: Path, vectors: Path, *, now: datetime | Non
         dead: list[str] = []
         job_counts: dict[str, int] = defaultdict(int)
         pending_outbox = 0
+        failed_outbox: list[str] = []
         for rid, kind, *scope_values, status, lease_until, raw in rows:
             key: ScopeKey = (scope_values[0], scope_values[1], scope_values[2], scope_values[3], scope_values[4])
             payload = json.loads(raw)
@@ -155,7 +164,24 @@ def audit_store(database: Path, fts: Path, vectors: Path, *, now: datetime | Non
                     dead.append(rid)
             elif kind == "outbox" and status == "pending":
                 pending_outbox += 1
-        report.jobs = {**dict(sorted(job_counts.items())), "stuck_leases": len(stuck), "pending_outbox": pending_outbox}
+            elif kind == "outbox" and status == "failed":
+                failed_outbox.append(rid)
+        report.jobs = {
+            **dict(sorted(job_counts.items())),
+            "stuck_leases": len(stuck),
+            "pending_outbox": pending_outbox,
+            "failed_outbox": len(failed_outbox),
+        }
+        if failed_outbox:
+            report.findings.append(
+                AuditFinding(
+                    "failed_outbox_event",
+                    "-",
+                    f"{len(failed_outbox)} index event(s) kept failing and were parked; "
+                    "inspect with `severian outbox`, retry with `severian outbox --requeue`",
+                    tuple(sorted(failed_outbox)),
+                )
+            )
         if stuck:
             report.findings.append(
                 AuditFinding("stuck_job", "-", f"{len(stuck)} running job(s) with an expired lease", tuple(stuck), True)
@@ -184,18 +210,40 @@ def audit_store(database: Path, fts: Path, vectors: Path, *, now: datetime | Non
     with _read_only(fts) as index:
         if _has_table(index, "memory_fts"):
             lexical_ids = _ids_by_scope(index, "memory_fts", "memory_id")
+            if _has_table(index, "unit_fts"):  # 0.6.4: S1 message units have their own FTS table
+                for key, ids in _ids_by_scope(index, "unit_fts", "memory_id").items():
+                    lexical_ids.setdefault(key, set()).update(ids)
         else:
             report.findings.append(AuditFinding("missing_index", "-", "lexical index has no memory_fts table"))
         has_cue_table = _has_table(index, "cue_fts")
         if has_cue_table:
             cue_ids = _ids_by_scope(index, "cue_fts", "memory_id")
     vector_ids: dict[ScopeKey, set[str]] = {}
+    unit_labels: dict[str, str] = {}
     with _read_only(vectors) as vector_store:
         if _has_table(vector_store, "memory_vectors"):
             vector_ids = _ids_by_scope(vector_store, "memory_vectors", "memory_id")
+            columns = {str(row[1]) for row in vector_store.execute("PRAGMA table_info(memory_vectors)")}
+            unit_ids = sorted(
+                mid for mid, payload in memories.items()
+                if payload.get("kind") == "message_unit" and payload.get("superseded_by_id") is None
+            )
+            if unit_ids:
+                label = "kind" if "kind" in columns else "''"
+                for start in range(0, len(unit_ids), 900):
+                    chunk = unit_ids[start : start + 900]
+                    marks = ",".join("?" for _ in chunk)
+                    unit_labels.update(
+                        (str(row[0]), str(row[1]))
+                        for row in vector_store.execute(
+                            f"SELECT memory_id, {label} FROM memory_vectors WHERE memory_id IN ({marks})",  # noqa: S608
+                            chunk,
+                        )
+                    )
         else:
             report.findings.append(AuditFinding("missing_index", "-", "vector index has no memory_vectors table"))
 
+    _check_vector_coverage(report, active, vector_ids, unit_labels)
     for key in sorted(set(active) | set(lexical_ids) | set(vector_ids) | set(cue_ids)):
         store_ids = set(active.get(key, {}))
         cued = {mid for mid, payload in active.get(key, {}).items() if payload.get("cues")}
@@ -231,6 +279,59 @@ def audit_store(database: Path, fts: Path, vectors: Path, *, now: datetime | Non
                 )
             )
     return report
+
+
+def _check_vector_coverage(
+    report: AuditReport,
+    active: dict[ScopeKey, dict[str, dict[str, Any]]],
+    vector_ids: dict[ScopeKey, set[str]],
+    unit_labels: dict[str, str],
+) -> None:
+    """Vector coverage per scope and in total; flag scopes under ``COVERAGE_FLOOR`` (0.6.4)."""
+    total_active = total_present = 0
+    low: dict[str, dict[str, Any]] = {}
+    for key in sorted(active):
+        ids = set(active[key])
+        present = len(ids & vector_ids.get(key, set()))
+        total_active += len(ids)
+        total_present += present
+        coverage = present / len(ids) if ids else 1.0
+        if coverage < COVERAGE_FLOOR:
+            label = report.label(key)
+            low[label] = {
+                "active": len(ids),
+                "vectors": present,
+                "missing": len(ids) - present,
+                "coverage": round(coverage, 4),
+            }
+            report.findings.append(
+                AuditFinding(
+                    "low_vector_coverage",
+                    label,
+                    f"only {present} of {len(ids)} active memories have a vector ({coverage:.1%}); "
+                    "search runs on words alone for the rest. Repair: `severian rebuild-vectors --dry-run`, "
+                    "then `severian rebuild-vectors` (in place)",
+                )
+            )
+    unlabelled = sorted(mid for mid, kind in unit_labels.items() if kind != "message_unit")
+    if unlabelled:
+        report.findings.append(
+            AuditFinding(
+                "unlabelled_unit_vector",
+                "-",
+                f"{len(unlabelled)} message-unit vector row(s) carry no unit label, so switch-off search "
+                "still sees them; `severian rebuild-vectors` relabels them without re-encoding",
+                tuple(unlabelled),
+            )
+        )
+    report.vector_coverage = {
+        "active_memories": total_active,
+        "vector_rows": total_present,
+        "missing": total_active - total_present,
+        "coverage": round(total_present / total_active, 6) if total_active else 1.0,
+        "floor": COVERAGE_FLOOR,
+        "low_scopes": low,
+    }
 
 
 def _compare(report: AuditReport, label: str, index: str, store_ids: set[str], index_ids: set[str]) -> None:
@@ -373,9 +474,11 @@ def repair_store(bundle: Any, report: AuditReport) -> dict[str, Any]:
     for finding in report.findings:
         if not finding.repairable or finding.kind == "stuck_job":
             continue
-        index = {"missing_lexical_row": "lexical", "missing_vector_row": "vector", "missing_cue_row": "cue"}[
+        index = {"missing_lexical_row": "lexical", "missing_vector_row": "vector", "missing_cue_row": "cue"}.get(
             finding.kind
-        ]
+        )
+        if index is None:
+            continue
         wanted[index][report.scope_keys[finding.scope]].update(finding.ids)
 
     for index, by_scope in wanted.items():
