@@ -30,18 +30,31 @@ _STOPWORDS: frozenset[str] = STOPWORDS  # backward-compat alias (ARCH-03)
 VECTOR_STORAGE_FORMAT = "blob_f32le"
 _FORMAT_KEY = "vector_storage_format"
 
-# Optional NumPy acceleration, opt-in ONLY (SEVERIAN_OPT_NUMPY=1): the
-# hash-only installation must never carry a compulsory heavy dependency
-# for a microbenchmark win. When off (default), search uses the pure
-# Python heapq path with identical ordering semantics.
-_NUMPY_AVAILABLE = os.environ.get("SEVERIAN_OPT_NUMPY", "") == "1"
+# 0.6.4: vectorised search is the DEFAULT. NumPy is a runtime dependency (pyproject), so every
+# install, including the gateways' plugin environments, scores a scope as one float32 matrix
+# instead of unpacking each vector in Python (~1.65 s per search at 31k vectors in 0.6.3, where
+# the NumPy path was opt-in and NumPy was absent from the gateways). Results are byte-identical
+# to the pure-Python path: NumPy only narrows the candidates, and every candidate's score is then
+# recomputed with the same ``math.fsum`` contract and sorted with the same total key.
+# ``SEVERIAN_OPT_NUMPY=0`` forces the pure-Python path (diagnostics); without NumPy it is used too.
+_NUMPY_AVAILABLE = os.environ.get("SEVERIAN_OPT_NUMPY", "") != "0"
 if _NUMPY_AVAILABLE:
     try:
         import numpy  # noqa: F401  (imported lazily again in _search_numpy)
 
         _NUMPY_AVAILABLE = True
-    except ImportError:
+    except ImportError:  # pragma: no cover - numpy is a declared dependency
         _NUMPY_AVAILABLE = False
+
+# Unit round-off of IEEE single precision: bounds how far a NumPy float32 dot product can sit from
+# the exactly-rounded ``math.fsum`` score (see ``_search_numpy``).
+_FLOAT_EPS = 2.0**-24
+_ID_CHUNK = 900  # bind parameters per IN (...) lookup, well under SQLite's limit
+
+
+def vector_search_backend() -> str:
+    """Which exact top-k path SQLite vector search uses in this process: ``numpy`` or ``python``."""
+    return "numpy" if _NUMPY_AVAILABLE else "python"
 
 
 def _pack_vector(vector: list[float]) -> bytes:
@@ -72,6 +85,18 @@ def _unpack_vector(blob: bytes, dimension: int) -> list[float]:
     if any(not math.isfinite(value) for value in values):
         raise VectorFormatError("vector blob contains non-finite components")
     return values
+
+
+def _exact_score(query_vector: list[float], vector: list[float]) -> float:
+    """R0.2 score contract: ``math.fsum`` (Shewchuk-compensated), version-independent and
+    bit-identical to the Rust kernel. Non-finite results raise ``VectorFormatError``."""
+    try:
+        score = math.fsum(left * right for left, right in zip(query_vector, vector, strict=True))
+    except OverflowError as exc:
+        raise VectorFormatError("non-finite dot product") from exc
+    if not math.isfinite(score):
+        raise VectorFormatError("non-finite dot product")
+    return score
 
 
 def _meta_json(metadata: EmbeddingMetadata) -> str:
@@ -364,19 +389,13 @@ class LocalVectorIndex:
             query_vector = encode_query(query)
         else:
             query_vector = self.embedding.encode(query)
-        rows = self.connection.execute(
-            """SELECT memory_id, vector, content FROM memory_vectors
+        if self.connection.execute(
+            """SELECT 1 FROM memory_vectors
               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                AND agent_id = ? AND session_id = ?""",
+                AND agent_id = ? AND session_id = ? LIMIT 1""",
             tuple(scope.model_dump().values()),
-        ).fetchall()
-        if not rows:
+        ).fetchone() is None:
             return []
-        # R2: optional native exact top-k (auto|python|rust). The Python
-        # reference remains the fallback and test oracle. Backend
-        # identity is diagnostics-only — it never alters vectors/ranking.
-        # Adapter is built lazily from SEVERIAN_VECTOR_BACKEND on first
-        # search (auto -> rust when the wheel is installed, else python).
         if self._native_accel is None:
             from severian.infrastructure.native_accel import NativeAccelAdapter
 
@@ -386,19 +405,38 @@ class LocalVectorIndex:
             # and silently replaced with a Python adapter, or explicit Rust
             # mode would degrade without the operator's knowledge.
             self._native_accel = NativeAccelAdapter()
+        # R2: optional native exact top-k (auto|python|rust). The Python
+        # reference remains the fallback and test oracle. Backend
+        # identity is diagnostics-only — it never alters vectors/ranking.
+        # Adapter is built lazily from SEVERIAN_VECTOR_BACKEND on first
+        # search (auto -> rust when the wheel is installed, else python).
         if self._native_accel.selected == "rust":
+            rows = self._scope_rows(scope)
+            if not rows:
+                return []
             native_rows = [(m, c, b) for m, b, c in rows]
             return self._native_accel.exact_top_k(query_vector, native_rows, limit)
+        if (
+            _NUMPY_AVAILABLE
+            and len(query_vector) == self.embedding.dimension
+            and all(math.isfinite(value) for value in query_vector)
+        ):
+            return self._search_numpy(scope, query_vector, limit=limit)
+        return self._search_python(self._scope_rows(scope), query_vector, limit=limit)
+
+    def _scope_rows(self, scope: Scope) -> list[Any]:
+        return self.connection.execute(
+            """SELECT memory_id, vector, content FROM memory_vectors
+              WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                AND agent_id = ? AND session_id = ?""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+
+    def _search_python(self, rows: list[Any], query_vector: list[float], *, limit: int) -> list[VectorHit]:
+        """The reference exact top-k: unpack, ``math.fsum`` score, sort by (score desc, content, id)."""
         # zero-debt 4.2: exact bounded top-k with a TOTAL tiebreak key
         # (score desc, content, memory_id — memory_id unique) so the
         # selection is deterministic and identical to a full sort.
-        # Optional NumPy acceleration (opt-in env) with the SAME key via
-        # lexsort; pure-Python heapq fallback needs no numpy at all.
-        if _NUMPY_AVAILABLE:
-            try:
-                return self._search_numpy(rows, query_vector, limit=limit)
-            except Exception:  # noqa: BLE001 - fall back to pure python
-                pass
         import heapq
 
         def _key(item: tuple[VectorHit, list[float], str]) -> tuple[float, str, str]:
@@ -408,63 +446,84 @@ class LocalVectorIndex:
         scored: list[tuple[VectorHit, list[float], str]] = []
         for memory_id, encoded, content in rows:
             vector = _unpack_vector(encoded, self.embedding.dimension)
-            # R0.2 score contract: math.fsum (Shewchuk-compensated),
-            # version-independent, bit-identical to the Rust kernel.
-            try:
-                score = math.fsum(
-                    left * right for left, right in zip(query_vector, vector, strict=True)
-                )
-            except OverflowError as exc:
-                raise VectorFormatError("non-finite dot product") from exc
-            if not math.isfinite(score):
-                raise VectorFormatError("non-finite dot product")
-            scored.append((VectorHit(memory_id=memory_id, score=score), vector, content))
+            scored.append((VectorHit(memory_id=memory_id, score=_exact_score(query_vector, vector)), vector, content))
         if limit < len(scored):
             scored = heapq.nsmallest(limit, scored, key=_key)
         else:
             scored.sort(key=_key)
         return [hit for hit, _vector, _content in scored]
 
-    def _search_numpy(
-        self,
-        rows: list[Any],
-        query_vector: list[float],
-        *,
-        limit: int,
-    ) -> list[VectorHit]:
-        """Vectorised exact top-k (opt-in; SEVERIAN_OPT_NUMPY=1).
+    def _search_numpy(self, scope: Scope, query_vector: list[float], *, limit: int) -> list[VectorHit]:
+        """Vectorised exact top-k, byte-identical to ``_search_python`` (0.6.4).
 
-        Decodes the whole scope's BLOBs as one float32 matrix, computes
-        scores with float64 matmul, and selects with np.lexsort over the
-        SAME total key (score desc, content, memory_id). lexsort is the
-        exact analogue of the pure-Python sort, so ordering is
-        deterministic and identical — no argpartition (its arbitrary
-        tiebreak would change semantics at the k boundary).
+        1. Read only ``(memory_id, vector)`` for the scope and score every row at once as a float32
+           matrix product. Each approximate score is within ``tol`` of the exact ``math.fsum``
+           score, where ``tol`` bounds float32 rounding (query cut, products, sums) for the
+           largest ``||q|| * ||v||`` in the scope.
+        2. Keep every row whose approximate score is >= (the limit-th best approximate score) -
+           2 * tol. That provably contains every row of the exact top ``limit``, ties included.
+        3. Recompute those candidates' scores with ``math.fsum`` and sort them with the reference
+           key (score desc, content, memory_id), so scores and order equal the Python path's.
+
+        A malformed or non-finite stored vector raises ``VectorFormatError`` exactly as the Python
+        path does; anything unusual (a non-finite score) hands the whole scope to the Python path.
         """
         import numpy as np
 
-        n = len(rows)
+        rows = self.connection.execute(
+            """SELECT memory_id, vector FROM memory_vectors
+              WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                AND agent_id = ? AND session_id = ?""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        if not rows:
+            return []
         dim = self.embedding.dimension
-        matrix = np.frombuffer(b"".join(r[1] for r in rows), dtype="<f4").reshape(n, dim).astype(np.float64)
+        width = dim * struct.calcsize("<f")
+        for _memory_id, blob in rows:
+            if len(blob) != width:
+                _unpack_vector(blob, dim)  # raises the reference VectorFormatError
+        n = len(rows)
+        matrix32 = np.frombuffer(b"".join(row[1] for row in rows), dtype="<f4").reshape(n, dim)
+        if not bool(np.isfinite(matrix32).all()):
+            raise VectorFormatError("vector blob contains non-finite components")
+        # Scores in float32 straight from the stored matrix: no float64 copy of the whole scope (a
+        # 245 MB copy plus page faults cost seconds at 80k rows). The error bound below covers the
+        # float32 query cut and float32 accumulation: |approx - exact| <= (dim + 2) * 2^-24 *
+        # sum(|q_i * v_i|) <= (dim + 2) * 2^-24 * ||q|| * ||v|| (Cauchy-Schwarz), doubled for margin.
         with np.errstate(over="ignore", invalid="ignore"):
-            scores = matrix @ np.asarray(query_vector, dtype=np.float64)
-        if not np.isfinite(scores).all():
-            raise VectorFormatError("non-finite dot product")
-        # Candidate cut: keep every row scoring >= the limit-th best score.
-        # Ties AT the boundary are all kept, so the exact tie-break below
-        # sees the same rows the full sort would rank first.
+            query32 = np.asarray(query_vector, dtype=np.float32)
+            scores = matrix32 @ query32
+            row_norm = float(np.sqrt(np.max(np.einsum("ij,ij->i", matrix32, matrix32, dtype=np.float64))))
+        query_norm = math.sqrt(math.fsum(value * value for value in query_vector))
+        if not (bool(np.isfinite(scores).all()) and math.isfinite(row_norm) and math.isfinite(query_norm)):
+            return self._search_python(self._scope_rows(scope), query_vector, limit=limit)
+        tol = 2.0 * (dim + 4) * _FLOAT_EPS * query_norm * row_norm
         if limit < n:
-            kth = np.partition(scores, n - limit)[n - limit]
-            cand = np.flatnonzero(scores >= kth)
+            kth = float(np.partition(scores, n - limit)[n - limit])
+            candidates = np.flatnonzero(scores >= kth - 2.0 * tol)
         else:
-            cand = np.arange(n)
-        ids = [rows[i][0] for i in cand]
-        texts = [rows[i][2] for i in cand]
-        sub = scores[cand]
-        # lexsort: LAST key is primary. (-scores, contents, memory_ids)
-        # == (score desc, content, memory_id) total order, exactly.
-        order = np.lexsort((np.asarray(ids), np.asarray(texts), -sub))
-        return [VectorHit(memory_id=ids[i], score=float(sub[i])) for i in order[:limit]]
+            candidates = np.arange(n)
+        picked = [str(rows[int(i)][0]) for i in candidates]
+        contents = self._contents(picked)
+        scored: list[tuple[float, str, str]] = []
+        for index, memory_id in zip(candidates, picked, strict=True):
+            vector = [float(value) for value in matrix32[int(index)]]
+            scored.append((-_exact_score(query_vector, vector), contents[memory_id], memory_id))
+        scored.sort()
+        return [VectorHit(memory_id=memory_id, score=-negative) for negative, _content, memory_id in scored[:limit]]
+
+    def _contents(self, memory_ids: list[str]) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for start in range(0, len(memory_ids), _ID_CHUNK):
+            chunk = memory_ids[start : start + _ID_CHUNK]
+            marks = ",".join("?" for _ in chunk)
+            for memory_id, content in self.connection.execute(
+                f"SELECT memory_id, content FROM memory_vectors WHERE memory_id IN ({marks})",  # noqa: S608 - placeholders
+                chunk,
+            ):
+                found[str(memory_id)] = str(content)
+        return found
 
     def scope_contents(self, scope: Scope) -> dict[str, str]:
         """``memory_id -> content`` of every vector row in this scope (no vectors are read)."""

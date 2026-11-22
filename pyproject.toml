@@ -27,6 +27,9 @@ dependencies = [
   "uvicorn>=0.30,<1.0",
   "psycopg[binary]>=3.2,<4.0",
   "pgvector>=0.3,<1.0",
+  # 0.6.4: vector search scores the whole scope as one matrix (vector.py). A real runtime
+  # dependency so the gateways' plugin environments have it (0.6.3: opt-in and absent there).
+  "numpy>=1.26,<3",
 ]
 
 [dependency-groups]
