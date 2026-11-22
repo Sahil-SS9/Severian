@@ -7,9 +7,11 @@ import os
 import re
 import sqlite3
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from severian.application.message_units import MESSAGE_UNIT_KIND, message_units_enabled
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import VectorFormatError
 from severian.domain.hits import VectorHit  # re-export for backward compat (ARCH-03)
@@ -50,6 +52,15 @@ if _NUMPY_AVAILABLE:
 # the exactly-rounded ``math.fsum`` score (see ``_search_numpy``).
 _FLOAT_EPS = 2.0**-24
 _ID_CHUNK = 900  # bind parameters per IN (...) lookup, well under SQLite's limit
+
+
+def _unit_filter() -> str:
+    """SQL that leaves S1 message units out of search while ``SEVERIAN_MESSAGE_UNITS`` is off (0.6.4).
+
+    Off must mean off: the units stay stored and indexed, but search scores exactly the rows it
+    scored before any unit existed. Vector scores do not depend on other rows, so this is exact.
+    """
+    return "" if message_units_enabled() else f" AND kind != '{MESSAGE_UNIT_KIND}'"
 
 
 def vector_search_backend() -> str:
@@ -115,6 +126,72 @@ def _restrict_private(path: str | Path) -> None:
             os.chmod(candidate, 0o600)
         except FileNotFoundError:
             pass
+
+
+_UPSERT_SQL = """INSERT INTO memory_vectors
+    (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector, kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(memory_id) DO UPDATE SET
+        tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
+        collection_id=excluded.collection_id, agent_id=excluded.agent_id,
+        session_id=excluded.session_id, content=excluded.content, vector=excluded.vector,
+        kind=excluded.kind"""
+
+
+def _row(memory: Memory, vector: list[float]) -> tuple[str, str, str, str, str, str, str, bytes, str]:
+    return (
+        memory.id,
+        memory.scope.tenant_id,
+        memory.scope.profile_id,
+        memory.scope.collection_id,
+        memory.scope.agent_id,
+        memory.scope.session_id,
+        memory.content,
+        _pack_vector(vector),
+        memory.kind,
+    )
+
+
+@dataclass(frozen=True)
+class ScopeSync:
+    """What it takes to make one scope's vector rows equal its active memories (0.6.4)."""
+
+    active: int
+    present: int
+    to_encode: list[Memory]  # no row, or the row's content differs from the memory
+    stale: list[str]  # rows that belong to no active memory
+    relabel: list[tuple[str, str]]  # (memory_id, kind): right vector, wrong or missing kind label
+    missing: int  # active memories with no row at all
+
+    @property
+    def changed_content(self) -> int:
+        return len(self.to_encode) - self.missing
+
+
+def plan_scope_sync(existing: dict[str, tuple[str, str]], memories: list[Memory]) -> ScopeSync:
+    """Compare a scope's rows (``memory_id -> (content, kind)``) with its active memories."""
+    active = {memory.id for memory in memories}
+    to_encode: list[Memory] = []
+    relabel: list[tuple[str, str]] = []
+    missing = 0
+    for memory in sorted(memories, key=lambda item: item.id):
+        row = existing.get(memory.id)
+        if row is None:
+            missing += 1
+            to_encode.append(memory)
+        elif row[0] != memory.content:
+            to_encode.append(memory)
+        elif row[1] != memory.kind:
+            relabel.append((memory.id, memory.kind))
+    stale = sorted(memory_id for memory_id in existing if memory_id not in active)
+    return ScopeSync(
+        active=len(active),
+        present=len(active & set(existing)),
+        to_encode=to_encode,
+        stale=stale,
+        relabel=relabel,
+        missing=missing,
+    )
 
 
 class EmbeddingProvider(Protocol):
@@ -198,6 +275,11 @@ class LocalVectorIndex:
             """CREATE INDEX IF NOT EXISTS idx_memory_vectors_scope
             ON memory_vectors (tenant_id, profile_id, collection_id, agent_id, session_id)"""
         )
+        # 0.6.4: the memory's kind, so switch-off search can leave S1 message units out BEFORE the
+        # top-k cut (rows written before 0.6.4 read as '' until `severian rebuild-vectors` relabels).
+        columns = {str(row[1]) for row in self.connection.execute("PRAGMA table_info(memory_vectors)")}
+        if "kind" not in columns:
+            self.connection.execute("ALTER TABLE memory_vectors ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
         self._metadata = resolve_embedding_metadata(embedding)
         self._stamp_or_verify_space()
         self.connection.commit()
@@ -279,25 +361,7 @@ class LocalVectorIndex:
 
     def upsert(self, memory: Memory) -> None:
         vector = self.embedding.encode(memory.content)
-        self.connection.execute(
-            """INSERT INTO memory_vectors
-            (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(memory_id) DO UPDATE SET
-                tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
-                collection_id=excluded.collection_id, agent_id=excluded.agent_id,
-                session_id=excluded.session_id, content=excluded.content, vector=excluded.vector""",
-            (
-                memory.id,
-                memory.scope.tenant_id,
-                memory.scope.profile_id,
-                memory.scope.collection_id,
-                memory.scope.agent_id,
-                memory.scope.session_id,
-                memory.content,
-                _pack_vector(vector),
-            ),
-        )
+        self.connection.execute(_UPSERT_SQL, _row(memory, vector))
         self.connection.commit()
 
     def upsert_many(self, memories: list[Memory]) -> None:
@@ -308,32 +372,9 @@ class LocalVectorIndex:
         """
         if not memories:
             return
-        rows = []
-        for memory in memories:
-            vector = self.embedding.encode(memory.content)
-            rows.append(
-                (
-                    memory.id,
-                    memory.scope.tenant_id,
-                    memory.scope.profile_id,
-                    memory.scope.collection_id,
-                    memory.scope.agent_id,
-                    memory.scope.session_id,
-                    memory.content,
-                    _pack_vector(vector),
-                )
-            )
+        rows = [_row(memory, self.embedding.encode(memory.content)) for memory in memories]
         try:
-            self.connection.executemany(
-                """INSERT INTO memory_vectors
-                (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(memory_id) DO UPDATE SET
-                    tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
-                    collection_id=excluded.collection_id, agent_id=excluded.agent_id,
-                    session_id=excluded.session_id, content=excluded.content, vector=excluded.vector""",
-                rows,
-            )
+            self.connection.executemany(_UPSERT_SQL, rows)
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -390,9 +431,9 @@ class LocalVectorIndex:
         else:
             query_vector = self.embedding.encode(query)
         if self.connection.execute(
-            """SELECT 1 FROM memory_vectors
+            f"""SELECT 1 FROM memory_vectors
               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                AND agent_id = ? AND session_id = ? LIMIT 1""",
+                AND agent_id = ? AND session_id = ?{_unit_filter()} LIMIT 1""",  # noqa: S608 - fixed text
             tuple(scope.model_dump().values()),
         ).fetchone() is None:
             return []
@@ -426,9 +467,9 @@ class LocalVectorIndex:
 
     def _scope_rows(self, scope: Scope) -> list[Any]:
         return self.connection.execute(
-            """SELECT memory_id, vector, content FROM memory_vectors
+            f"""SELECT memory_id, vector, content FROM memory_vectors
               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                AND agent_id = ? AND session_id = ?""",
+                AND agent_id = ? AND session_id = ?{_unit_filter()}""",  # noqa: S608 - fixed text
             tuple(scope.model_dump().values()),
         ).fetchall()
 
@@ -471,9 +512,9 @@ class LocalVectorIndex:
         import numpy as np
 
         rows = self.connection.execute(
-            """SELECT memory_id, vector FROM memory_vectors
+            f"""SELECT memory_id, vector FROM memory_vectors
               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
-                AND agent_id = ? AND session_id = ?""",
+                AND agent_id = ? AND session_id = ?{_unit_filter()}""",  # noqa: S608 - fixed text
             tuple(scope.model_dump().values()),
         ).fetchall()
         if not rows:
@@ -525,36 +566,28 @@ class LocalVectorIndex:
                 found[str(memory_id)] = str(content)
         return found
 
-    def scope_contents(self, scope: Scope) -> dict[str, str]:
-        """``memory_id -> content`` of every vector row in this scope (no vectors are read)."""
+    def scope_state(self, scope: Scope) -> dict[str, tuple[str, str]]:
+        """``memory_id -> (content, kind)`` of every vector row in this scope (no vectors are read)."""
         rows = self.connection.execute(
-            """SELECT memory_id, content FROM memory_vectors
+            """SELECT memory_id, content, kind FROM memory_vectors
                WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
                  AND agent_id = ? AND session_id = ?""",
             tuple(scope.model_dump().values()),
         ).fetchall()
-        return {str(row[0]): str(row[1]) for row in rows}
+        return {str(row[0]): (str(row[1]), str(row[2])) for row in rows}
 
-    def write_encoded(self, rows: list[tuple[Memory, list[float]]], delete_ids: list[str]) -> None:
-        """Upsert already-encoded rows and delete ``delete_ids`` in ONE transaction (0.6.4).
-
-        Nothing is encoded here, so nothing can fail half-way on the embedding: either every
-        change lands or none does.
+    def write_encoded(
+        self,
+        rows: list[tuple[Memory, list[float]]],
+        delete_ids: list[str],
+        relabel: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Upsert already-encoded rows, delete ``delete_ids`` and set ``(memory_id, kind)`` labels,
+        all in ONE transaction (0.6.4). Nothing is encoded here, so nothing can fail half-way on
+        the embedding: either every change lands or none does.
         """
-        packed = [
-            (
-                memory.id,
-                memory.scope.tenant_id,
-                memory.scope.profile_id,
-                memory.scope.collection_id,
-                memory.scope.agent_id,
-                memory.scope.session_id,
-                memory.content,
-                _pack_vector(vector),
-            )
-            for memory, vector in rows
-        ]
-        if not packed and not delete_ids:
+        packed = [_row(memory, vector) for memory, vector in rows]
+        if not packed and not delete_ids and not relabel:
             return
         try:
             if delete_ids:
@@ -562,15 +595,11 @@ class LocalVectorIndex:
                     "DELETE FROM memory_vectors WHERE memory_id = ?", [(memory_id,) for memory_id in delete_ids]
                 )
             if packed:
+                self.connection.executemany(_UPSERT_SQL, packed)
+            if relabel:
                 self.connection.executemany(
-                    """INSERT INTO memory_vectors
-                    (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(memory_id) DO UPDATE SET
-                        tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
-                        collection_id=excluded.collection_id, agent_id=excluded.agent_id,
-                        session_id=excluded.session_id, content=excluded.content, vector=excluded.vector""",
-                    packed,
+                    "UPDATE memory_vectors SET kind = ? WHERE memory_id = ?",
+                    [(kind, memory_id) for memory_id, kind in relabel],
                 )
             self.connection.commit()
         except Exception:
@@ -585,16 +614,9 @@ class LocalVectorIndex:
         still right is kept, only missing or changed memories are encoded, and all encoding happens
         BEFORE the single write transaction: an encode failure raises with the scope untouched.
         """
-        memories = list(repository.list_memories(scope))
-        existing = self.scope_contents(scope)
-        active = {memory.id for memory in memories}
-        encoded = [
-            (memory, self.embedding.encode(memory.content))
-            for memory in memories
-            if existing.get(memory.id) != memory.content
-        ]
-        stale = sorted(memory_id for memory_id in existing if memory_id not in active)
-        self.write_encoded(encoded, stale)
+        plan = plan_scope_sync(self.scope_state(scope), list(repository.list_memories(scope)))
+        encoded = [(memory, self.embedding.encode(memory.content)) for memory in plan.to_encode]
+        self.write_encoded(encoded, plan.stale, plan.relabel)
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""

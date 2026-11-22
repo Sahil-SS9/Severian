@@ -23,6 +23,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, Index, MetaData, String, Table, create_engine, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from severian.application.message_units import MESSAGE_UNIT_KIND, message_units_enabled
 from severian.application.ports import CanonicalRepository
 from severian.domain.hits import VectorHit
 from severian.domain.models import Memory, Scope
@@ -54,6 +55,8 @@ def _build_memory_vectors(dimension: int, *, name: str = "memory_vectors") -> Ta
         Column("session_id", String, nullable=False),
         Column("content", String, nullable=False),
         Column("vector", Vector(dimension), nullable=False),
+        # 0.6.4: the memory's kind, so switch-off search leaves S1 message units out before top-k.
+        Column("kind", String, nullable=False, server_default=""),
     )
     Index(
         f"ix_{name}_scope",
@@ -126,6 +129,9 @@ class PGVectorIndex:
             self._table.metadata.create_all(connection)
             self._meta.metadata.create_all(connection)
             connection.exec_driver_sql(
+                f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT ''"
+            )
+            connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS "
                 f"ix_{self.table_name}_scope "
                 f"ON {self.table_name} (tenant_id, profile_id, collection_id, agent_id, session_id)"
@@ -195,6 +201,7 @@ class PGVectorIndex:
             **memory.scope.model_dump(),
             "content": memory.content,
             "vector": vector,
+            "kind": memory.kind,
         }
         with self.engine.begin() as connection:
             connection.execute(
@@ -208,6 +215,7 @@ class PGVectorIndex:
                         "session_id": values["session_id"],
                         "content": values["content"],
                         "vector": values["vector"],
+                        "kind": values["kind"],
                     },
                 )
             )
@@ -229,6 +237,7 @@ class PGVectorIndex:
                     **memory.scope.model_dump(),
                     "content": memory.content,
                     "vector": self.embedding.encode(memory.content),
+                    "kind": memory.kind,
                 }
             )
         statement = pg_insert(self._table).values(rows)
@@ -242,6 +251,7 @@ class PGVectorIndex:
                 "session_id": statement.excluded.session_id,
                 "content": statement.excluded.content,
                 "vector": statement.excluded.vector,
+                "kind": statement.excluded.kind,
             },
         )
         with self.engine.begin() as connection:
@@ -296,6 +306,8 @@ class PGVectorIndex:
                 (1.0 - distance).label("score"),
             )
             .where(*(self._table.c[key] == value for key, value in scope.model_dump().items()))
+            # 0.6.4: switch off = off — S1 message units leave the candidates before the top-k cut.
+            .where(*(() if message_units_enabled() else (self._table.c.kind != MESSAGE_UNIT_KIND,)))
             .order_by(distance, self._table.c.content, self._table.c.memory_id)
             .limit(limit)
         )
@@ -303,27 +315,38 @@ class PGVectorIndex:
             rows = connection.execute(stmt).mappings()
             return [VectorHit(memory_id=row["memory_id"], score=float(row["score"])) for row in rows]
 
-    def scope_contents(self, scope: Scope) -> dict[str, str]:
-        """``memory_id -> content`` of every vector row in this scope (no vectors are read)."""
+    def scope_state(self, scope: Scope) -> dict[str, tuple[str, str]]:
+        """``memory_id -> (content, kind)`` of every vector row in this scope (no vectors are read)."""
         self._require_scope(scope)
-        statement = select(self._table.c.memory_id, self._table.c.content).where(
+        statement = select(self._table.c.memory_id, self._table.c.content, self._table.c.kind).where(
             *(self._table.c[key] == value for key, value in scope.model_dump().items())
         )
         with self.engine.connect() as connection:
-            return {str(row[0]): str(row[1]) for row in connection.execute(statement).all()}
+            return {str(row[0]): (str(row[1]), str(row[2])) for row in connection.execute(statement).all()}
 
-    def write_encoded(self, rows: list[tuple[Memory, list[float]]], delete_ids: list[str]) -> None:
-        """Upsert already-encoded rows and delete ``delete_ids`` in ONE transaction (0.6.4)."""
-        if not rows and not delete_ids:
+    def write_encoded(
+        self,
+        rows: list[tuple[Memory, list[float]]],
+        delete_ids: list[str],
+        relabel: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Upsert already-encoded rows, delete ``delete_ids`` and set kind labels in ONE transaction (0.6.4)."""
+        if not rows and not delete_ids and not relabel:
             return
         with self.engine.begin() as connection:
             for start in range(0, len(delete_ids), 10_000):  # stay far under PG's 65535 bind cap
                 chunk = delete_ids[start : start + 10_000]
                 connection.execute(self._table.delete().where(self._table.c.memory_id.in_(chunk)))
-            if rows:
+            for start in range(0, len(rows), 500):
                 values = [
-                    {"memory_id": memory.id, **memory.scope.model_dump(), "content": memory.content, "vector": vector}
-                    for memory, vector in rows
+                    {
+                        "memory_id": memory.id,
+                        **memory.scope.model_dump(),
+                        "content": memory.content,
+                        "vector": vector,
+                        "kind": memory.kind,
+                    }
+                    for memory, vector in rows[start : start + 500]
                 ]
                 statement = pg_insert(self._table).values(values)
                 statement = statement.on_conflict_do_update(
@@ -336,22 +359,22 @@ class PGVectorIndex:
                         "session_id": statement.excluded.session_id,
                         "content": statement.excluded.content,
                         "vector": statement.excluded.vector,
+                        "kind": statement.excluded.kind,
                     },
                 )
                 connection.execute(statement)
+            for memory_id, kind in relabel or []:
+                connection.execute(
+                    self._table.update().where(self._table.c.memory_id == memory_id).values(kind=kind)
+                )
 
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
         """Failure-safe, incremental scope rebuild (0.6.4; see ``LocalVectorIndex.rebuild``)."""
-        memories = list(repository.list_memories(scope))
-        existing = self.scope_contents(scope)
-        active = {memory.id for memory in memories}
-        encoded = [
-            (memory, self.embedding.encode(memory.content))
-            for memory in memories
-            if existing.get(memory.id) != memory.content
-        ]
-        stale = sorted(memory_id for memory_id in existing if memory_id not in active)
-        self.write_encoded(encoded, stale)
+        from severian.infrastructure.vector import plan_scope_sync
+
+        plan = plan_scope_sync(self.scope_state(scope), list(repository.list_memories(scope)))
+        encoded = [(memory, self.embedding.encode(memory.content)) for memory in plan.to_encode]
+        self.write_encoded(encoded, plan.stale, plan.relabel)
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""

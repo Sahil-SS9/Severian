@@ -10,6 +10,7 @@ from severian.application.compactcites import frame
 from severian.application.eventtime import TimeWindow, as_utc, message_time
 from severian.application.extraction import extract_entities
 from severian.application.markers import is_marker
+from severian.application.message_units import MESSAGE_UNIT_KIND, message_units_enabled
 from severian.application.ports import CanonicalRepository, LexicalIndex
 from severian.application.projections import VectorProjection
 from severian.application.replytrim import fit_contents
@@ -139,6 +140,11 @@ class RetrievalResult:
     fused_score: float
 
 
+def _unit_hidden(memory: Memory) -> bool:
+    """True for an S1 message unit while ``SEVERIAN_MESSAGE_UNITS`` is off (0.6.4: off means off)."""
+    return memory.kind == MESSAGE_UNIT_KIND and not message_units_enabled()
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -175,7 +181,11 @@ class RetrievalService:
         # in scope with neutral scores.
         if not stripped or stripped == "*":
             # C1: maintenance markers are records about a pass, never memories of the user.
-            memories = [memory for memory in self.repository.list_memories(scope) if not is_marker(memory)]
+            memories = [
+                memory
+                for memory in self.repository.list_memories(scope)
+                if not is_marker(memory) and not _unit_hidden(memory)
+            ]
             return [
                 RetrievalResult(
                     memory=memory,
@@ -428,8 +438,9 @@ class RetrievalService:
                 window_ids.update(neighbour_id for _order, neighbour_id in turns[low:high])
         memories_by_observation: dict[str, list[Memory]] = {}
         for memory in self.repository.list_memories_for_observations(scope, sorted(window_ids)):
-            if is_marker(memory):
+            if is_marker(memory) or _unit_hidden(memory):
                 # C1: the neighbour read is a direct repository read, so it applies the same rule.
+                # 0.6.4: so does switch-off for S1 message units.
                 continue
             for observation_id in memory.source_observation_ids:
                 memories_by_observation.setdefault(observation_id, []).append(memory)

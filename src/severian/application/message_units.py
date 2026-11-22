@@ -272,13 +272,20 @@ def migrate_message_units(
                 observation, scope, enabled=True, order_position=positions.get(observation.id)
             )
             if units:
-                all_units.extend(units)
-                repository.publish_derivation(
+                stored = repository.publish_derivation(
                     scope,
                     entities=[],
                     relations=[],
                     memories=units,
                     source_observation_id=observation.id,
+                )
+                # 0.6.4: index what was STORED, and only what this run wrote. publish_derivation
+                # returns the existing record for a unit that is already there; indexing the
+                # freshly built candidates instead (0.6.3) put every unit in the indexes again
+                # under new random ids on a re-run (orphan FTS and vector rows).
+                built = {unit.id for unit in units}
+                all_units.extend(
+                    memory for memory in stored if memory.id in built and memory.superseded_by_id is None
                 )
         if rebuild is not None and all_units:
             # Index only the units; a full scope rebuild would re-encode every
