@@ -295,16 +295,17 @@ class MemoryService:
         queued in the same transaction as the revision, so the corrected
         fact replaces the old one on the next drain instead of vanishing.
         """
+        affected = [memory.id for memory in self._repository.list_memories_for_observations(scope, [observation_id])]
         revision = self._repository.revise_observation(
             scope, observation_id, content, derive=True, also_queue=self._fact_jobs()
         )
         superseded = self._repository.supersede_memories_for_source(scope, observation_id)
         self._repository.retract_relations_for_source(scope, observation_id)
         if superseded:
-            # The worker's per-scope rebuild will drop the tombstones;
-            # the revise path also converges now so search cannot return
-            # a stale fact before the next drain.
-            self._projection.rebuild(scope)
+            # Converge now so search cannot return a stale fact before the next drain. 0.6.4:
+            # only the superseded memories leave the indexes (no scope-wide re-encode); a failed
+            # targeted delete falls back to the failure-safe rebuild.
+            self._sync_or_rebuild(scope, affected)
         return revision
 
     # -- erasure lifecycle (OPS-02) -------------------------------------
@@ -346,10 +347,7 @@ class MemoryService:
         )
         inserted = self._repository.add_memory(tombstone)
         erased = self._repository.supersede_memory(scope, memory_id, inserted.id)
-        try:
-            self._projection.remove_memory(memory_id)
-        except Exception:
-            self._projection.rebuild(scope)
+        self._sync_or_rebuild(scope, [memory_id])
         return erased
 
     def rollback_user_facts(self, tenant_id: str, profile_id: str) -> FactsRollback:
@@ -395,30 +393,27 @@ class MemoryService:
         MG-3: the whole cascade is ONE repository transaction (M1), so a crash can
         never leave a derived memory active under a source that is already gone.
         The projection is updated after the commit: each erased memory is dropped
-        from the indexes explicitly (the rebuild below can be skipped when the
-        active-set digest happens to match a previous one), then the scope rebuild
-        reconciles everything else.
+        from the indexes explicitly; nothing else in the scope is touched (0.6.4).
         """
         outcome = self._repository.erase_observation_cascade(scope, observation_id, reason=reason)
-        self._drop_from_projection(scope, outcome.memory_ids)
-        self._projection.rebuild(scope)
+        self._sync_or_rebuild(scope, outcome.memory_ids)
         return self._repository.get_observation(scope, observation_id)
 
-    def _drop_from_projection(self, scope: Scope, memory_ids: tuple[str, ...]) -> None:
-        """Delete the given memory ids from the indexes, falling back to a rebuild.
+    def _sync_or_rebuild(self, scope: Scope, memory_ids: Sequence[str]) -> None:
+        """Converge exactly ``memory_ids`` in the indexes; fall back to the scope rebuild (0.6.4).
 
-        ``ProjectionCoordinator.rebuild`` skips when the active-set digest matches the
-        last one it saw, so a removal that leaves the active set unchanged would other-
-        wise never reach the indexes. Erasure of a memory changes that set only if
-        nothing else had been indexed since — deleting the ids explicitly is what makes
-        "erased" mean "not returned by search", whichever way the digest lands.
+        0.6.3 ran a full scope rebuild after every erase/forget/purge: it cleared the scope's
+        vectors and re-encoded every memory in the gateway, and one refused text left the scope
+        empty (20/11/2026: four forgets wiped ~28k vectors each). The erased/purged memories are
+        the only rows that change, so only they are touched. The fallback rebuild is itself
+        failure-safe: it never removes a still-valid vector.
         """
         if not memory_ids:
             return
         try:
-            for memory_id in memory_ids:
-                self._projection.remove_memory(memory_id)
-        except Exception:  # noqa: BLE001 — a failed targeted delete falls back to a full rebuild
+            self._projection.sync_memories(scope, tuple(memory_ids))
+        except Exception:  # noqa: BLE001 — a failed targeted update falls back to the safe rebuild
+            logger.warning("targeted projection update failed; rebuilding the scope", exc_info=True)
             self._projection.rebuild(scope)
 
     def preview_purge(self, scope: Scope, observation_id: str) -> PurgePlan:
@@ -436,14 +431,13 @@ class MemoryService:
         every memory derived from it, the relations that cited it and the entity names
         nothing else supports; also cancels pending derivation for the chain so a queued
         job cannot republish from the removal marker. The projection is updated after the
-        commit (the purged memories are dropped explicitly, then the scope is rebuilt),
+        commit (the purged memories are dropped explicitly; 0.6.4: no scope rebuild),
         and compaction (checkpoint + VACUUM) is the caller's next step — see
         ``ServiceBundle.compact`` and ``docs/operator-runbook.md`` for what that can and
         cannot claim.
         """
         report = self._repository.purge_observation(scope, observation_id)
-        self._drop_from_projection(scope, report.plan.memory_ids)
-        self._projection.rebuild(scope)
+        self._sync_or_rebuild(scope, report.plan.memory_ids)
         return report
 
     # -- reads ----------------------------------------------------------
@@ -492,7 +486,8 @@ class MemoryService:
         rollback immediately.
         """
         restored = self._repository.rollback_memory(scope, revision_id)
-        self._projection.rebuild(scope)
+        demoted = [m.id for m in self._repository.list_memories_history(scope) if m.superseded_by_id == restored.id]
+        self._sync_or_rebuild(scope, [restored.id, *demoted])
         return restored
 
     def derive_pending(

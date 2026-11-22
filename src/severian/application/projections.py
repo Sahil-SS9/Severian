@@ -121,6 +121,18 @@ class ProjectionCoordinator:
                 for candidate in self.repository.list_memories_history(event.scope):
                     if candidate.superseded_by_id == memory.id:
                         touched.setdefault(candidate.id, event.scope)
+        self._converge(touched)
+
+    def sync_memories(self, scope: Scope, memory_ids: list[str] | tuple[str, ...]) -> None:
+        """Bring ONLY the named memories' index rows to their current canonical state (0.6.4).
+
+        An active head is upserted (encoding just that memory); anything else (superseded, erased,
+        purged, missing) is deleted. Forget/erase/purge/revise/rollback use this instead of a
+        scope-wide rebuild, so they cost a few rows, not a re-encode of the whole scope.
+        """
+        self._converge({memory_id: scope for memory_id in memory_ids})
+
+    def _converge(self, touched: dict[str, Scope]) -> None:
         upserts: list[Memory] = []
         deletes: list[str] = []
         for memory_id, scope in touched.items():
@@ -141,6 +153,9 @@ class ProjectionCoordinator:
             self.vector.delete(memory_id)
 
     def rebuild(self, scope: Scope) -> None:
+        # 0.6.4: both indexes rebuild failure-safe (nothing is cleared before the new rows are
+        # ready) and the vector index re-encodes only missing or changed memories. This stays the
+        # repair/admin path; the gateway's forget/erase/revise paths use ``sync_memories``.
         # Idempotent skip: if the canonical store is unchanged since the
         # last rebuild, the projections are already consistent — full
         # rebuild would be pure waste (the cold-derive super-linear

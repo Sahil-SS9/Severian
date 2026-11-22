@@ -303,9 +303,55 @@ class PGVectorIndex:
             rows = connection.execute(stmt).mappings()
             return [VectorHit(memory_id=row["memory_id"], score=float(row["score"])) for row in rows]
 
+    def scope_contents(self, scope: Scope) -> dict[str, str]:
+        """``memory_id -> content`` of every vector row in this scope (no vectors are read)."""
+        self._require_scope(scope)
+        statement = select(self._table.c.memory_id, self._table.c.content).where(
+            *(self._table.c[key] == value for key, value in scope.model_dump().items())
+        )
+        with self.engine.connect() as connection:
+            return {str(row[0]): str(row[1]) for row in connection.execute(statement).all()}
+
+    def write_encoded(self, rows: list[tuple[Memory, list[float]]], delete_ids: list[str]) -> None:
+        """Upsert already-encoded rows and delete ``delete_ids`` in ONE transaction (0.6.4)."""
+        if not rows and not delete_ids:
+            return
+        with self.engine.begin() as connection:
+            for start in range(0, len(delete_ids), 10_000):  # stay far under PG's 65535 bind cap
+                chunk = delete_ids[start : start + 10_000]
+                connection.execute(self._table.delete().where(self._table.c.memory_id.in_(chunk)))
+            if rows:
+                values = [
+                    {"memory_id": memory.id, **memory.scope.model_dump(), "content": memory.content, "vector": vector}
+                    for memory, vector in rows
+                ]
+                statement = pg_insert(self._table).values(values)
+                statement = statement.on_conflict_do_update(
+                    index_elements=["memory_id"],
+                    set_={
+                        "tenant_id": statement.excluded.tenant_id,
+                        "profile_id": statement.excluded.profile_id,
+                        "collection_id": statement.excluded.collection_id,
+                        "agent_id": statement.excluded.agent_id,
+                        "session_id": statement.excluded.session_id,
+                        "content": statement.excluded.content,
+                        "vector": statement.excluded.vector,
+                    },
+                )
+                connection.execute(statement)
+
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
-        self.clear(scope)
-        self.upsert_many(list(repository.list_memories(scope)))
+        """Failure-safe, incremental scope rebuild (0.6.4; see ``LocalVectorIndex.rebuild``)."""
+        memories = list(repository.list_memories(scope))
+        existing = self.scope_contents(scope)
+        active = {memory.id for memory in memories}
+        encoded = [
+            (memory, self.embedding.encode(memory.content))
+            for memory in memories
+            if existing.get(memory.id) != memory.content
+        ]
+        stale = sorted(memory_id for memory_id in existing if memory_id not in active)
+        self.write_encoded(encoded, stale)
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""

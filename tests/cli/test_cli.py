@@ -416,8 +416,14 @@ def test_import_rebuild_failure_reports_stale_projections(data_root: Path):
     ).exit_code == 0
 
     # Poison the VECTOR path (valid DB but read-only) so rebuild's write
-    # fails at rebuild time, not at bundle construction.
+    # fails at rebuild time, not at bundle construction. 0.6.4: the rebuild
+    # keeps vectors that are still right and writes nothing when the index
+    # already matches, so empty the index first to make a write necessary.
     vec_path = data_root / "vectors.db"
+    import sqlite3
+
+    with sqlite3.connect(vec_path) as connection:
+        connection.execute("DELETE FROM memory_vectors")
     os.chmod(vec_path, 0o400)
 
     # Import into a FRESH canonical store so records are actually new and

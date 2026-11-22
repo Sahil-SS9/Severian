@@ -466,9 +466,76 @@ class LocalVectorIndex:
         order = np.lexsort((np.asarray(ids), np.asarray(texts), -sub))
         return [VectorHit(memory_id=ids[i], score=float(sub[i])) for i in order[:limit]]
 
+    def scope_contents(self, scope: Scope) -> dict[str, str]:
+        """``memory_id -> content`` of every vector row in this scope (no vectors are read)."""
+        rows = self.connection.execute(
+            """SELECT memory_id, content FROM memory_vectors
+               WHERE tenant_id = ? AND profile_id = ? AND collection_id = ?
+                 AND agent_id = ? AND session_id = ?""",
+            tuple(scope.model_dump().values()),
+        ).fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def write_encoded(self, rows: list[tuple[Memory, list[float]]], delete_ids: list[str]) -> None:
+        """Upsert already-encoded rows and delete ``delete_ids`` in ONE transaction (0.6.4).
+
+        Nothing is encoded here, so nothing can fail half-way on the embedding: either every
+        change lands or none does.
+        """
+        packed = [
+            (
+                memory.id,
+                memory.scope.tenant_id,
+                memory.scope.profile_id,
+                memory.scope.collection_id,
+                memory.scope.agent_id,
+                memory.scope.session_id,
+                memory.content,
+                _pack_vector(vector),
+            )
+            for memory, vector in rows
+        ]
+        if not packed and not delete_ids:
+            return
+        try:
+            if delete_ids:
+                self.connection.executemany(
+                    "DELETE FROM memory_vectors WHERE memory_id = ?", [(memory_id,) for memory_id in delete_ids]
+                )
+            if packed:
+                self.connection.executemany(
+                    """INSERT INTO memory_vectors
+                    (memory_id, tenant_id, profile_id, collection_id, agent_id, session_id, content, vector)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(memory_id) DO UPDATE SET
+                        tenant_id=excluded.tenant_id, profile_id=excluded.profile_id,
+                        collection_id=excluded.collection_id, agent_id=excluded.agent_id,
+                        session_id=excluded.session_id, content=excluded.content, vector=excluded.vector""",
+                    packed,
+                )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def rebuild(self, repository: CanonicalRepository, scope: Scope) -> None:
-        self.clear(scope)
-        self.upsert_many(list(repository.list_memories(scope)))
+        """Make this scope's rows equal its active memories, failure-safe (0.6.4).
+
+        0.6.3 cleared the scope (own commit) and then encoded every memory; one text the embedding
+        refused, or a sidecar timeout, left the scope EMPTY (20/11/2026). Now every vector that is
+        still right is kept, only missing or changed memories are encoded, and all encoding happens
+        BEFORE the single write transaction: an encode failure raises with the scope untouched.
+        """
+        memories = list(repository.list_memories(scope))
+        existing = self.scope_contents(scope)
+        active = {memory.id for memory in memories}
+        encoded = [
+            (memory, self.embedding.encode(memory.content))
+            for memory in memories
+            if existing.get(memory.id) != memory.content
+        ]
+        stale = sorted(memory_id for memory_id in existing if memory_id not in active)
+        self.write_encoded(encoded, stale)
 
     def digest(self, scope: Scope) -> str:
         """Stable digest over (memory_id, content) pairs in scope."""
