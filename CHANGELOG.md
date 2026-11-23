@@ -3,7 +3,16 @@
 All notable changes to Severian. Dates are release dates (YYYY-MM-DD). Behaviour switches named here are environment
 variables; see the Configuration table in the [README](README.md).
 
-## [0.6.4] - unreleased
+## [0.6.5] - 2026-11-23
+
+### Fixed
+- **Dreaming no longer reads S1 message units.** A message unit is a search-only copy of one message from a turn the
+  store already holds, not a separate memory of the user. Every dreaming step (consolidate, curate, retention and
+  the contradiction scan) now skips units on its own, whatever the caller excludes. On a live store with S1 on, units
+  were about 60% of all memories: the nightly pass read 2.8 times as much as before and was stopped for running out
+  of memory after 3 minutes, having changed nothing. Ordinary duplicates next to units still merge as before.
+
+## [0.6.4] - 2026-11-22
 
 ### Fixed
 - **A failed vector rebuild no longer empties a scope.** On 20/11 four `severian_forget` calls on the main scope

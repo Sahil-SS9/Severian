@@ -260,7 +260,7 @@ class SeverianMemoryProvider(_HermesMemoryProvider):  # type: ignore[misc]
     """
 
     PROVIDER_NAME = "severian"
-    PROVIDER_VERSION = "0.6.4"
+    PROVIDER_VERSION = "0.6.5"
 
     def __init__(
         self,
