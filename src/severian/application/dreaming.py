@@ -49,6 +49,7 @@ from severian.application.dreamtriage import (
     value_edits,
 )
 from severian.application.dreamwriter import DreamWriter
+from severian.application.message_units import MESSAGE_UNIT_KIND
 from severian.application.ports import CanonicalRepository
 from severian.domain.errors import ConflictError, NotFoundError
 from severian.domain.models import Memory, Scope
@@ -80,6 +81,21 @@ _CONFIDENCE_WEIGHT = 0.4
 # byte-identical in practice and stops a dormant-but-plausible knob from silently changing what
 # curation proposes. ``tests/application/test_dream_usage_salience.py`` pins both halves of that.
 _RECENCY_WEIGHT = 0.3
+
+
+
+def _dream_input(repository: CanonicalRepository, scope: Scope, exclude_kinds: Collection[str]) -> list[Memory]:
+    """Active memories a dream service may read.
+
+    Drops the caller's ``exclude_kinds`` and, always, S1 ``message_unit`` memories: a unit is a
+    search-only copy of one message from a turn the store already holds, not a memory of the user.
+    Reading them would make the pass merge, score or archive copies and multiplies its input.
+    """
+    return [
+        memory
+        for memory in repository.list_memories(scope)
+        if memory.kind not in exclude_kinds and memory.kind != MESSAGE_UNIT_KIND
+    ]
 
 
 @dataclass(frozen=True)
@@ -253,9 +269,7 @@ class RetentionPolicyService:
         min_usage = int(policy.get("min_usage", 0))
         kinds = set(policy.get("kinds", []))
         eval_result = RetentionEvaluation(scope=scope, policy=policy, dry_run=dry_run)
-        for memory in self._repository.list_memories(scope):
-            if memory.kind in exclude_kinds:
-                continue
+        for memory in _dream_input(self._repository, scope, exclude_kinds):
             if kinds and memory.kind not in kinds:
                 eval_result.kept_ids.append(memory.id)
                 continue
@@ -382,7 +396,7 @@ class ContradictionScanService:
         self._duplicate_jaccard = duplicate_jaccard
 
     def scan(self, scope: Scope, *, exclude_kinds: Collection[str] = ()) -> list[ContradictionCandidate]:
-        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
+        memories = _dream_input(self._repository, scope, exclude_kinds)
         return [
             ContradictionCandidate(a, b, overlap)
             for a, b, overlap in self._find(memories)
@@ -772,7 +786,7 @@ class ConsolidationService:
         so a pass cannot read its own last record as a fact; see ``markers.MARKER_KINDS``).
         ``dry_run`` computes the identical plan and writes nothing — the operator command's default.
         """
-        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
+        memories = _dream_input(self._repository, scope, exclude_kinds)
         report = ConsolidationReport(scope=scope, dry_run=dry_run)
         totals: dict[str, int] = {}
         # One pass reaches a fixed point: the greedy pairwise grouping can leave a longer duplicate
@@ -817,9 +831,8 @@ class ConsolidationService:
             before = {memory.id for memory in remaining}
             remaining = [
                 memory
-                for memory in self._repository.list_memories(scope)
-                if memory.kind not in exclude_kinds
-                and memory.id not in planned_superseded
+                for memory in _dream_input(self._repository, scope, exclude_kinds)
+                if memory.id not in planned_superseded
                 and memory.id not in blocked
             ]
             if dry_run:
@@ -1083,7 +1096,7 @@ class CurationService:
         pass, and each pass would write another marker — growth instead of convergence.
         ``dry_run`` scores and proposes without writing the marker or the report row.
         """
-        memories = [memory for memory in self._repository.list_memories(scope) if memory.kind not in exclude_kinds]
+        memories = _dream_input(self._repository, scope, exclude_kinds)
         report = CurationReport(scope=scope, dry_run=dry_run)
         for memory in memories:
             age_h = max((self._now - memory.created_at).total_seconds() / 3600.0, 0.0)
